@@ -1,21 +1,22 @@
 // This computer's Orca host as orca/testing's mockHost plays it for the plugin's worker and
 // panel: its Orca workspaces, each with the folder Orca reports under a temporary home, the
-// Orca agents in each, and the focused one.
+// Orca agents in each, and the focused one, which `focus` moves.
 import { hostError, mockHost } from 'orca/testing';
 import { workspace as folder } from './agent-cards.ts';
 
 type State = 'working' | 'blocked' | 'waiting' | 'done';
 // An Orca workspace `name` of the Orca project `project`, with one Orca agent per state given;
-// `unreadable`: its `agents.list` fails, as for a workspace removed since `workspace.list`.
-export type HostWorkspace = { project: string; name: string; agents: State[]; unreadable?: boolean };
+// `unreadable`: its `agents.list` fails, as for a workspace removed since `workspace.list`;
+// `hostId`: the Orca host `workspace.list` puts it on, this computer's when not given.
+export type HostWorkspace = { project: string; name: string; agents: State[]; unreadable?: boolean; hostId?: string };
 
 export function orcaHost(home: string, { workspaces, focused }: { workspaces: HostWorkspace[]; focused?: string }) {
-  const rows = workspaces.map(({ project, name, agents, unreadable }) => {
+  const rows = workspaces.map(({ project, name, agents, unreadable, hostId = 'local' }) => {
     const path = folder(home, `${project}-${name}`);
     const projectId = `repo:${project}`;
     return {
       unreadable,
-      row: { id: `${projectId}::${path}`, kind: 'worktree', name, project, projectId, path, branch: name, hostId: 'local' },
+      row: { id: `${projectId}::${path}`, kind: 'worktree', name, project, projectId, path, branch: name, hostId },
       agents: agents.map((state, i) => ({
         terminalId: `${project}-${name}-${i}`,
         title: null,
@@ -26,8 +27,7 @@ export function orcaHost(home: string, { workspaces, focused }: { workspaces: Ho
       })),
     };
   });
-  const focusedRow = rows.find(({ row }) => row.name === focused)?.row;
-  return mockHost({
+  const host = mockHost({
     results: {
       'workspace.list': { workspaces: rows.map(({ row }) => row), truncated: false },
       'agents.list': ({ workspaceId }: { workspaceId: string }) => {
@@ -35,9 +35,16 @@ export function orcaHost(home: string, { workspaces, focused }: { workspaces: Ho
         if (found?.unreadable) throw hostError('not_found', `no workspace ${workspaceId}`);
         return { agents: found?.agents ?? [] };
       },
-      'workspace.readContext': focusedRow
-        ? { workspaceId: focusedRow.id, branch: focusedRow.branch, displayName: focusedRow.name, terminals: [] }
-        : null,
     },
   });
+  // Focuses the workspace `name`, none when no workspace has it, and returns what
+  // `workspace.readContext` now answers, as `workspace.changed` reports it.
+  function focus(name?: string) {
+    const row = rows.find((found) => found.row.name === name)?.row;
+    const context = row ? { workspaceId: row.id, branch: row.branch, displayName: row.name, terminals: [] } : null;
+    host.respond('workspace.readContext', context);
+    return context;
+  }
+  focus(focused);
+  return Object.assign(host, { focus });
 }

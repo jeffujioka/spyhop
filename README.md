@@ -12,8 +12,9 @@ herdr mod; the session readers and the card model in `src/core/` are copied from
 The panel is a tree: Orca host → Orca project → Orca workspace → agent cards. Only the
 workspaces that have an Orca agent are listed, with the projects and hosts that hold them, in the
 order Orca lists the agents. When the panel opens, the focused workspace, its project and its
-host are expanded and every other row is collapsed; from then on the rows stay as you open and
-close them.
+host are expanded and every other row is collapsed. When focus moves to another workspace, that
+workspace, its project and its host are expanded, and the workspace expanded for the previous
+focus collapses unless you opened or closed it since; every other row stays as you leave it.
 
 One card per harness session an agent links to (agents on one session share a card), and one
 per agent that links to none. A card has five groups, always in this order:
