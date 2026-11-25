@@ -21,8 +21,14 @@ export type CardIdentity = {
 // One group of figures of a card: context, spend, cache or activity.
 export type CardGroup = { id: string; title: string; hero: Figure | null; figures: Figure[] };
 
-// A card as the panel draws it: the core's view model of the card (src/core/card-model.js).
-export type CardView = { id: string; focused: boolean; groups: [CardIdentity, ...CardGroup[]] };
+// The pane of a card's Orca agent, as the worker focuses it: on this computer or an SSH
+// workspace, the terminal Orca's `agents.list` names; on a paired Orca server, the handle of
+// the server's terminal (`orca terminal list`) and the server's environment name.
+export type Pane = { terminalId: string } | { environment: string; terminal: string };
+
+// A card as the panel draws it: the core's view model of the card (src/core/card-model.js),
+// with the pane of its agent, the first of the agents that share it; null when it has none.
+export type CardView = { id: string; focused: boolean; groups: [CardIdentity, ...CardGroup[]]; pane: Pane | null };
 
 export type TreeAnswer = {
   // The Orca hosts, with their Orca projects and workspaces that have an Orca agent (src/tree.ts).
@@ -35,5 +41,8 @@ declare module 'orca' {
   interface PluginRequests {
     /** The tree of this computer's Orca agents, built once per request. */
     'spyhop.tree': { output: TreeAnswer };
+    /** Focuses the pane in this computer's Orca window; `focused` false when it could not, the
+     *  reason in the worker's log. */
+    'spyhop.focus': { input: Pane; output: { focused: boolean } };
   }
 }

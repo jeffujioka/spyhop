@@ -1,5 +1,6 @@
 // `orca plugin check` renders the panel once per scenario, each with the worker on a fresh
-// host: no Orca agent, and two Orca workspaces of one project with the second focused.
+// host: no Orca agent, and two Orca workspaces of one project with the second focused, each
+// with an agent in a terminal, so each card draws its Focus pane button.
 import { defineCheck } from 'orca/testing';
 
 const workspace = (name: string) => ({

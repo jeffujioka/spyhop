@@ -51,12 +51,13 @@ export function formatHomePath(folder, home) {
 }
 
 // The title of a session as the card shows it, from the Orca agent's title. omp sets the
-// terminal title to `π > <session title>` (the title may start with a private-use glyph, which
-// is part of it), so that `π > ` prefix is dropped for omp; another harness's title is taken
-// as it is (no other prefix is known). An untitled session's title is the folder's name, and
-// then there is nothing to show: null. Otherwise a `{ value, tone }` figure.
+// terminal title to `π > <session title>` or `π - <session title>` (the title may start with a
+// private-use glyph, which is part of it), so that `π > ` or `π - ` prefix is dropped for omp;
+// another harness's title is taken as it is (no other prefix is known). An untitled session's
+// title is the folder's name, and then there is nothing to show: null. Otherwise a
+// `{ value, tone }` figure.
 export function formatSessionTitle(title, folder, harness) {
-  const text = (harness === 'omp' ? (title ?? '').replace(/^π >\s/, '') : title ?? '').trim();
+  const text = (harness === 'omp' ? (title ?? '').replace(/^π [>-]\s/, '') : title ?? '').trim();
   return text === '' || text === formatFolderName(folder) ? null : { value: text, tone: 'normal' };
 }
 

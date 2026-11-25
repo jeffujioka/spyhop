@@ -98,6 +98,20 @@ test('Agent state on the card', async () => {
   assert.equal(model.groups[0].status.label, 'waiting');
 });
 
+test('omp title prefixes dropped', async () => {
+  const home = tempHome();
+  const path = workspace(home, 'demo');
+  const agents = [
+    agent({ id: 't1', agent: 'omp', title: 'π > Write the docs', path }),
+    agent({ id: 't2', agent: 'omp', title: 'π - Fix the login bug', path }),
+  ];
+
+  const models = (await cardsOf(home, agents)).map(({ model }) => model);
+
+  // the title line and the Session row both show the identity group's session figure
+  assert.deepEqual(models.map((model) => model.groups[0].session?.value), ['Write the docs', 'Fix the login bug']);
+});
+
 test('Git asked again only after GIT_TTL_MS', async () => {
   const home = tempHome();
   const path = workspace(home, 'demo');

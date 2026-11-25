@@ -5,7 +5,7 @@
   "version": "0.1.0",
   "description": "AI harness session stats (omp, Claude Code, opencode) for every Orca agent, by host, project and workspace.",
   "engines": {
-    "orca": ">=1.4.247"
+    "orca": ">=1.4.259"
   },
   "execution": "trusted-worker",
   "pluginApi": 1,
@@ -39,6 +39,9 @@
     },
     {
       "kind": "agent:read"
+    },
+    {
+      "kind": "workspace:write"
     }
   ]
 }

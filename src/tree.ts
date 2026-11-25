@@ -1,8 +1,11 @@
 // The tree the panel draws: Orca host → Orca project → Orca workspace → cards. Only the Orca
 // workspaces that have an Orca agent are listed, with the projects and hosts that hold them, in
-// the order Orca lists the agents. Project and workspace rows carry the Totals of cost, tokens
-// and premium requests over the cards under them; a Total reads n/a when any of those cards
-// reads n/a for it, so a part is never shown as the whole. Pure: no Orca import, no I/O.
+// the order Orca lists the agents; a workspace's cards go by Orca state, working, blocked,
+// waiting, done, then any state Orca does not name, those of one state in the order Orca lists
+// their agents. Project and workspace rows carry the Totals of cost, tokens and premium requests
+// over the cards under them; a Total reads n/a when any of those cards reads n/a for it, so a
+// part is never shown as the whole.
+// Pure: no Orca import, no I/O.
 
 import { formatCost, formatTokens, orNa } from './core/format.js';
 import { NA } from './core/providers/index.js';
@@ -14,7 +17,11 @@ import { splitWorktreeId } from './worktree-id.ts';
 export type TreeAgent = { id: string; hostId: string; repo: string; workspace: string; worktreeId: string };
 
 type Figure = number | typeof NA;
-type Card = { id: string; stats: { costUsd: Figure; totalTokens: Figure; premiumRequests: Figure } };
+// `status`: the Orca state of the card's agent (src/agent-cards.ts).
+type Card = { id: string; status: string; stats: { costUsd: Figure; totalTokens: Figure; premiumRequests: Figure } };
+
+// The place of each Orca state in a workspace's cards; any other state goes after them.
+const STATE_ORDER: Record<string, number> = { working: 0, blocked: 1, waiting: 2, done: 3 };
 
 export type Totals = { cost: string; tokens: string; premium: string };
 export type WorkspaceRow<C> = { id: string; name: string; totals: Totals; cards: C[] };
@@ -68,7 +75,11 @@ export function buildTree<C extends Card>(agents: TreeAgent[], cards: C[]): Host
     id: host,
     name: host,
     projects: [...projects].map(([id, { name, workspaces }]) => {
-      const rows = [...workspaces].map(([id, { name, cards }]) => ({ id, name, totals: totalsOf(cards), cards }));
+      const rows = [...workspaces].map(([id, { name, cards }]) => {
+        // stable, so the cards of one state keep the order of their agents
+        cards.sort((a, b) => (STATE_ORDER[a.status] ?? 4) - (STATE_ORDER[b.status] ?? 4));
+        return { id, name, totals: totalsOf(cards), cards };
+      });
       return { id, name, totals: totalsOf(rows.flatMap((row) => row.cards)), workspaces: rows };
     }),
   }));

@@ -5,7 +5,11 @@
 // no paired server's workspace. It builds their cards from the harnesses' session files, another
 // host's read over `ssh` (src/agent-cards.ts), and groups them into the tree (src/tree.ts), from
 // that one agent list. The CLI runs on each request, so only while the panel is open, and for
-// the palette command `spyhop.show`, which shows the panel.
+// the palette command `spyhop.show`, which shows the panel. A card's Focus pane button asks it
+// to focus the card's pane (`spyhop.focus`) in this computer's Orca window: an agent on this
+// computer or an SSH workspace by Orca's `terminal.focus`, one on a paired Orca server by
+// `orca terminal switch` to the server's terminal; neither runs anything over ssh. A press that
+// cannot focus answers `focused: false` and writes the reason to the worker's log.
 import { homedir } from 'node:os';
 import type { OrcaWorkerApi } from 'orca/worker';
 import { createAgentCards, type OrcaAgent } from './agent-cards.ts';
@@ -13,7 +17,7 @@ import { cardModel } from './core/card-model.js';
 import { createTtlCache } from './core/ttl-cache.js';
 import { run } from './exec.ts';
 import { orca as cli, type HostLists, listHosts, readServerAgents, remoteHosts } from './hosts.ts';
-import type { CardView, TreeAnswer } from './protocol.ts';
+import type { CardView, Pane, TreeAnswer } from './protocol.ts';
 import { buildTree, type TreeAgent, workspaceRowId } from './tree.ts';
 import { worktreeId } from './worktree-id.ts';
 
@@ -65,7 +69,7 @@ export default function activate(orca: OrcaWorkerApi): void {
       Promise.all(
         [...remote]
           .filter(([hostId]) => hostId.startsWith('runtime:'))
-          .map(([hostId, host]) => readServerAgents(run, hostId, host)),
+          .map(([hostId, host]) => readServerAgents(run, hostId, host, (message) => orca.log(message))),
       ),
     ]);
     const onServers = servers.flat();
@@ -78,23 +82,30 @@ export default function activate(orca: OrcaWorkerApi): void {
       : onServer
         ? workspaceRowId(onServer.hostId, onServer.worktreeId)
         : null;
+    // agent id -> its pane, for an agent Orca names a terminal of
+    const panes = new Map<string, Pane>();
     const agents: (OrcaAgent & TreeAgent)[] = asked.flatMap((workspace, i) => {
       const hostId = hostOf(workspace);
-      return lists[i].agents.map((agent, n) => ({
-        id: `${workspace.id}\0${agent.terminalId ?? n}`,
-        agent: agent.agent,
-        state: agent.state,
-        title: agent.title,
-        sessionId: agent.sessionId,
-        path: workspace.path,
-        machine: remote.get(hostId)?.alias ?? null,
-        hostId,
-        repo: workspace.project ?? workspace.name,
-        workspace: workspace.name,
-        worktreeId: worktreeOf(workspace),
-      }));
+      return lists[i].agents.map((agent, n) => {
+        const id = `${workspace.id}\0${agent.terminalId ?? n}`;
+        if (agent.terminalId) panes.set(id, { terminalId: agent.terminalId });
+        return {
+          id,
+          agent: agent.agent,
+          state: agent.state,
+          title: agent.title,
+          sessionId: agent.sessionId,
+          path: workspace.path,
+          machine: remote.get(hostId)?.alias ?? null,
+          hostId,
+          repo: workspace.project ?? workspace.name,
+          workspace: workspace.name,
+          worktreeId: worktreeOf(workspace),
+        };
+      });
     });
     agents.push(...onServers);
+    for (const agent of onServers) if (agent.pane) panes.set(agent.id, agent.pane);
     const tree = buildTree(agents, await cards.build(agents, Date.now()));
     return {
       hosts: tree.map((host) => ({
@@ -105,13 +116,33 @@ export default function activate(orca: OrcaWorkerApi): void {
           ...project,
           workspaces: project.workspaces.map((workspace) => ({
             ...workspace,
-            // card-model.js is untyped JS: CardView names the shape it returns
-            cards: workspace.cards.map((card) => cardModel(card, { home }) as CardView),
+            // card-model.js is untyped JS: CardView names the shape it returns. A card's id is
+            // that of the first of the agents that share it (src/agent-cards.ts).
+            cards: workspace.cards.map((card) => ({ ...(cardModel(card, { home }) as Omit<CardView, 'pane'>), pane: panes.get(card.id) ?? null })),
           })),
         })),
       })),
       focused,
     };
+  });
+
+  orca.panels.handle('spyhop.focus', async (pane: Pane) => {
+    try {
+      if ('environment' in pane) {
+        // `navigated` false: no desktop here shows that server; an answer without it focused nothing
+        const { focus } = await cli(run, ['terminal', 'switch', '--environment', pane.environment, '--terminal', pane.terminal]);
+        const focused = focus?.navigated === true;
+        if (!focused) orca.log(`spyhop: no Orca window here shows ${pane.environment}: did not navigate to the terminal ${pane.terminal}`);
+        return { focused };
+      }
+      const { focused } = await orca.host.call('terminal.focus', { terminalId: pane.terminalId });
+      if (!focused) orca.log(`spyhop: Orca did not focus the terminal ${pane.terminalId}`);
+      return { focused };
+    } catch (error) {
+      const terminal = 'environment' in pane ? `${pane.terminal} of ${pane.environment}` : pane.terminalId;
+      orca.log(`spyhop: cannot focus the terminal ${terminal}: ${(error as Error).message}`);
+      return { focused: false };
+    }
   });
 }
 
