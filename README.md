@@ -57,9 +57,11 @@ own host row. Their session files and git facts are read over `ssh <alias> -o Ba
 ConnectTimeout=5`, at most four commands at once per host, with read-only commands only: `cd`,
 `uname -s`, `printenv HOME`, `cat`, `head`, `tail`, `dd` (reading a block, never writing one),
 `find` with `stat`, `git branch --show-current`, `git remote get-url` and `sqlite3 -readonly`.
-The hosts and the paired servers' agents are listed with the `orca` CLI (`orca host list`,
-`orca environment list`, `orca agent list --environment <name>`). The plugin is installed on
-the Mac only; nothing is installed on the other hosts.
+The hosts and the paired servers' agents are listed with the `orca` CLI on every refresh while
+the panel is open: every paired server `orca environment list` lists gets its agents from `orca
+agent list --environment <name>`, since Orca lists no paired server's workspace to a plugin, and
+`orca host list` and `orca environment list` are asked again once a minute. The plugin is
+installed on the Mac only; nothing is installed on the other hosts.
 
 ## Refresh
 

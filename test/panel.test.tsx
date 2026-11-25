@@ -1,11 +1,13 @@
 // The right-sidebar panel over the plugin's own worker: the tree of Orca host → Orca project →
 // Orca workspace → cards, with the focused workspace expanded when the panel opens. The worker
-// reads the harnesses' files with the real programs under a temporary home.
+// reads the harnesses' files with the real programs under a temporary home; the `orca` CLI,
+// stood in for (test/helpers/stand-ins.ts), lists no other Orca host.
 import { afterEach, assert, mount, mountWorker, test, type MockHost, type TestElement, type TestPanel, type TestWorker } from 'orca/testing';
 import * as panelModule from '../src/panel.tsx';
 import * as workerModule from '../src/worker.ts';
 import { useTempHome } from './helpers/env.ts';
 import { orcaHost, type HostWorkspace } from './helpers/orca-host.ts';
+import { standIns } from './helpers/stand-ins.ts';
 
 let panel: TestPanel | undefined;
 let worker: TestWorker | undefined;
@@ -17,6 +19,7 @@ afterEach(async () => {
 // Opens the panel, with its worker, on this computer's Orca host.
 async function open(workspaces: HostWorkspace[], focused?: string) {
   const home = useTempHome();
+  standIns({ homes: {}, orca: {} });
   const host: MockHost = orcaHost(home, { workspaces, focused });
   worker = await mountWorker(workerModule, { host });
   panel = await mount(panelModule, { host });

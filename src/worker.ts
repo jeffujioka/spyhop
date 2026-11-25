@@ -1,27 +1,33 @@
 // The plugin's own worker: answers the panel with the tree of the Orca agents on every Orca host
 // (src/protocol.ts). Each request lists the Orca workspaces and, for those on this computer and
-// on SSH hosts, the agents in each; for each paired Orca server among the workspaces' hosts it
-// lists that server's agents with the `orca` CLI (src/hosts.ts). It builds their cards from the
-// harnesses' session files, another host's read over `ssh` (src/agent-cards.ts), and groups them
-// into the tree (src/tree.ts), from that one agent list. The CLI runs only when a workspace is
-// on another host, and for the palette command `spyhop.show`, which shows the panel.
+// on SSH hosts, the agents in each; for each paired Orca server `orca environment list` lists it
+// lists that server's agents with the `orca` CLI (src/hosts.ts), as Orca's `workspace.list` lists
+// no paired server's workspace. It builds their cards from the harnesses' session files, another
+// host's read over `ssh` (src/agent-cards.ts), and groups them into the tree (src/tree.ts), from
+// that one agent list. The CLI runs on each request, so only while the panel is open, and for
+// the palette command `spyhop.show`, which shows the panel.
 import { homedir } from 'node:os';
 import type { OrcaWorkerApi } from 'orca/worker';
 import { createAgentCards, type OrcaAgent } from './agent-cards.ts';
 import { cardModel } from './core/card-model.js';
+import { createTtlCache } from './core/ttl-cache.js';
 import { run } from './exec.ts';
-import { orca as cli, readRemoteHosts, readServerAgents } from './hosts.ts';
+import { orca as cli, type HostLists, listHosts, readServerAgents, remoteHosts } from './hosts.ts';
 import type { CardView, TreeAnswer } from './protocol.ts';
 import { buildTree, type TreeAgent, workspaceRowId } from './tree.ts';
 import { worktreeId } from './worktree-id.ts';
 
 // Orca's id of this computer's host; a workspace that records no host is on this computer.
 const LOCAL = 'local';
+// How long Orca's lists of hosts and paired servers are kept: a server is paired seldom, its
+// agents change each refresh.
+const HOST_LISTS_TTL_MS = 60 * 1000;
 
 export default function activate(orca: OrcaWorkerApi): void {
   const home = homedir();
   // kept for the worker's life: it keeps the state of its session reads between builds
   const cards = createAgentCards({ run, home });
+  const hostLists = createTtlCache(HOST_LISTS_TTL_MS);
 
   // Orca gives a plugin no call that shows its own panel; its CLI does, by the key Orca installed
   // the plugin under (`local.spyhop` from a folder, `<owner>.spyhop` from Git): the listed one
@@ -37,19 +43,19 @@ export default function activate(orca: OrcaWorkerApi): void {
   });
 
   orca.panels.handle('spyhop.tree', async (): Promise<TreeAnswer> => {
-    const [{ workspaces }, context] = await Promise.all([
+    const [{ workspaces }, context, listed] = await Promise.all([
       orca.host.call('workspace.list'),
       orca.host.call('workspace.readContext'),
+      hostLists('hosts', Date.now(), () => listHosts(run)) as Promise<HostLists>,
     ]);
     const hostOf = (workspace: (typeof workspaces)[number]) => workspace.hostId ?? LOCAL;
-    const remoteIds = [...new Set(workspaces.map(hostOf).filter((hostId) => hostId !== LOCAL))];
-    const remote = remoteIds.length > 0 ? await readRemoteHosts(run, remoteIds) : new Map();
     // A paired server's agents come from its own `orca agent list`; the others' workspaces are
     // asked here. `agents.list` lists one workspace's agents. Its `sessionId` is the harness's
     // own session id (what `agent.resume` takes), so a card links by it
     // (src/core/session-link.js). A workspace whose agents cannot be listed (removed since
     // `workspace.list`) shows none, and the others are drawn.
     const asked = workspaces.filter((workspace) => !hostOf(workspace).startsWith('runtime:'));
+    const remote = remoteHosts(listed, [...new Set(asked.map(hostOf).filter((hostId) => hostId !== LOCAL))]);
     const [lists, servers] = await Promise.all([
       Promise.all(
         asked.map((workspace) =>
@@ -57,13 +63,21 @@ export default function activate(orca: OrcaWorkerApi): void {
         ),
       ),
       Promise.all(
-        remoteIds
-          .filter((hostId) => hostId.startsWith('runtime:'))
-          .map((hostId) => readServerAgents(run, hostId, remote.get(hostId))),
+        [...remote]
+          .filter(([hostId]) => hostId.startsWith('runtime:'))
+          .map(([hostId, host]) => readServerAgents(run, hostId, host)),
       ),
     ]);
+    const onServers = servers.flat();
+    // The focused workspace is a `workspace.list` row, or else a paired server's: Orca's id of a
+    // workspace is its worktreeId, which that server's agents in it carry.
     const current = workspaces.find((workspace) => workspace.id === context?.workspaceId);
-    const focused = current ? workspaceRowId(hostOf(current), worktreeOf(current)) : null;
+    const onServer = context?.workspaceId ? onServers.find((agent) => agent.worktreeId === context.workspaceId) : undefined;
+    const focused = current
+      ? workspaceRowId(hostOf(current), worktreeOf(current))
+      : onServer
+        ? workspaceRowId(onServer.hostId, onServer.worktreeId)
+        : null;
     const agents: (OrcaAgent & TreeAgent)[] = asked.flatMap((workspace, i) => {
       const hostId = hostOf(workspace);
       return lists[i].agents.map((agent, n) => ({
@@ -80,7 +94,7 @@ export default function activate(orca: OrcaWorkerApi): void {
         worktreeId: worktreeOf(workspace),
       }));
     });
-    agents.push(...servers.flat());
+    agents.push(...onServers);
     const tree = buildTree(agents, await cards.build(agents, Date.now()));
     return {
       hosts: tree.map((host) => ({

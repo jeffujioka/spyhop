@@ -10,7 +10,7 @@ import { afterEach, assert, mockHost, mountWorker, test, type TestWorker } from 
 import { createAgentCards } from '../src/agent-cards.ts';
 import { GIT_TTL_MS } from '../src/core/git.js';
 import { run } from '../src/exec.ts';
-import { readRemoteHosts } from '../src/hosts.ts';
+import { listHosts, remoteHosts } from '../src/hosts.ts';
 import type { CardView as Card, TreeAnswer } from '../src/protocol.ts';
 import * as workerModule from '../src/worker.ts';
 import { NOW, agent, costOf, ompSessionOf as ompSession } from './helpers/agent-cards.ts';
@@ -115,13 +115,14 @@ const workspaceRow = (hostId: string, project: string, name: string, path: strin
 });
 const ompAgent = (terminalId: string) => ({ terminalId, title: null, agent: 'omp', state: 'working', stateStartedAt: 0, sessionId: null });
 
-// The worker on an Orca host with `rows`, each with one omp agent in `agents.list`.
-async function treeOf(rows: object[]) {
+// The worker on an Orca host with `rows`, each with one omp agent in `agents.list`, and the
+// focused workspace `context` (`workspace.readContext`).
+async function treeOf(rows: object[], context: object | null = null) {
   const host = mockHost({
     results: {
       'workspace.list': { workspaces: rows, truncated: false },
       'agents.list': ({ workspaceId }: { workspaceId: string }) => ({ agents: [ompAgent(`${workspaceId}-t1`)] }),
-      'workspace.readContext': null,
+      'workspace.readContext': context,
     },
   });
   worker = await mountWorker(workerModule, { host });
@@ -149,13 +150,18 @@ test('Agent on an SSH workspace', async () => {
   assert.deepEqual(calls.orca().filter((args) => !/^(host|environment) list --json$/.test(args)), []);
 });
 
-test('Agent on a paired Orca server', async () => {
+// The paired Orca server `jeff-server`, reached as `jeff`, with one omp agent in its workspace
+// `main` of its project `spyhop`, whose session has logged 0.10 USD; and this computer's
+// workspace `api`/`main` without one. Orca's `workspace.list` lists this computer's workspaces
+// only: a paired server's are told of by its own `orca agent list`.
+function pairedServer() {
   const home = useTempHome();
   const localFolder = join(home, 'work/api-main');
   mkdirSync(localFolder, { recursive: true });
   const remoteHome = tempHome();
   const folder = join(remoteHome, 'work/spyhop-main');
   ompSession(remoteHome, folder);
+  const worktreeId = `338dd6a3-d3c7-4e4e-a557-ccc460353d0f::${folder}`;
   // the server's own agents, local to it
   const agents = answer({
     agents: [
@@ -164,7 +170,7 @@ test('Agent on a paired Orca server', async () => {
         kind: 'terminal',
         agent: 'omp',
         state: 'working',
-        worktreeId: `338dd6a3-d3c7-4e4e-a557-ccc460353d0f::${folder}`,
+        worktreeId,
         workspace: 'main',
         repo: 'spyhop',
         hostId: 'local',
@@ -179,11 +185,15 @@ test('Agent on a paired Orca server', async () => {
     homes: { jeff: remoteHome },
     orca: { 'host list --json': hostList, 'environment list --json': environmentList, 'agent list --environment jeff-server --json': agents },
   });
+  return { rows: [workspaceRow('local', 'api', 'main', localFolder)], worktreeId, calls };
+}
 
-  const tree = await treeOf([
-    workspaceRow('local', 'api', 'main', localFolder),
-    workspaceRow(`runtime:${JEFF_ENV}`, 'spyhop', 'main', folder),
-  ]);
+test('Agent on a paired Orca server', async () => {
+  const { rows, calls } = pairedServer();
+
+  const tree = await treeOf(rows);
+  // a refresh within a minute lists the server's agents again, not the hosts
+  await worker!.request('spyhop.tree');
 
   // a row per host: the server's agents do not join this computer's. The server's row is named
   // by its environment, and its sessions are read over its SSH target's alias.
@@ -204,18 +214,35 @@ test('Agent on a paired Orca server', async () => {
   assert.ok(ssh.length > 0);
   assert.deepEqual(ssh.filter((args) => args[0] !== 'jeff' || !readOnlyLine(args.at(-1)!)), []);
   assert.deepEqual(calls.orca().filter((args) => !/^((host|environment) list|agent list --environment jeff-server) --json$/.test(args)), []);
+  assert.deepEqual(
+    ['host list --json', 'environment list --json', 'agent list --environment jeff-server --json'].map(
+      (line) => calls.orca().filter((args) => args === line).length,
+    ),
+    [1, 1, 2],
+  );
+});
+
+test('Focused workspace on a paired Orca server', async () => {
+  const { rows, worktreeId } = pairedServer();
+
+  // Orca's id of a workspace is its worktreeId
+  const tree = await treeOf(rows, { workspaceId: worktreeId, branch: 'main', displayName: 'main', terminals: [] });
+
+  const workspace = tree.hosts
+    .find((host) => host.name === 'jeff-server')
+    ?.projects.find((project) => project.name === 'spyhop')
+    ?.workspaces.find((row) => row.name === 'main');
+  assert.ok(workspace, JSON.stringify(tree.hosts.map((host) => host.name)));
+  assert.equal(tree.focused, workspace.id);
 });
 
 test('Host lists without hosts', async () => {
   standIns({ homes: {}, orca: { 'host list --json': answer({}), 'environment list --json': answer({}) } });
 
-  const hosts = await readRemoteHosts(run, [`ssh:${DEVBOX}`, `runtime:${JEFF_ENV}`]);
+  const hosts = remoteHosts(await listHosts(run), [`ssh:${DEVBOX}`]);
 
-  // each host named by its id
-  assert.deepEqual(Object.fromEntries(hosts), {
-    [`ssh:${DEVBOX}`]: { name: DEVBOX, alias: DEVBOX },
-    [`runtime:${JEFF_ENV}`]: { name: JEFF_ENV, alias: JEFF_ENV },
-  });
+  // the SSH host named by its id, and no paired server
+  assert.deepEqual(Object.fromEntries(hosts), { [`ssh:${DEVBOX}`]: { name: DEVBOX, alias: DEVBOX } });
 });
 
 test('Unreachable Orca host', async () => {
