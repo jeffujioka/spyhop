@@ -6,7 +6,7 @@
 // read-only; whatever cannot be read shows as n/a on the agent's card, and a build never
 // rejects.
 
-import { readGit } from './core/git.js';
+import { GIT_TTL_MS, readGit } from './core/git.js';
 import { NA, createSessions, readStats } from './core/providers/index.js';
 import { collapseBySession, linkAgents } from './core/session-link.js';
 import type { Run } from './exec.ts';
@@ -34,6 +34,17 @@ export function createAgentCards({ run, home }: { run: Run; home: string }) {
     const read = await run('cat', ['--', path]);
     return read.code === 0 ? read.stdout : null;
   };
+
+  // folder -> { at, value } of its last git read: a folder's branch and origin are asked again
+  // only after GIT_TTL_MS, so a refresh of known folders runs no git.
+  const gits = new Map<string | null, { at: number; value: Promise<{ branch: string | null; origin: string | null }> }>();
+  function gitOf(cwd: string | null, now: number) {
+    const hit = gits.get(cwd);
+    if (hit && now - hit.at < GIT_TTL_MS) return hit.value;
+    const value = readGit({ exec: run }, { cwd, on: null });
+    gits.set(cwd, { at: now, value });
+    return value;
+  }
 
   // The operating system, for the `stat` the session listing runs: asked once, and again
   // after a failed ask.
@@ -102,7 +113,7 @@ export function createAgentCards({ run, home }: { run: Run; home: string }) {
 
       const entries = await Promise.all(
         agents.map(async (agent) => {
-          const [git, file] = await Promise.all([readGit({ exec: run }, { cwd: agent.path, on: null }), linked.get(agent)]);
+          const [git, file] = await Promise.all([gitOf(agent.path, now), linked.get(agent)]);
           const unlinked = { ...readStats('', null, 0), harness: agent.agent ?? NA };
           const provider = PROVIDERS[agent.agent ?? ''];
           if (file && !reads.has(file.path)) {

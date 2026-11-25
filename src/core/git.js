@@ -7,6 +7,10 @@
 // through `cwd`, so no path is an argument; neither writes, and no shell string or
 // redirection is used.
 
+// A folder's branch and origin are asked again after this long (copied from herdr-session-stats,
+// src/cards.js).
+export const GIT_TTL_MS = 30 * 1000;
+
 // The URL of a remote without the credentials of an http(s) or ftp(s) URL: the userinfo
 // (`user:token@`, `token@`) is replaced by `***`, so a secret never reaches a card or a log.
 // The userinfo ends at the last `@` of the authority. A bare user name of an scp-style or

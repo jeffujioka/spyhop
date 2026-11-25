@@ -5,7 +5,28 @@
   "version": "0.1.0",
   "description": "AI harness session stats (omp, Claude Code, opencode) for every Orca agent, by host, project and workspace.",
   "engines": {
-    "orca": ">=1.4.246"
+    "orca": ">=1.4.247"
   },
-  "execution": "data"
+  "execution": "trusted-worker",
+  "pluginApi": 1,
+  "main": "src/worker.ts",
+  "contributes": {
+    "panels": [
+      {
+        "id": "spyhop",
+        "title": "Spyhop",
+        "icon": "bar-chart-3",
+        "entry": "src/panel.tsx",
+        "ui": "components"
+      }
+    ]
+  },
+  "capabilities": [
+    {
+      "kind": "workspace:read"
+    },
+    {
+      "kind": "agent:read"
+    }
+  ]
 }

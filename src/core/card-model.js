@@ -15,7 +15,7 @@
 //
 //   identity  { id, status: { tone, label }, name, session, path, branch, remote, machine,
 //               harness, model }   the status tone is the agent's status (working, blocked,
-//               done, idle), `dim` when unknown; `session` is the session's title as a figure,
+//               waiting, done, idle), `dim` when unknown; `session` is the session's title as a figure,
 //               null when there is none; `branch`, `remote` and `machine` are strings or null
 //   context   { id, title, hero, gauge, figures }   hero: the usage percent with the window
 //               as its label, in the gauge's tone; gauge: { fraction, tickFraction, tone },
@@ -39,7 +39,7 @@ const WINDOW_LIMITS = [0.7, 0.85];
 // The prompt cache is about to go cold at this time left, or less.
 const CACHE_WARNING_MS = 60 * 1000;
 
-const STATUSES = ['working', 'blocked', 'done', 'idle'];
+const STATUSES = ['working', 'blocked', 'waiting', 'done', 'idle'];
 
 const figure = (value, tone = 'normal') => ({ value, tone: value === NA ? 'dim' : tone });
 const labeled = (label, value) => ({ label, ...figure(value) });

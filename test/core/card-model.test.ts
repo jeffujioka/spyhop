@@ -205,7 +205,7 @@ describe('cache countdown shows its tone', () => {
 
 describe('agent status colors the card dot', () => {
   test('status dot tone', () => {
-    for (const status of ['working', 'blocked', 'done', 'idle']) {
+    for (const status of ['working', 'blocked', 'waiting', 'done', 'idle']) {
       expect(group(model({ status }), 'identity').status).toEqual({ tone: status, label: status });
     }
     expect(group(model({ status: null }), 'identity').status).toEqual({ tone: 'dim', label: NA });

@@ -135,7 +135,7 @@ const sessionDir = (cwd, home) => `${home}/.omp/agent/sessions/${sessionDirSlug(
 // and rewrites it in place when the title changes (it always equals the latest `title_change`
 // entry), so one short read gives it. '' when the line is not a title entry (the session then
 // matches no agent title and takes an untitled agent, see shareSessions); null when the line
-// could not be read (a file being written, a failed program), which is not worth keeping.
+// could not be read (a file being written, a failed program).
 async function readTitle(run, path) {
   try {
     const { code, stdout } = await run('head', ['-n', '1', '--', path]);
@@ -154,16 +154,17 @@ export function createOmpSessions({ execOn, readTextOn }) {
   // machine -> the reader that keeps that machine's per-file totals
   const readerOn = sessionReaders(execOn, ompProvider.fold);
 
-  // machine and path -> { mtimeMs, title }: a title is read again only when the file changed,
-  // so a refresh of quiet files runs no program. One entry per file, replaced when it changes.
+  // machine and path -> { mtimeMs, size, title }: a title is read again only when the file
+  // changed, so a refresh of quiet files runs no program. One entry per file, replaced when it
+  // changes. A line that could not be read is kept as '' too: a file being written changes its
+  // size when the line is whole, and is read again then.
   const titles = new Map();
   async function titleOf(machine, file) {
     const key = `${machine ?? ''}\0${file.path}`;
     const hit = titles.get(key);
-    if (hit?.mtimeMs === file.mtimeMs) return hit.title;
-    const title = await readTitle(execOn(machine), file.path);
-    if (title === null) return '';
-    titles.set(key, { mtimeMs: file.mtimeMs, title });
+    if (hit?.mtimeMs === file.mtimeMs && hit.size === file.size) return hit.title;
+    const title = (await readTitle(execOn(machine), file.path)) ?? '';
+    titles.set(key, { mtimeMs: file.mtimeMs, size: file.size, title });
     return title;
   }
 

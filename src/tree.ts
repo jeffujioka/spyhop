@@ -39,6 +39,10 @@ function totalsOf(cards: Card[]): Totals {
   };
 }
 
+// The id of the row of the Orca workspace `worktreeId` on the Orca host `hostId`: unique across
+// hosts, so a workspace that two hosts both have gets two rows.
+export const workspaceRowId = (hostId: string, worktreeId: string) => `${hostId}\0${worktreeId}`;
+
 // `cards`: as the card builder returns them for `agents`, one card per shared harness session.
 export function buildTree<C extends Card>(agents: TreeAgent[], cards: C[]): HostRow<C>[] {
   const cardOf = new Map(cards.map((card) => [card.id, card]));
@@ -53,7 +57,7 @@ export function buildTree<C extends Card>(agents: TreeAgent[], cards: C[]): Host
     const projectId = `${agent.hostId}\0${agent.worktreeId.slice(0, agent.worktreeId.indexOf('::'))}`;
     if (!projects.has(projectId)) projects.set(projectId, { name: agent.repo, workspaces: new Map() });
     const { workspaces } = projects.get(projectId)!;
-    const workspaceId = `${agent.hostId}\0${agent.worktreeId}`;
+    const workspaceId = workspaceRowId(agent.hostId, agent.worktreeId);
     if (!workspaces.has(workspaceId)) workspaces.set(workspaceId, { name: agent.workspace, cards: [] });
     const card = cardOf.get(agent.id);
     if (card) workspaces.get(workspaceId)!.cards.push(card);
