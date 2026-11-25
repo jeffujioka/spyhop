@@ -1,9 +1,10 @@
 // The Orca hosts other than this computer, as the `orca` CLI tells of them: an SSH host (a
 // `workspace.list` hostId `ssh:<target id>`) and a paired Orca server (`runtime:<environment
-// id>`), each with the name its host row shows and the alias `ssh` reaches it by, and the Orca
-// agents of a paired server. Only the CLI's list commands run here, through `run` (src/exec.ts)
-// on this computer; whatever cannot be listed is left out or named by its id, never rejected.
-// `orca` is also how the worker's palette command asks Orca to show the panel.
+// id>`, every one `orca environment list` lists), each with the name its host row shows and the
+// alias `ssh` reaches it by, and the Orca agents of a paired server. Only the CLI's list commands
+// run here, through `run` (src/exec.ts) on this computer; whatever cannot be listed is left out
+// or named by its id, never rejected. `orca` is also how the worker's palette command asks Orca
+// to show the panel.
 import type { OrcaAgent } from './agent-cards.ts';
 import type { Run } from './exec.ts';
 import type { TreeAgent } from './tree.ts';
@@ -22,31 +23,37 @@ export async function orca(run: Run, args: string[]): Promise<Listed> {
   return JSON.parse(stdout).result;
 }
 
-// The hosts `hostIds` name (each `ssh:…` or `runtime:…`), by hostId. An SSH host is named by its
-// SSH target's name, which is its alias; a paired server by its environment's name, its alias
-// being the name of the SSH target its `orcadDeployment.sshTargetId` names. A host the CLI does
-// not list is named by its id, as is its alias.
-export async function readRemoteHosts(run: Run, hostIds: string[]): Promise<Map<string, RemoteHost>> {
+// What `orca host list` and `orca environment list` list: Orca's hosts, and the environments of
+// its paired Orca servers; each none when it cannot be listed.
+export type HostLists = { hosts: Listed[]; environments: Listed[] };
+
+export async function listHosts(run: Run): Promise<HostLists> {
   const [hosts, environments] = await Promise.all([
     orca(run, ['host', 'list']).then((result) => (result.hosts ?? []) as Listed[], () => []),
-    hostIds.some((id) => id.startsWith('runtime:'))
-      ? orca(run, ['environment', 'list']).then((result) => (result.environments ?? []) as Listed[], () => [])
-      : [],
+    orca(run, ['environment', 'list']).then((result) => (result.environments ?? []) as Listed[], () => []),
   ]);
+  return { hosts, environments };
+}
+
+// By hostId, every paired Orca server `lists` names and the hosts `hostIds` name (each `ssh:…`).
+// A paired server is named by its environment's name, its alias being the name of the SSH target
+// its `orcadDeployment.sshTargetId` names; an SSH host by its SSH target's name, which is its
+// alias. A host the lists do not name is named by its id, as is its alias.
+export function remoteHosts({ hosts, environments }: HostLists, hostIds: string[]): Map<string, RemoteHost> {
   const targets = new Map(hosts.filter((host) => host.kind === 'ssh').map((host) => [host.id, host.name as string]));
-  const servers = new Map(environments.map((environment) => [environment.id, environment]));
-  return new Map(
-    hostIds.map((hostId) => {
-      const id = hostId.slice(hostId.indexOf(':') + 1);
-      if (hostId.startsWith('ssh:')) {
-        const name = targets.get(id) ?? id;
-        return [hostId, { name, alias: name }];
-      }
-      const server = servers.get(id);
-      const name: string = server?.name ?? id;
-      return [hostId, { name, alias: targets.get(server?.orcadDeployment?.sshTargetId) ?? name }];
+  const remote = new Map<string, RemoteHost>(
+    environments.map((environment) => {
+      const name: string = environment.name ?? environment.id;
+      return [`runtime:${environment.id}`, { name, alias: targets.get(environment.orcadDeployment?.sshTargetId) ?? name }];
     }),
   );
+  for (const hostId of hostIds) {
+    if (remote.has(hostId)) continue;
+    const id = hostId.slice(hostId.indexOf(':') + 1);
+    const name = (hostId.startsWith('ssh:') && targets.get(id)) || id;
+    remote.set(hostId, { name, alias: name });
+  }
+  return remote;
 }
 
 // The Orca agents of the paired server `hostId` (`orca agent list --environment <name>`), on its
