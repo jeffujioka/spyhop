@@ -6,9 +6,10 @@ import { readStats } from '../src/core/providers/index.js';
 import { buildTree, type TreeAgent } from '../src/tree.ts';
 
 // A card in the card builder's shape (src/agent-cards.ts), every other figure n/a.
-const card = (id: string, figures: Record<string, number | string>) => ({
+const card = (id: string, figures: Record<string, number | string>, status = 'done') => ({
   id,
   folder: '/work/app',
+  status,
   stats: { ...readStats('', null, 0), ...figures },
 });
 
@@ -73,4 +74,12 @@ test('a worktreeId without a project id keys its project by name', () => {
     host.projects.map((project) => [project.name, project.workspaces.map((row) => row.name)]),
     [['app', ['main', 'fix']]],
   );
+});
+
+test('Cards ordered by Orca state', () => {
+  const states = { a: 'done', b: 'waiting', c: 'working', d: 'blocked', e: 'working' };
+  const ids = Object.keys(states) as (keyof typeof states)[];
+  const agents: TreeAgent[] = ids.map((id) => ({ id, hostId: 'local', repo: 'app', workspace: 'main', worktreeId: 'w1::/work/app' }));
+  const [main] = buildTree(agents, ids.map((id) => card(id, {}, states[id])))[0].projects[0].workspaces;
+  assert.deepEqual(main.cards.map((c) => c.id), ['c', 'e', 'd', 'b', 'a']);
 });
