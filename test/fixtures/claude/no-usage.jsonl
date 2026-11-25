@@ -1,0 +1,6 @@
+{"type":"mode","mode":"normal","sessionId":"s1"}
+{"type":"user","uuid":"u01","parentUuid":null,"sessionId":"s1","isSidechain":false,"timestamp":"2026-09-07T20:17:49.637Z","message":{"role":"user","content":"[prompt]"}}
+{"type":"assistant","uuid":"a01","parentUuid":"u01","sessionId":"s1","isSidechain":false,"timestamp":"2026-09-07T20:18:02.937Z","message":{"id":"msg_01","role":"assistant","model":"claude-opus-4-6","content":[{"type":"thinking","thinking":"[thinking]"}],"stop_reason":null}}
+{"type":"assistant","uuid":"a02","parentUuid":"a01","sessionId":"s1","isSidechain":false,"timestamp":"2026-09-07T20:18:03.139Z","message":{"id":"msg_01","role":"assistant","model":"claude-opus-4-6","content":[{"type":"text","text":"[text]"}],"stop_reason":null}}
+{"type":"assistant","uuid":"a03","parentUuid":"a02","sessionId":"s1","isSidechain":false,"timestamp":"2026-09-07T20:18:03.545Z","message":{"id":"msg_01","role":"assistant","model":"claude-opus-4-6","content":[{"type":"tool_use","id":"t1","name":"tool","input":{}}],"stop_reason":"tool_use"}}
+{"type":"user","uuid":"u02","parentUuid":"a03","sessionId":"s1","isSidechain":false,"timestamp":"2026-09-07T20:18:03.552Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"[result]"}]}}

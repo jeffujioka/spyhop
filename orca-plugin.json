@@ -1,0 +1,44 @@
+{
+  "manifestVersion": 2,
+  "id": "spyhop",
+  "name": "Spyhop",
+  "version": "0.1.0",
+  "description": "AI harness session stats (omp, Claude Code, opencode) for every Orca agent, by host, project and workspace.",
+  "engines": {
+    "orca": ">=1.4.247"
+  },
+  "execution": "trusted-worker",
+  "pluginApi": 1,
+  "main": "src/worker.ts",
+  "contributes": {
+    "panels": [
+      {
+        "id": "spyhop",
+        "title": "Spyhop",
+        "icon": "bar-chart-3",
+        "entry": "src/panel.tsx",
+        "ui": "components"
+      }
+    ],
+    "commands": [
+      {
+        "id": "spyhop.show",
+        "title": "Spyhop: Show session stats"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "spyhop.show",
+        "key": "Mod+Alt+Shift+S"
+      }
+    ]
+  },
+  "capabilities": [
+    {
+      "kind": "workspace:read"
+    },
+    {
+      "kind": "agent:read"
+    }
+  ]
+}
