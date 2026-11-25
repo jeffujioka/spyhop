@@ -6,6 +6,7 @@ import { ompProvider } from '../../src/core/providers/omp.js';
 import { createClaudeSessions } from '../../src/core/providers/claude-sources.js';
 import { createOmpSessions } from '../../src/core/providers/omp-sources.js';
 import { SCAN_CHUNK_BYTES, TAIL_BYTES } from '../../src/core/refresh.js';
+import { claudeAssistant, claudeBoundary, claudeUsage, sessionFile } from './helpers/entries.ts';
 import { expect } from './helpers/expect.ts';
 import { EXEC_CAP, localExec } from './helpers/local-exec.ts';
 
@@ -14,15 +15,14 @@ const T0 = NOW - 24 * 60 * 60_000;
 const OMP_PATH = '/home/u/.omp/agent/sessions/--proj--/big.jsonl';
 const CLAUDE_PATH = '/home/u/.claude/projects/-proj/big.jsonl';
 
-const line = (value) => JSON.stringify(value);
 const stamp = (minute) => new Date(T0 + minute * 60_000).toISOString();
 const filler = 'x'.repeat(2000);
 
 // ---- omp ---------------------------------------------------------------------------------
 
-const ompUser = (minute) => line({ type: 'message', id: `u${minute}`, timestamp: stamp(minute), message: { role: 'user', content: filler } });
+const ompUser = (minute) => JSON.stringify({ type: 'message', id: `u${minute}`, timestamp: stamp(minute), message: { role: 'user', content: filler } });
 const ompTurn = (minute, [input, output, cacheRead, cacheWrite, cost], model = 'early-model') =>
-  line({
+  JSON.stringify({
     type: 'message',
     id: `a${minute}`,
     timestamp: stamp(minute),
@@ -44,17 +44,17 @@ const LATE = [[1, 2, 300, 0, 0.125], [3, 4, 0, 50, 0.0625]];
 // and the late turns. The minute of a message is its number, so the session lasts one minute
 // less than it has messages.
 function ompSession({ bytes = TAIL_BYTES * 4, extra = [] } = {}) {
-  const lines = [line({ type: 'session', id: 's', timestamp: stamp(0) }), line({ type: 'thinking_level_change', thinkingLevel: 'high' }), line({ type: 'compaction', id: 'c1' })];
+  const lines = [JSON.stringify({ type: 'session', id: 's', timestamp: stamp(0) }), JSON.stringify({ type: 'thinking_level_change', thinkingLevel: 'high' }), JSON.stringify({ type: 'compaction', id: 'c1' })];
   let minute = 0;
   for (const turn of EARLY) lines.push(ompTurn(minute++, turn));
   while (lines.join('\n').length < bytes) lines.push(ompUser(minute++));
-  lines.push(line({ type: 'compaction', id: 'c2' }));
+  lines.push(JSON.stringify({ type: 'compaction', id: 'c2' }));
   lines.push(ompTurn(minute++, LATE[0], 'tail-model'), ompTurn(minute++, LATE[1], 'tail-model'));
   lines.push(...extra.map((turn) => ompTurn(minute++, turn, 'tail-model')));
   return { text: `${lines.join('\n')}\n`, messages: minute };
 }
 
-const ompFile = (text, path = OMP_PATH) => ({ path, mtimeMs: 1000, size: Buffer.byteLength(text) });
+const ompFile = (text, path = OMP_PATH) => sessionFile(text, path);
 
 function ompReader(exec) {
   const sessions = createOmpSessions({ execOn: () => exec, readTextOn: () => async () => null });
@@ -63,14 +63,10 @@ function ompReader(exec) {
 
 // ---- Claude Code ---------------------------------------------------------------------------
 
-const claudeUser = (minute) => line({ type: 'user', timestamp: stamp(minute), message: { role: 'user', content: filler } });
+const claudeUser = (minute) => JSON.stringify({ type: 'user', timestamp: stamp(minute), message: { role: 'user', content: filler } });
 const claudeBlock = (minute, id, [input, output, cacheRead, cacheWrite], model = 'early-model') =>
-  line({
-    type: 'assistant',
-    timestamp: stamp(minute),
-    message: { id, role: 'assistant', model, content: [], usage: { input_tokens: input, output_tokens: output, cache_read_input_tokens: cacheRead, cache_creation_input_tokens: cacheWrite } },
-  });
-const boundary = (trigger) => line({ type: 'system', subtype: 'compact_boundary', timestamp: stamp(0), compactMetadata: { trigger } });
+  claudeAssistant(stamp(minute), id, claudeUsage(input, output, cacheRead, cacheWrite), model);
+const boundary = (trigger) => claudeBoundary(stamp(0), trigger);
 
 // Two responses early, two in the tail; the early one with two blocks (one entry per content block).
 function claudeSession({ bytes = TAIL_BYTES * 4 } = {}) {
@@ -81,7 +77,7 @@ function claudeSession({ bytes = TAIL_BYTES * 4 } = {}) {
   return { text: `${lines.join('\n')}\n`, messages: minute };
 }
 
-const claudeFile = (text) => ({ path: CLAUDE_PATH, mtimeMs: 1000, size: Buffer.byteLength(text) });
+const claudeFile = (text) => sessionFile(text, CLAUDE_PATH);
 
 function claudeReader(exec) {
   const sessions = createClaudeSessions({ execOn: () => exec });
@@ -141,7 +137,7 @@ describe('whole-session figures on a large file', () => {
     expect(served(mark)).toBeLessThanOrEqual(TAIL_BYTES);
 
     // the session grows: the tail, the appended lines, and a byte to check where they begin
-    const appended = `${ompTurn(9000, [7, 8, 9, 10, 1], 'tail-model')}\n${line({ type: 'compaction', id: 'c3' })}\n`;
+    const appended = `${ompTurn(9000, [7, 8, 9, 10, 1], 'tail-model')}\n${JSON.stringify({ type: 'compaction', id: 'c3' })}\n`;
     const grown = text + appended;
     files.set(OMP_PATH, grown);
     mark = calls.length;
@@ -157,15 +153,15 @@ describe('whole-session figures on a large file', () => {
   });
 
   test('scan reads in bounded chunks', async () => {
-    // a file over herdr's whole exec output: no single read can take it. An assistant turn with
-    // usage lies across the end of the first block and a compaction across the end of the
+    // a file over the runner's whole output cap: no single read can take it. An assistant turn
+    // with usage lies across the end of the first block and a compaction across the end of the
     // second, so a carried line that was lost or folded twice would change the figures.
     const turn = ompTurn(2, [100, 200, 300, 400, 2]);
-    const compact = line({ type: 'compaction', id: 'c-straddle', summary: 's'.repeat(500) });
-    const lines = [line({ type: 'session', id: 's', timestamp: stamp(0) }), line({ type: 'compaction', id: 'c1' }), ompTurn(0, EARLY[0]), ompTurn(1, EARLY[1])];
+    const compact = JSON.stringify({ type: 'compaction', id: 'c-straddle', summary: 's'.repeat(500) });
+    const lines = [JSON.stringify({ type: 'session', id: 's', timestamp: stamp(0) }), JSON.stringify({ type: 'compaction', id: 'c1' }), ompTurn(0, EARLY[0]), ompTurn(1, EARLY[1])];
     const place = (target, boundary) => {
       const here = Buffer.byteLength(lines.join('\n')) + 1;
-      const note = (n) => line({ type: 'custom', note: 'n'.repeat(n) });
+      const note = (n) => JSON.stringify({ type: 'custom', note: 'n'.repeat(n) });
       const start = boundary - Math.floor(Buffer.byteLength(target) / 2);
       lines.push(note(start - here - Buffer.byteLength(note(0)) - 1), target);
     };
@@ -237,7 +233,7 @@ describe('whole-session figures on a large file', () => {
     expect((await read(ompFile(first.text))).totalTokens).toBe(601);
 
     // a smaller file, still over the tail window, with one turn of its own
-    const replaced = `${[line({ type: 'session', id: 'other', timestamp: stamp(0) }), ompTurn(0, [1, 1, 1, 1, 9], 'new-model'), ...Array.from({ length: 150 }, (_, i) => ompUser(i + 1))].join('\n')}\n`;
+    const replaced = `${[JSON.stringify({ type: 'session', id: 'other', timestamp: stamp(0) }), ompTurn(0, [1, 1, 1, 1, 9], 'new-model'), ...Array.from({ length: 150 }, (_, i) => ompUser(i + 1))].join('\n')}\n`;
     expect(Buffer.byteLength(replaced)).toBeGreaterThan(TAIL_BYTES);
     expect(Buffer.byteLength(replaced)).toBeLessThan(Buffer.byteLength(first.text));
     files.set(OMP_PATH, replaced);
@@ -275,12 +271,12 @@ describe('whole-session figures on a large file', () => {
   test('latency and thinking survive a large file', async () => {
     // the last turn's user message and the thinking-level entry lie far before the tail window:
     // entries that are no message fill the space between them and the last reply
-    const pad = Array.from({ length: Math.ceil((TAIL_BYTES * 2) / 2000) }, () => line({ type: 'custom', note: filler }));
+    const pad = Array.from({ length: Math.ceil((TAIL_BYTES * 2) / 2000) }, () => JSON.stringify({ type: 'custom', note: filler }));
     const outside = (text, needle) => expect(text.slice(-TAIL_BYTES)).not.toContain(needle);
 
     const omp = `${[
-      line({ type: 'session', id: 's', timestamp: stamp(0) }),
-      line({ type: 'thinking_level_change', thinkingLevel: 'high' }),
+      JSON.stringify({ type: 'session', id: 's', timestamp: stamp(0) }),
+      JSON.stringify({ type: 'thinking_level_change', thinkingLevel: 'high' }),
       ompUser(0),
       ompTurn(1, EARLY[0]),
       ompUser(2),

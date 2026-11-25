@@ -24,20 +24,26 @@
 // program and read a text file on an Orca host (null: this computer), through the plugin's
 // runner (src/exec.ts), read-only use only. `createSessions` runs once per card builder and
 // returns
-//   link({ machine, cwd, home, os })       -> Promise<{ path, mtimeMs, size } | null>
-//     the session file the Orca agent's workspace folder links to (the newest one, however
-//     long ago it changed, see session-link.js), or null; `home` and `os` (`uname -s`) are the
-//     host's; used for a provider without `list`, and for an agent alone in its folder;
-//   list({ machine, cwd, home, os, limit }) -> Promise<Array<{ path, mtimeMs, size, title? }>>
-//     optional: the `limit` newest session files of the folder, newest first, with each file's
-//     title where the harness writes one into it, for sharing the files out among the Orca
-//     agents of one folder, host and harness (`shareSessions`, src/core/session-link.js, by
-//     the agents' titles). A provider with no titles leaves `list` out;
+//   link({ machine, cwd, home, os, except }) -> Promise<{ path, mtimeMs, size } | null>
+//     the session file the Orca agent's workspace folder links to (the newest one whose path
+//     is not in `except`, the named ones, however long ago it changed, see session-link.js),
+//     or null; `home` and `os` (`uname -s`) are the host's; used for a provider without
+//     `list`, and for an agent alone in its folder;
+//   named({ machine, cwd, home, os }, sessionIds) -> Promise<Array<{ path, mtimeMs, size } | null>>
+//     for each of the Orca agents' sessionIds (null: none), the session of the folder's host
+//     that the id names by the harness's own rule, or null; the hook alone knows that rule;
+//   list({ machine, cwd, home, os, limit, except }) -> Promise<Array<{ path, mtimeMs, size, title? }>>
+//     optional: the `limit` newest session files of the folder whose path is not in `except`
+//     (the named ones), newest first, with each file's title where the harness writes one into
+//     it, for sharing the files out among the Orca agents of one folder, host and harness
+//     that no sessionId named (`shareSessions`, src/core/session-link.js, by the agents'
+//     titles). A provider with no titles leaves `list` out;
 //   read(file, { machine, home, now })     -> Promise<input>
 //     the `input` of this provider's `readStats` for a linked file.
 // Each may reject: the card then reads n/a. A provider without the hook yields no session.
 //
-// Stats shape (single place; docs/omp-session-format.md repeats it with the omp sources).
+// Stats shape (single place; herdr-session-stats docs/omp-session-format.md repeats it with the
+// omp sources).
 // Every figure is a plain value or the string 'n/a' (NA); the card formats, never estimates.
 // Units: ms for times, tokens for sizes, USD for money, 0..1 for rates.
 //

@@ -2,26 +2,26 @@ import { describe, test } from 'node:test';
 import { NA, readStats } from '../../src/core/providers/index.js';
 import { ompProvider } from '../../src/core/providers/omp.js';
 import { REFRESH_INTERVAL_MS, SCAN_CHUNK_BYTES, TAIL_BYTES, createSessionReader } from '../../src/core/refresh.js';
+import { sessionFile } from './helpers/entries.ts';
 import { expect } from './helpers/expect.ts';
 import { localExec } from './helpers/local-exec.ts';
 
 const NOW = Date.parse('2026-11-02T12:00:00.000Z');
 const PATH = '/home/u/.omp/agent/sessions/--proj--/big.jsonl';
 
-const entry = (value) => JSON.stringify(value);
 const message = (role, minute, extra = {}) =>
-  entry({
+  JSON.stringify({
     type: 'message',
     id: `m${minute}`,
     timestamp: new Date(NOW - 60 * 60_000 + minute * 60_000).toISOString(),
     message: { role, provider: 'p', model: 'tail-model', content: 'x'.repeat(2000), ...extra },
   });
-const compaction = (id) => entry({ type: 'compaction', id, summary: 's', tokensBefore: 1, tokensAfter: 1 });
+const compaction = (id) => JSON.stringify({ type: 'compaction', id, summary: 's', tokensBefore: 1, tokensAfter: 1 });
 
 // A session several times the tail window: its header and first compaction are far out of the
 // tail's reach, the second compaction and the latest model inside it.
 function bigSession() {
-  const lines = [entry({ type: 'session', id: 's', timestamp: new Date(NOW - 60 * 60_000).toISOString() })];
+  const lines = [JSON.stringify({ type: 'session', id: 's', timestamp: new Date(NOW - 60 * 60_000).toISOString() })];
   lines.push(compaction('c1'));
   for (let i = 0; lines.join('\n').length < TAIL_BYTES * 4; i++) lines.push(message('user', i % 50));
   lines.push(compaction('c2'));
@@ -32,7 +32,7 @@ function bigSession() {
 // A session a little over one scan block, whose first block ends two bytes into a 4-byte
 // character of its third line, with a compaction at the start and one at the end.
 function cutSession() {
-  const head = [entry({ type: 'session', id: 's', timestamp: new Date(NOW - 60 * 60_000).toISOString() }), compaction('c1')];
+  const head = [JSON.stringify({ type: 'session', id: 's', timestamp: new Date(NOW - 60 * 60_000).toISOString() }), compaction('c1')];
   const note = '{"type":"custom","note":"';
   const prefix = Buffer.byteLength(head.join('\n')) + 1;
   const lines = [...head, `${note}${'n'.repeat(SCAN_CHUNK_BYTES - 2 - prefix - note.length)}😀"}`];
@@ -45,7 +45,7 @@ function cutSession() {
   return `${lines.join('\n')}\n`;
 }
 
-const file = (text, mtimeMs = 1000) => ({ path: PATH, mtimeMs, size: Buffer.byteLength(text) });
+const file = (text, mtimeMs = 1000) => sessionFile(text, PATH, mtimeMs);
 const newReader = (exec) => createSessionReader({ exec, fold: ompProvider.fold });
 // the autocompactions of a read, which is what the whole-file count shows as
 const counted = async (reader, f) => readStats('omp', await reader.read(f), NOW).autocompactions;
@@ -266,7 +266,7 @@ describe('refresh', () => {
   test('a last line cut inside a character is counted once it is whole', async () => {
     // the unfinished line is measured too long, so the position of the scan is off and the next
     // read finds that out and scans again: the count is right either way
-    const whole = Buffer.from(`${entry({ type: 'compaction', id: 'c3', summary: 'é' })}\n`);
+    const whole = Buffer.from(`${JSON.stringify({ type: 'compaction', id: 'c3', summary: 'é' })}\n`);
     const cut = whole.indexOf(0xc3) + 1;
     const base = Buffer.from(bigSession());
     const files = new Map([[PATH, Buffer.concat([base, whole.subarray(0, cut)])]]);
@@ -309,7 +309,7 @@ describe('refresh', () => {
     // than in characters, and a wrong advance would start the next read inside the last line
     // and count it again
     for (const [n, id] of ['c3', 'c4', 'c5'].entries()) {
-      bytes = Buffer.concat([bytes, Buffer.from(`${entry({ type: 'compaction', id, summary: 'é漢😀'.repeat(10) })}\n`)]);
+      bytes = Buffer.concat([bytes, Buffer.from(`${JSON.stringify({ type: 'compaction', id, summary: 'é漢😀'.repeat(10) })}\n`)]);
       files.set(PATH, bytes);
       expect(await counted(reader, listed())).toBe(3 + n);
     }
@@ -347,7 +347,7 @@ describe('refresh', () => {
     expect(calls.slice(mark).some((call) => call.command === 'dd')).toBe(true);
   });
 
-  test('panes of one file asking at once fold its lines once', async () => {
+  test('Orca agents of one file asking at once fold its lines once', async () => {
     const text = bigSession();
     const files = new Map([[PATH, text]]);
     const { exec } = localExec(files);
@@ -361,7 +361,7 @@ describe('refresh', () => {
   });
 
   test('a file within the tail window is not counted', async () => {
-    const text = `${entry({ type: 'session', id: 's' })}\n${compaction('c1')}\n${message('assistant', 1)}\n`;
+    const text = `${JSON.stringify({ type: 'session', id: 's' })}\n${compaction('c1')}\n${message('assistant', 1)}\n`;
     const { exec, calls } = localExec(new Map([[PATH, text]]));
     const input = await newReader(exec).read(file(text));
 

@@ -8,14 +8,9 @@ import * as workerModule from '../src/worker.ts';
 import { answer, standIns } from './helpers/stand-ins.ts';
 
 let worker: TestWorker | undefined;
-const saved = { PATH: process.env.PATH, ORCA_CLI_COMMAND: process.env.ORCA_CLI_COMMAND };
 afterEach(async () => {
   await worker?.deactivate();
   worker = undefined;
-  for (const [key, value] of Object.entries(saved)) {
-    if (value === undefined) delete process.env[key];
-    else process.env[key] = value;
-  }
 });
 
 const manifest = JSON.parse(readFileSync(new URL('../orca-plugin.json', import.meta.url), 'utf8'));
@@ -26,13 +21,15 @@ test('Palette command and key', async () => {
   assert.deepEqual(manifest.contributes.keybindings, [{ command: 'spyhop.show', key: 'Mod+Alt+Shift+S' }]);
 
   // `orca plugin list`, shaped as Orca lists plugins (a panel as `{ id, title, … }`):
-  // a folder install of spyhop beside another plugin of that id that has no such panel
+  // a folder install of spyhop beside other plugins of that id, one with no such panel and one
+  // listed without `panels`
   const cli = standIns({
     homes: {},
     orca: {
       'plugin list --json': answer({
         plugins: [
           { pluginKey: 'stablyai.orca-excalidraw', status: 'idle', panels: [] },
+          { pluginKey: 'other.spyhop', status: 'idle' },
           { pluginKey: 'acme.spyhop', status: 'idle', panels: [] },
           {
             pluginKey: 'local.spyhop',

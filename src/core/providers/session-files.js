@@ -45,16 +45,26 @@ async function listFolder(exec, { dir, os }) {
   return listed.code === 0 ? parseSessionFiles(listed.stdout) : [];
 }
 
-// The session file in `dir` (only the `.jsonl` files directly in it) that an agent links to
-// (see session-link.js), as `{ path, mtimeMs, size }`, or null.
-export async function findSessionFile(exec, { dir, os }) {
-  const files = await listFolder(exec, { dir, os });
+// The session file in `dir` (only the `.jsonl` files directly in it) whose path is not in
+// `except` that an agent links to (see session-link.js), as `{ path, mtimeMs, size }`, or null.
+export async function findSessionFile(exec, { dir, os, except = [] }) {
+  const files = (await listFolder(exec, { dir, os })).filter((file) => !except.includes(file.path));
   const path = linkSession(files);
   return files.find((file) => file.path === path) ?? null;
 }
 
-// The `limit` newest session files in `dir`, newest first, as `{ path, mtimeMs, size }`: the
-// candidates for the agents that share the folder (see `shareSessions` in session-link.js).
-export async function listSessionFiles(exec, { dir, os, limit }) {
-  return newestFirst(await listFolder(exec, { dir, os })).slice(0, limit);
+// The session file each of `sessionIds` names in `dir` (null for a null id and for an id that
+// names no file), by the harness's own rule `names(path, sessionId)`: one listing of the folder,
+// and no file is read.
+export async function findNamedFiles(exec, { dir, os }, sessionIds, names) {
+  const files = await listFolder(exec, { dir, os });
+  return sessionIds.map((id) => (id ? files.find((file) => names(file.path, id)) : null) ?? null);
+}
+
+// The `limit` newest session files in `dir` whose path is not in `except`, newest first, as
+// `{ path, mtimeMs, size }`: the candidates for the agents that share the folder (see
+// `shareSessions` in session-link.js). None when `except` holds every file.
+export async function listSessionFiles(exec, { dir, os, limit, except = [] }) {
+  const files = newestFirst(await listFolder(exec, { dir, os }));
+  return files.filter((file) => !except.includes(file.path)).slice(0, limit);
 }

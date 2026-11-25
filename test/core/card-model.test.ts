@@ -100,7 +100,7 @@ describe('a card groups its figures', () => {
       Premium: '14',
     });
 
-    // the session title: the pane's title without the harness prefix, so two cards of one
+    // the session title: the Orca agent's title without the harness prefix, so two cards of one
     // folder can be told apart; none when the session is untitled (its title is the folder's name)
     const session = (title, overrides) => group(model({ title, ...overrides }), 'identity').session;
     expect(session('π > Fix the login bug')).toEqual({ value: 'Fix the login bug', tone: 'normal' });
@@ -116,7 +116,7 @@ describe('a card groups its figures', () => {
     expect(session('jeffujioka', { harness: 'claude-code' })).toBeNull();
   });
 
-  test('a card of the focused pane says so', () => {
+  test('a card of the focused Orca workspace says so', () => {
     expect(model({ focused: true }).focused).toBe(true);
     expect(model({ focused: false }).focused).toBe(false);
     expect(model({ focused: undefined }).focused).toBe(false);
@@ -233,7 +233,7 @@ describe('unknown figures are dimmed', () => {
     const known = toned(model()).filter((f) => f.value !== NA);
     expect(known.length).toBeGreaterThan(15);
     expect(known.some((f) => f.tone === 'dim')).toBe(false);
-    // the folder and the harness read from the pane stay as they are
+    // the folder and the harness Orca reports for the agent stay as they are
     expect(group(m, 'identity')).toMatchObject({ name: { value: 'jeffujioka', tone: 'normal' }, harness: { value: 'omp', tone: 'normal' }, model: { value: NA, tone: 'dim' } });
     // a card with no folder reads n/a, dim
     expect(group(cardModel(card({ folder: null }), { home: HOME }), 'identity')).toMatchObject({

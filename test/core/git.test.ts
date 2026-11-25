@@ -1,23 +1,14 @@
-import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { after, describe, test } from 'node:test';
+import { describe, test } from 'node:test';
 import { readGit } from '../../src/core/git.js';
-import { run } from '../../src/exec.ts';
+import { run, type RunResult } from '../../src/exec.ts';
+import { tempHome } from '../helpers/files.ts';
 import { expect } from './helpers/expect.ts';
+import { recordingRun } from './helpers/recording-run.ts';
 
 // git reads no config of the person running the tests (a `url.insteadOf` would rewrite the URLs)
 process.env.GIT_CONFIG_GLOBAL = '/dev/null';
 process.env.GIT_CONFIG_NOSYSTEM = '1';
-
-const roots: string[] = [];
-after(() => roots.forEach((root) => rmSync(root, { recursive: true, force: true })));
-
-function tempFolder() {
-  const folder = mkdtempSync(join(tmpdir(), 'spyhop-git-'));
-  roots.push(folder);
-  return folder;
-}
 
 async function git(cwd: string, ...args: string[]) {
   const result = await run('git', ['-c', 'user.name=t', '-c', 'user.email=t@example.com', ...args], { cwd });
@@ -27,7 +18,7 @@ async function git(cwd: string, ...args: string[]) {
 // A real repository with one commit on `branch`, its `origin` remote set when one is given;
 // `detached` checks out that commit itself, so HEAD names no branch.
 async function repo({ branch = 'main', origin = null as string | null, detached = false } = {}) {
-  const folder = tempFolder();
+  const folder = tempHome();
   await git(folder, 'init', '-q', '-b', branch);
   await git(folder, 'commit', '-q', '--allow-empty', '-m', 'first');
   if (origin !== null) await git(folder, 'remote', 'add', 'origin', origin);
@@ -35,26 +26,10 @@ async function repo({ branch = 'main', origin = null as string | null, detached 
   return folder;
 }
 
-// The real runner, recording calls.
-function recordingRun() {
-  const calls: { command: string; args: string[]; options: Record<string, unknown> }[] = [];
-  const exec = (command: string, args: string[], options: Record<string, unknown> = {}) => {
-    calls.push({ command, args, options });
-    return run(command, args, options);
-  };
-  return { exec, calls };
-}
-
 // Stands in for a remote host, which cannot run beside the test: a call `on` a machine is
 // answered by `remote`; every other call runs here for real.
-function withRemoteHost(remote: (args: string[]) => Promise<{ code: number; stdout: string; stderr: string }>) {
-  const calls: { command: string; args: string[]; options: Record<string, unknown> }[] = [];
-  const exec = (command: string, args: string[], options: Record<string, unknown> = {}) => {
-    calls.push({ command, args, options });
-    return options.on ? remote(args) : run(command, args, options);
-  };
-  return { exec, calls };
-}
+const withRemoteHost = (remote: (args: string[]) => Promise<RunResult>) =>
+  recordingRun((_command, args, options) => (options.on ? remote(args) : undefined));
 
 const ORIGIN = 'git@github.com:jeffujioka/spyhop.git';
 
@@ -71,7 +46,7 @@ describe('git', () => {
 
   test('no git means no lines', async () => {
     const { exec } = recordingRun();
-    expect(await readGit({ exec }, { cwd: tempFolder() })).toEqual({ branch: null, origin: null });
+    expect(await readGit({ exec }, { cwd: tempHome() })).toEqual({ branch: null, origin: null });
     expect(await readGit({ exec }, { cwd: await repo({ branch: 'main' }) })).toEqual({ branch: 'main', origin: null });
     expect(await readGit({ exec }, { cwd: await repo({ origin: ORIGIN, detached: true }) })).toEqual({ branch: null, origin: ORIGIN });
   });
@@ -100,7 +75,7 @@ describe('git', () => {
     });
     expect(await readGit({ exec }, { cwd: '/work/app', on: 'down' })).toEqual({ branch: null, origin: null });
     expect(await readGit({ exec }, { cwd: null })).toEqual({ branch: null, origin: null });
-    const gone = join(tempFolder(), 'gone');
+    const gone = join(tempHome(), 'gone');
     expect(await readGit({ exec }, { cwd: gone })).toEqual({ branch: null, origin: null });
   });
 

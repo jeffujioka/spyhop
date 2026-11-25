@@ -1,22 +1,12 @@
-import { readFileSync } from 'node:fs';
 import { describe, test } from 'node:test';
 import { NA, readStats } from '../../src/core/providers/index.js';
+import { fixtureText } from '../helpers/files.ts';
+import { claudeAssistant as assistant, claudeBoundary, claudeUsage as usage } from './helpers/entries.ts';
 import { expect } from './helpers/expect.ts';
 
-const fixture = (name) => readFileSync(new URL(`../fixtures/claude/${name}`, import.meta.url), 'utf8');
-const BASIC = fixture('basic.jsonl');
+const BASIC = fixtureText('claude/basic.jsonl');
 const LAST_REPLY = Date.parse('2026-09-07T20:21:34.167Z'); // last assistant line of basic.jsonl
-
-const line = (value) => JSON.stringify(value);
-const assistant = (isoTime, id, usage, model = 'claude-opus-4-6') =>
-  line({ type: 'assistant', timestamp: isoTime, message: { id, role: 'assistant', model, content: [], ...(usage && { usage }) } });
-const usage = (input, output, cacheRead, cacheWrite, creation) => ({
-  input_tokens: input,
-  output_tokens: output,
-  cache_read_input_tokens: cacheRead,
-  cache_creation_input_tokens: cacheWrite,
-  ...(creation && { cache_creation: creation }),
-});
+const boundary = (trigger) => claudeBoundary('2026-09-07T20:19:00.000Z', trigger);
 
 describe('claude session: model, tokens, cache and duration', () => {
   test('claude session details', () => {
@@ -43,7 +33,7 @@ describe('claude session: model, tokens, cache and duration', () => {
   });
 
   test('claude missing field is n/a', () => {
-    const stats = readStats('claude-code', fixture('no-usage.jsonl'), Date.now());
+    const stats = readStats('claude-code', fixtureText('claude/no-usage.jsonl'), Date.now());
 
     for (const field of ['totalTokens', 'contextTokens', 'cacheHitRate', 'cacheHits', 'cacheMisses', 'cacheLeftMs', 'costUsd', 'burnTokensPerMin']) {
       expect(stats[field]).toBe(NA);
@@ -89,7 +79,6 @@ describe('claude session: model, tokens, cache and duration', () => {
   });
 
   test('autocompactions are the automatic compact boundaries of a whole file', () => {
-    const boundary = (trigger) => line({ type: 'system', subtype: 'compact_boundary', timestamp: '2026-09-07T20:19:00.000Z', compactMetadata: { trigger } });
     const text = `${boundary('manual')}\n${boundary('auto')}\n${BASIC}${boundary('auto')}\n`;
 
     expect(readStats('claude-code', { text, sources: { wholeFile: true } }, LAST_REPLY).autocompactions).toBe(2);
@@ -100,7 +89,6 @@ describe('claude session: model, tokens, cache and duration', () => {
   });
 
   test('a compact boundary with another trigger makes the count unknown', () => {
-    const boundary = (trigger) => line({ type: 'system', subtype: 'compact_boundary', timestamp: '2026-09-07T20:19:00.000Z', compactMetadata: trigger === undefined ? {} : { trigger } });
     const whole = { wholeFile: true };
     // a trigger Claude Code may use for its own compactions under a name this reader does not know
     for (const trigger of ['scheduled', undefined]) {
@@ -112,7 +100,7 @@ describe('claude session: model, tokens, cache and duration', () => {
   });
 
   test('the latency of the last turn skips a placeholder reply', () => {
-    const prompt = line({ type: 'user', timestamp: '2026-09-07T20:00:00.000Z', message: { role: 'user', content: 'hi' } });
+    const prompt = JSON.stringify({ type: 'user', timestamp: '2026-09-07T20:00:00.000Z', message: { role: 'user', content: 'hi' } });
     const reply = assistant('2026-09-07T20:00:10.000Z', 'r1', usage(1, 1, 0, 0));
     const placeholder = assistant('2026-09-07T20:00:40.000Z', 'syn', usage(0, 0, 0, 0), '<synthetic>');
 

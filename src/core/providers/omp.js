@@ -1,9 +1,10 @@
 // Copied from herdr-session-stats (src/providers/omp.js); the session formats are described in
 // that repository's docs/.
 //
-// omp provider: reads the jsonl text of an omp session (docs/omp-session-format.md) and
-// returns the stats of src/core/providers/index.js that it can read. A figure it cannot read is
-// left out, which the registry turns into 'n/a'; nothing here estimates one.
+// omp provider: reads the jsonl text of an omp session (herdr-session-stats
+// docs/omp-session-format.md) and returns the stats of src/core/providers/index.js that it can
+// read. A figure it cannot read is left out, which the registry turns into 'n/a'; nothing here
+// estimates one.
 //
 // Pure: no Orca API, no file or database access, no runtime-specific API. `input` is the jsonl
 // text of the session or `{ text, sources, state }` (see `ompProvider`).
@@ -110,19 +111,19 @@ function tokens({ totalTokens }) {
   return totalTokens.sum === undefined ? {} : { totalTokens: totalTokens.sum };
 }
 
-// Cost the harness logged (D5); no price table.
+// Cost the harness logged (herdr-session-stats decision D5); no price table.
 function cost({ costUsd }) {
   return costUsd.sum === undefined ? {} : { costUsd: costUsd.sum };
 }
 
-// A turn is a hit when its cacheRead is above 0 and a miss when it is 0 (D6); a turn that
-// logged no cacheRead is neither.
+// A turn is a hit when its cacheRead is above 0 and a miss when it is 0 (herdr-session-stats
+// decision D6); a turn that logged no cacheRead is neither.
 function cacheTurns({ cacheReads, cacheHits }) {
   return cacheReads > 0 ? { cacheHits, cacheMisses: cacheReads - cacheHits } : {};
 }
 
 // The key of `usage.cttl` names the cache lifetime class; its value is a token count
-// (docs/omp-session-format.md, D8 (d)).
+// (herdr-session-stats docs/omp-session-format.md, decision D8 (d)).
 const CACHE_LIFETIME_MS = { ephemeral5m: 5 * 60 * 1000 };
 
 // Time left on the prompt cache after the last assistant turn, counted from the turn's
@@ -139,15 +140,17 @@ function cacheExpiry({ assistants }, now) {
   return { cacheLeftMs: Math.max(0, completedAt + Math.max(...lifetimes) - now) };
 }
 
-// Compactions recorded in the session (docs/omp-session-format.md, D8 (a)): omp does not
-// mark automatic ones, so this counts all `compaction` entries. Counting needs the whole file:
-// the count of a state that holds only a tail window would be too low, so unless the state is
-// the whole file's it reads n/a, never 0 (D4).
+// Compactions recorded in the session (herdr-session-stats docs/omp-session-format.md,
+// decision D8 (a)): omp does not mark automatic ones, so this counts all `compaction` entries.
+// Counting needs the whole file: the count of a state that holds only a tail window would be
+// too low, so unless the state is the whole file's it reads n/a, never 0 (herdr-session-stats
+// decision D4).
 function autocompactions({ compactions }, whole) {
   return whole ? { autocompactions: compactions } : {};
 }
 
-// Window of the latest assistant message's model, from omp's model catalogue (D8 (b)).
+// Window of the latest assistant message's model, from omp's model catalogue
+// (herdr-session-stats decision D8 (b)).
 function contextWindow(catalogue, { provider, model } = {}) {
   if (typeof provider !== 'string' || typeof model !== 'string' || !Array.isArray(catalogue)) return undefined;
   const window = catalogue.find((entry) => entry?.id === model)?.contextWindow;

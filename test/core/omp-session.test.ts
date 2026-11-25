@@ -1,20 +1,15 @@
-import { readFileSync } from 'node:fs';
 import { describe, test } from 'node:test';
 import { NA, readStats } from '../../src/core/providers/index.js';
+import { fixtureText } from '../helpers/files.ts';
+import { ompMessage } from './helpers/entries.ts';
 import { expect } from './helpers/expect.ts';
 
-const fixture = (name) => readFileSync(new URL(`../fixtures/omp/${name}`, import.meta.url), 'utf8');
-
 // One synthetic assistant message entry; `usage` is left out when null.
-function assistant(isoTime, usage, model = 'm') {
-  const message = { role: 'assistant', provider: 'p', model, stopReason: 'stop' };
-  if (usage) message.usage = usage;
-  return JSON.stringify({ type: 'message', id: 'a', timestamp: isoTime, message });
-}
+const assistant = (isoTime, usage, model = 'm') => ompMessage('assistant', isoTime, usage, { model });
 
 describe('omp session: model, duration, tokens and cost', () => {
   test('model, duration and total tokens', () => {
-    const stats = readStats('omp', fixture('basic.jsonl'), Date.now());
+    const stats = readStats('omp', fixtureText('omp/basic.jsonl'), Date.now());
 
     expect(stats.harness).toBe('omp');
     expect(stats.model).toBe('claude-sonnet-5.5-1m');
@@ -32,7 +27,7 @@ describe('omp session: model, duration, tokens and cost', () => {
   });
 
   test('missing usage field is n/a', () => {
-    const stats = readStats('omp', fixture('no-usage.jsonl'), Date.now());
+    const stats = readStats('omp', fixtureText('omp/no-usage.jsonl'), Date.now());
 
     expect(stats.totalTokens).toBe(NA);
     expect(stats.costUsd).toBe(NA);

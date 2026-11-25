@@ -10,6 +10,7 @@
 import { GIT_TTL_MS, readGit } from './core/git.js';
 import { NA, createSessions, readStats } from './core/providers/index.js';
 import { collapseBySession, linkAgents } from './core/session-link.js';
+import { createTtlCache } from './core/ttl-cache.js';
 import type { Run } from './exec.ts';
 
 // An agent as Orca reports it (`agents.list` of the worker host API, `orca agent list --json`),
@@ -34,10 +35,18 @@ type Machine = string | null;
 
 // `home`: this computer's home folder.
 export function createAgentCards({ run, home }: { run: Run; home: string }) {
-  // `run` bound to a machine (null: this computer)
+  // `run` bound to a machine (null: this computer). ssh exits 255 when it cannot reach the host:
+  // the machine's place is then forgotten, so while the host stays down a build costs the one
+  // place lookup (see placeOn).
   const execs = new Map<Machine, Run>([[null, run]]);
   function execOn(machine: Machine) {
-    if (!execs.has(machine)) execs.set(machine, (command, args, options) => run(command, args, { ...options, on: machine }));
+    if (!execs.has(machine)) {
+      execs.set(machine, async (command, args, options) => {
+        const result = await run(command, args, { ...options, on: machine });
+        if (result.code === 255) places.delete(machine);
+        return result;
+      });
+    }
     return execs.get(machine)!;
   }
   const readTextOn = (machine: Machine) => async (path: string) => {
@@ -45,21 +54,13 @@ export function createAgentCards({ run, home }: { run: Run; home: string }) {
     return read.code === 0 ? read.stdout : null;
   };
 
-  // machine and folder -> { at, value } of its last git read: a folder's branch and origin are
-  // asked again only after GIT_TTL_MS, so a refresh of known folders runs no git.
-  const gits = new Map<string, { at: number; value: Promise<{ branch: string | null; origin: string | null }> }>();
-  function gitOf(machine: Machine, cwd: string | null, now: number) {
-    const key = `${machine ?? ''}\0${cwd}`;
-    const hit = gits.get(key);
-    if (hit && now - hit.at < GIT_TTL_MS) return hit.value;
-    const value = readGit({ exec: run }, { cwd, on: machine });
-    gits.set(key, { at: now, value });
-    return value;
-  }
+  // machine and folder -> its branch and origin, asked again only after GIT_TTL_MS, so a
+  // refresh of known folders runs no git.
+  const gits = createTtlCache(GIT_TTL_MS);
 
   // A machine's operating system, for the `stat` the session listing runs, and its home folder
   // (this computer's is given; another host's is asked): asked once, and again after a failed
-  // ask, as for a host that cannot be reached.
+  // ask or once the host could not be reached (see execOn).
   const places = new Map<Machine, Promise<{ os: string; home: string }>>();
   function placeOn(machine: Machine) {
     if (!places.has(machine)) {
@@ -85,9 +86,10 @@ export function createAgentCards({ run, home }: { run: Run; home: string }) {
 
   // The session file each agent of one harness, folder and machine links to (null: none), in
   // agent order (see linkAgents, src/core/session-link.js), with that machine's home; never
-  // rejects. A hook that can `list` the folder links by the agents' sessionIds and titles; one
-  // that cannot, and an agent alone in its folder without a sessionId, link to the newest
-  // session file.
+  // rejects. An agent whose sessionId names a session by its harness's rule (the hook's
+  // `named`) gets it, and no title is read for it. The agents left share out the newest
+  // sessions no id named, by title, when the hook can `list` the folder; else, and for an agent
+  // alone in its folder without a named session, they link to the newest session no id named.
   async function linkAll(agents: OrcaAgent[]) {
     const [{ agent: kind, path, machine = null }] = agents;
     const provider = PROVIDERS[kind ?? ''];
@@ -97,13 +99,18 @@ export function createAgentCards({ run, home }: { run: Run; home: string }) {
     try {
       const place = await placeOn(machine);
       const where = { machine, cwd: path, ...place };
-      const named = agents.some((agent) => agent.sessionId);
-      if (hook.list && (named || agents.length > 1)) {
-        // a named session may be older than the agents' count of newest files
-        return { home: place.home, files: linkAgents(await hook.list({ ...where, limit: named ? Infinity : agents.length }), agents) };
+      const ids = agents.map((agent) => agent.sessionId ?? null);
+      const named = ids.some(Boolean) ? await hook.named(where, ids) : ids.map(() => null);
+      const except = named.filter(Boolean).map((file: { path: string }) => file.path);
+      const unnamed = named.filter((file: unknown) => !file).length;
+      let candidates = [];
+      if (unnamed > 0 && hook.list && (unnamed > 1 || except.length > 0)) {
+        candidates = await hook.list({ ...where, limit: unnamed, except });
+      } else if (unnamed > 0) {
+        const file = await hook.link({ ...where, except });
+        candidates = file ? [file] : [];
       }
-      const file = await hook.link(where);
-      return { home: place.home, files: agents.map(() => file) };
+      return { home: place.home, files: linkAgents(named, candidates, agents) };
     } catch {
       return none;
     }
@@ -131,7 +138,14 @@ export function createAgentCards({ run, home }: { run: Run; home: string }) {
       const entries = await Promise.all(
         agents.map(async (agent) => {
           const machine = agent.machine ?? null;
-          const [git, link] = await Promise.all([gitOf(machine, agent.path, now), linked.get(agent)]);
+          // asked only once the machine's place is known: a host that cannot be reached costs
+          // the one place lookup, and no git runs there
+          const readsGit = () =>
+            placeOn(machine).then(
+              () => readGit({ exec: execOn(machine) }, { cwd: agent.path, on: machine }),
+              () => ({ branch: null, origin: null }),
+            );
+          const [git, link] = await Promise.all([gits(`${machine ?? ''}\0${agent.path}`, now, readsGit), linked.get(agent)]);
           const unlinked = { ...readStats('', null, 0), harness: agent.agent ?? NA };
           const provider = PROVIDERS[agent.agent ?? ''];
           const sessionPath = link ? `${machine ?? ''}\0${link.file.path}` : null;

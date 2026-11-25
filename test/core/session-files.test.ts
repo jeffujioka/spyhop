@@ -1,33 +1,19 @@
-import { mkdtempSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { utimesSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { after, describe, test } from 'node:test';
+import { describe, test } from 'node:test';
 import { findSessionFile } from '../../src/core/providers/session-files.js';
-import { run } from '../../src/exec.ts';
+import { tempHome } from '../helpers/files.ts';
 import { expect } from './helpers/expect.ts';
+import { recordingRun } from './helpers/recording-run.ts';
 
 const NOW = Date.parse('2026-11-15T12:00:00Z');
 
-const roots: string[] = [];
-after(() => roots.forEach((root) => rmSync(root, { recursive: true, force: true })));
-
 // A session folder holding one fresh 42-byte session file, a.jsonl.
 function sessionFolder() {
-  const dir = mkdtempSync(join(tmpdir(), 'spyhop-sessions-'));
-  roots.push(dir);
+  const dir = tempHome();
   writeFileSync(join(dir, 'a.jsonl'), 'x'.repeat(42));
   utimesSync(join(dir, 'a.jsonl'), (NOW - 1000) / 1000, (NOW - 1000) / 1000);
   return dir;
-}
-
-// The real runner, recording calls.
-function recordingRun() {
-  const calls: { command: string; args: string[] }[] = [];
-  const exec = (command: string, args: string[]) => {
-    calls.push({ command, args });
-    return run(command, args);
-  };
-  return { exec, calls };
 }
 
 // The `stat` of the command line: the program after `-exec` and its arguments up to `{}`
@@ -49,11 +35,11 @@ describe('finding a session file', () => {
   test('on a Linux remote host stat is GNU stat', async () => {
     // stands in for a Linux remote host, which cannot run beside the test: records the command
     // line and prints the `stat` line of one file
-    const calls: { command: string; args: string[] }[] = [];
-    const linuxHost = async (command: string, args: string[]) => {
-      calls.push({ command, args });
-      return { code: 0, stdout: `${Math.floor((NOW - 1000) / 1000)} 42 /home/u/s/a.jsonl\n`, stderr: '' };
-    };
+    const { exec: linuxHost, calls } = recordingRun(async () => ({
+      code: 0,
+      stdout: `${Math.floor((NOW - 1000) / 1000)} 42 /home/u/s/a.jsonl\n`,
+      stderr: '',
+    }));
     await findSessionFile(linuxHost, { dir: '/home/u/s', os: 'Linux' });
 
     expect(statOf(calls[0].args)).toEqual(['stat', '-c', '%Y %s %n']);

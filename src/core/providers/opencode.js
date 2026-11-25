@@ -1,9 +1,10 @@
 // Copied from herdr-session-stats (src/providers/opencode.js); the database layout is described
 // in that repository's docs/.
 //
-// opencode provider: figures from the rows of an opencode session (docs/opencode-session-format.md)
-// as stats of src/core/providers/index.js. A figure with no source in the database is left out,
-// which the registry turns into 'n/a'; nothing here estimates one.
+// opencode provider: figures from the rows of an opencode session (herdr-session-stats
+// docs/opencode-session-format.md) as stats of src/core/providers/index.js. A figure with no
+// source in the database is left out, which the registry turns into 'n/a'; nothing here
+// estimates one.
 //
 // Pure: no Orca API, no database or file access, no runtime-specific API. `input` is
 // `{ messages, compactions }` (see `opencodeProvider`); the rows are read from the database by
@@ -66,13 +67,14 @@ function tokens(session) {
   return totalTokens === undefined ? {} : { totalTokens };
 }
 
-// Cost the database logged per message (D5); no price table.
+// Cost the database logged per message (herdr-session-stats decision D5); no price table.
 function cost(session) {
   const costUsd = sumAssistants(session, (row) => row.cost);
   return costUsd === undefined ? {} : { costUsd };
 }
 
-// Hit rate over the token counts (D6), from the messages that logged all three counts.
+// Hit rate over the token counts (herdr-session-stats decision D6), from the messages that
+// logged all three counts.
 function cacheRate({ assistants }) {
   const counted = assistants.filter((row) => promptTokens(row) !== undefined);
   const total = counted.reduce((sum, row) => sum + promptTokens(row), 0);
@@ -80,8 +82,8 @@ function cacheRate({ assistants }) {
   return { cacheHitRate: counted.reduce((sum, row) => sum + row.cacheRead, 0) / total };
 }
 
-// A turn is a hit when its cacheRead is above 0 and a miss when it is 0 (D6). A message that
-// sent no prompt (an aborted or failed request) is not a turn.
+// A turn is a hit when its cacheRead is above 0 and a miss when it is 0 (herdr-session-stats
+// decision D6). A message that sent no prompt (an aborted or failed request) is not a turn.
 function cacheTurns({ assistants }) {
   const sent = assistants.filter((row) => promptTokens(row) > 0);
   if (!sent.length) return {};
@@ -89,8 +91,8 @@ function cacheTurns({ assistants }) {
   return { cacheHits, cacheMisses: sent.length - cacheHits };
 }
 
-// Compactions that finished and that opencode started by itself (D8 (f)); null when the
-// database has no record of them.
+// Compactions that finished and that opencode started by itself (herdr-session-stats decision
+// D8 (f)); null when the database has no record of them.
 function autocompactions({ compactions }) {
   return isNumber(compactions) ? { autocompactions: compactions } : {};
 }

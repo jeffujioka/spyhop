@@ -5,25 +5,40 @@
 // provider's `createSessions` hook (see the stats-shape header of src/core/providers/index.js).
 // Runtime-neutral: it takes the plugin's runner bound to an Orca host and runs one read-only
 // program there, `sqlite3 -readonly -json <database> <SELECT>`; opencode's own CLI is not run
-// and nothing is written. The database and its layout: docs/opencode-session-format.md.
+// and nothing is written. The database and its layout: herdr-session-stats
+// docs/opencode-session-format.md.
 
 // opencode's database under the host's home folder. opencode follows `XDG_DATA_HOME`; the
 // plugin reads the default place only, and an agent whose opencode keeps it elsewhere reads n/a.
 const databaseOf = (home) => `${home}/.local/share/opencode/opencode.db`;
 
-// A string as an SQL literal. Folders come from Orca and session ids from the database,
-// so no text is put into a query unquoted.
+// A string as an SQL literal. Folders and the agents' session ids come from Orca, the other
+// session ids from the database, so no text is put into a query unquoted.
 const literal = (text) => `'${String(text).replace(/'/g, "''")}'`;
 
-// The newest session of a folder that is not archived and is not a sub-agent's: opencode
-// updates `time_updated` of a session when a message of it changes.
-function sessionQuery(cwd) {
+// The newest session of a folder that is not archived, is not a sub-agent's and whose id is
+// not in `except`: opencode updates `time_updated` of a session when a message of it changes.
+function sessionQuery(cwd, except = []) {
   const folder = cwd.length > 1 ? cwd.replace(/\/+$/, '') : cwd;
+  const others = except.length ? `AND id NOT IN (${except.map(literal).join(', ')}) ` : '';
   return (
     'SELECT id, time_updated AS mtimeMs FROM session ' +
-    `WHERE directory = ${literal(folder)} AND parent_id IS NULL AND time_archived IS NULL ` +
+    `WHERE directory = ${literal(folder)} AND parent_id IS NULL AND time_archived IS NULL ${others}` +
     'ORDER BY time_updated DESC LIMIT 1'
   );
+}
+
+// The sessions whose ids are `ids`, whatever their folder.
+function namedQuery(ids) {
+  return `SELECT id, time_updated AS mtimeMs FROM session WHERE id IN (${ids.map(literal).join(', ')})`;
+}
+
+// A session row as the session `{ path, mtimeMs, size }` it links: `path` is the session id,
+// which names it on its host, and `size` is 0, the database being one file for all sessions.
+// Null for no row or a row of another shape.
+function sessionOf(row) {
+  if (!row || typeof row.id !== 'string' || !Number.isFinite(row.mtimeMs)) return null;
+  return { path: row.id, mtimeMs: row.mtimeMs, size: 0 };
 }
 
 // One row per message of a session with the figures of its `data` column; `summary` is 1 on
@@ -85,15 +100,20 @@ export function createOpencodeSessions({ execOn }) {
   // session key -> { mtimeMs, at, input } of the last successful read, oldest first
   const reads = new Map();
   return {
-    // The session the agent's folder links to, as `{ path, mtimeMs, size }`: `path` is the
-    // session id, which names it on its host, and `size` is 0, the database being one file
-    // for all sessions. Null when there is none or the database cannot be read; the newest
-    // session of the folder links however long ago it changed (src/core/session-link.js).
-    async link({ machine, cwd, home }) {
-      const rows = await select(execOn(machine), databaseOf(home), sessionQuery(cwd));
-      const row = rows?.[0];
-      if (!row || typeof row.id !== 'string' || !Number.isFinite(row.mtimeMs)) return null;
-      return { path: row.id, mtimeMs: row.mtimeMs, size: 0 };
+    // The session the agent's folder links to (see sessionOf) whose id is not in `except`. Null
+    // when there is none or the database cannot be read; the newest session of the folder links
+    // however long ago it changed (src/core/session-link.js).
+    async link({ machine, cwd, home, except }) {
+      const rows = await select(execOn(machine), databaseOf(home), sessionQuery(cwd, except));
+      return sessionOf(rows?.[0]);
+    },
+
+    // The session each of `sessionIds` names, or null: an opencode session id is the `id` of
+    // its row. All null when the database cannot be read.
+    async named({ machine, home }, sessionIds) {
+      const ids = sessionIds.filter(Boolean);
+      const rows = ids.length ? await select(execOn(machine), databaseOf(home), namedQuery(ids)) : [];
+      return sessionIds.map((id) => (id ? sessionOf(rows?.find((row) => row.id === id)) : null));
     },
 
     // The `input` of `readStats('opencode', input, now)` for a linked session. The messages

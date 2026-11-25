@@ -1,35 +1,26 @@
-import { readFileSync } from 'node:fs';
 import { describe, test } from 'node:test';
 import { cardModel } from '../../src/core/card-model.js';
 import { formatTokens } from '../../src/core/format.js';
 import { NA, readStats } from '../../src/core/providers/index.js';
 import { parseEntries } from '../../src/core/providers/jsonl.js';
 import { ompProvider } from '../../src/core/providers/omp.js';
+import { fixtureText } from '../helpers/files.ts';
+import { ompMessage } from './helpers/entries.ts';
 import { expect } from './helpers/expect.ts';
 
 const NOW = Date.parse('2026-11-02T12:00:00.000Z');
-const fixture = (name) => readFileSync(new URL(`../fixtures/omp/${name}`, import.meta.url), 'utf8');
 
 // What the card shows of the context: the hero of its context group, the usage percent with
 // the window as its label.
 const context = (stats) => cardModel({ id: 'p', folder: null, harnessName: 'omp', stats }, { home: '/h' }).groups[1].hero;
 
 // One synthetic assistant message entry whose prompt held `promptTokens` tokens.
-function assistant(promptTokens, extra = {}) {
-  const message = {
-    role: 'assistant',
-    provider: 'p',
-    model: 'm',
-    stopReason: 'stop',
-    contextSnapshot: { promptTokens },
-    ...extra,
-  };
-  return JSON.stringify({ type: 'message', id: 'a', timestamp: '2026-11-02T11:00:00.000Z', message });
-}
+const assistant = (promptTokens, extra = {}) =>
+  ompMessage('assistant', '2026-11-02T11:00:00.000Z', null, { contextSnapshot: { promptTokens }, ...extra });
 
 // The omp provider through the registry, which fills every figure it leaves out with n/a.
-// The sources are plain values, as the mod hands them in: `models` is the model list of the
-// session's provider in omp's catalogue (absent = catalogue unreadable), `compaction` the
+// The sources are plain values, as the card builder hands them in: `models` is the model list of
+// the session's provider in omp's catalogue (absent = catalogue unreadable), `compaction` the
 // compaction block of omp's config (undefined = config unreadable; `{}` = no compaction key).
 function provider(sources) {
   const compaction = 'compaction' in sources ? sources.compaction : {};
@@ -90,18 +81,19 @@ describe('omp session: context window and autocompactions', () => {
   });
 
   test('counts autocompactions', () => {
-    const stats = provider({ models: window200k }).readStats(fixture('compacted.jsonl'), NOW);
+    const stats = provider({ models: window200k }).readStats(fixtureText('omp/compacted.jsonl'), NOW);
 
     expect(stats.autocompactions).toBe(2);
   });
 
   test('a whole session without a compaction reads 0', () => {
-    expect(provider({ models: window200k }).readStats(fixture('basic.jsonl'), NOW).autocompactions).toBe(0);
+    expect(provider({ models: window200k }).readStats(fixtureText('omp/basic.jsonl'), NOW).autocompactions).toBe(0);
   });
 
   test('a state over the whole file stands for a tail window', () => {
-    // the mod folds the whole file in chunks (src/refresh.js); the provider takes that state as is
-    const whole = fixture('compacted.jsonl');
+    // the card reader folds the whole file in chunks (src/core/refresh.js); the provider takes
+    // that state as is
+    const whole = fixtureText('omp/compacted.jsonl');
     const tail = whole.split('\n').slice(8).join('\n');
     const state = ompProvider.fold(undefined, parseEntries(whole));
 
@@ -112,7 +104,7 @@ describe('omp session: context window and autocompactions', () => {
   test('unknown compactions is n/a', () => {
     // a tail window that starts after the session header cannot say how many compactions the
     // earlier part held, even when it holds one itself
-    const tail = fixture('compacted.jsonl').split('\n').slice(8).join('\n');
+    const tail = fixtureText('omp/compacted.jsonl').split('\n').slice(8).join('\n');
     const stats = provider({ models: window200k }).readStats(tail, NOW);
 
     expect(tail).toContain('"type":"compaction"');
@@ -147,7 +139,7 @@ describe('omp session: context window and autocompactions', () => {
     const text = assistant(50_000);
     const unknowns = [
       undefined, // config unreadable
-      { modelThresholds: { 'p/m': 'f90000' } }, // a per-model entry the mod does not evaluate
+      { modelThresholds: { 'p/m': 'f90000' } }, // a per-model entry spyhop does not evaluate
       { modelThresholds: { 'p/*': '80%' } },
       { enabled: false }, // no autocompaction at all
     ];

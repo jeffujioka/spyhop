@@ -46,3 +46,31 @@ test('One card without the figure', () => {
   assert.equal(main.totals.cost, '$1.50');
   assert.equal(main.totals.premium, 'n/a');
 });
+
+test('two projects with the same name on one host stay two rows', () => {
+  const agents: TreeAgent[] = [
+    { id: 'a1', hostId: 'local', repo: 'app', workspace: 'main', worktreeId: 'w1::/work/app' },
+    { id: 'a2', hostId: 'local', repo: 'app', workspace: 'main', worktreeId: 'w2::/other/app' },
+  ];
+  const cards = [card('a1', { costUsd: 1.2 }), card('a2', { costUsd: 0.3 })];
+  const [host] = buildTree(agents, cards);
+  assert.deepEqual(
+    host.projects.map((project) => [project.name, project.totals.cost, project.workspaces.map((row) => row.cards.map((c) => c.id))]),
+    [
+      ['app', '$1.20', [['a1']]],
+      ['app', '$0.30', [['a2']]],
+    ],
+  );
+});
+
+test('a worktreeId without a project id keys its project by name', () => {
+  const agents: TreeAgent[] = [
+    { id: 'a1', hostId: 'local', repo: 'app', workspace: 'main', worktreeId: '/work/app' },
+    { id: 'a2', hostId: 'local', repo: 'app', workspace: 'fix', worktreeId: '/work/app-fix' },
+  ];
+  const [host] = buildTree(agents, [card('a1', {}), card('a2', {})]);
+  assert.deepEqual(
+    host.projects.map((project) => [project.name, project.workspaces.map((row) => row.name)]),
+    [['app', ['main', 'fix']]],
+  );
+});

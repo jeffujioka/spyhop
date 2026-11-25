@@ -13,11 +13,10 @@
 // `faults`: `before(call)` runs before a call is served (a test acts on the files there);
 // `fail(call)` returns true to make the call exit 1; `ddReport`: 'none' for a dd that reports
 // nothing, or a function of the block's length that returns the statistics line (any wording).
-import { mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { after } from 'node:test';
 import { MAX_OUTPUT_BYTES, run } from '../../../src/exec.ts';
+import { tempHome } from '../../helpers/files.ts';
 
 export const EXEC_CAP = MAX_OUTPUT_BYTES;
 
@@ -25,12 +24,8 @@ type Content = string | Buffer;
 type Call = { command: string; args: string[]; options?: unknown; served: number };
 type Faults = { before?: (call: Call) => unknown; fail?: (call: Call) => boolean; ddReport?: 'none' | ((length: number) => string) };
 
-const roots: string[] = [];
-after(() => roots.forEach((root) => rmSync(root, { recursive: true, force: true })));
-
 export function localExec(files: Map<string, Content>, faults: Faults = {}) {
-  const root = mkdtempSync(join(tmpdir(), 'spyhop-files-'));
-  roots.push(root);
+  const root = tempHome();
   const calls: Call[] = [];
   // path -> the content last written for it
   const written = new Map<string, Content>();

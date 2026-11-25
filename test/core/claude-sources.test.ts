@@ -1,24 +1,21 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync, utimesSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { after, describe, test } from 'node:test';
+import { describe, test } from 'node:test';
 import { TAIL_BYTES } from '../../src/core/refresh.js';
 import { createClaudeSessions, sessionDirSlug } from '../../src/core/providers/claude-sources.js';
 import { NA, readStats } from '../../src/core/providers/index.js';
 import { run, type Run } from '../../src/exec.ts';
+import { fixtureText, tempHome } from '../helpers/files.ts';
 import { expect } from './helpers/expect.ts';
+import { recordingRun } from './helpers/recording-run.ts';
 
-const BASIC = readFileSync(new URL('../fixtures/claude/basic.jsonl', import.meta.url), 'utf8');
+const BASIC = fixtureText('claude/basic.jsonl');
 const NOW = Date.parse('2026-09-07T20:22:00.000Z');
 const CWD = '/Users/me/work/app.v1_2';
 
-const homes: string[] = [];
-after(() => homes.forEach((home) => rmSync(home, { recursive: true, force: true })));
-
 // A home folder whose Claude Code session folder for `CWD` holds `files`, each with its mtime.
 function homeWith(files: { name: string; mtimeMs: number; text: string }[]) {
-  const home = mkdtempSync(join(tmpdir(), 'claude-home-'));
-  homes.push(home);
+  const home = tempHome();
   const dir = join(home, '.claude/projects', sessionDirSlug(CWD));
   mkdirSync(dir, { recursive: true });
   for (const file of files) {
@@ -26,17 +23,6 @@ function homeWith(files: { name: string; mtimeMs: number; text: string }[]) {
     utimesSync(join(dir, file.name), file.mtimeMs / 1000, file.mtimeMs / 1000);
   }
   return { home, dir };
-}
-
-// The real runner, recording calls; `ddFails` makes every dd exit 1.
-function recordingRun({ ddFails = false } = {}) {
-  const calls: { command: string; args: string[] }[] = [];
-  const exec: Run = (command, args, options) => {
-    calls.push({ command, args });
-    if (ddFails && command === 'dd') return Promise.resolve({ code: 1, stdout: '', stderr: 'dd: failed' });
-    return run(command, args, options);
-  };
-  return { exec, calls };
 }
 
 // Stats of the session `CWD` links to, as the card builder reads them: link, read, readStats.
@@ -91,7 +77,8 @@ describe('claude sessions', () => {
 
   test('a large session whose scan fails has no totals and no compaction count', async () => {
     const { home } = homeWith([big()]);
-    const { exec } = recordingRun({ ddFails: true });
+    // every `dd` exits 1, as a failed read does
+    const { exec } = recordingRun((command) => (command === 'dd' ? Promise.resolve({ code: 1, stdout: '', stderr: 'dd: failed' }) : undefined));
     const stats = await statsOf(home, exec);
 
     expect(stats.totalTokens).toBe(NA);

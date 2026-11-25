@@ -1,8 +1,8 @@
 // Copied from herdr-session-stats (src/providers/claude.js); the session formats are described
 // in that repository's docs/.
 //
-// Claude Code provider: reads the jsonl text of a Claude Code session
-// (docs/claude-session-format.md) and returns the stats of src/core/providers/index.js that it
+// Claude Code provider: reads the jsonl text of a Claude Code session (herdr-session-stats
+// docs/claude-session-format.md) and returns the stats of src/core/providers/index.js that it
 // can read. A figure it cannot read is left out, which the registry turns into 'n/a'; nothing
 // here estimates one, and there is no price table.
 //
@@ -160,8 +160,8 @@ function tokens({ totalTokens }) {
   return totalTokens.sum === undefined ? {} : { totalTokens: totalTokens.sum };
 }
 
-// A response is a hit when its cache read is above 0 and a miss when it is 0 (D6); one that
-// logged no cache read is neither.
+// A response is a hit when its cache read is above 0 and a miss when it is 0
+// (herdr-session-stats decision D6); one that logged no cache read is neither.
 // (`cacheHits` is a tally that gets a 0 or a 1 for every response that `cacheReads` counts.)
 function cacheTurns({ cacheReads, cacheHits }) {
   return cacheReads.sum === undefined ? {} : { cacheHits: cacheHits.sum, cacheMisses: cacheReads.sum - cacheHits.sum };
@@ -203,9 +203,9 @@ function context({ assistants }) {
   return counts?.every(isNumber) ? { contextTokens: counts.reduce((a, b) => a + b, 0) } : {};
 }
 
-// Cost is the session total Claude Code logs in a `cost-state` entry (D5), which it writes
-// when a session is saved, not per turn. A response after the last such entry is not in it, so
-// the total is stale and is not shown.
+// Cost is the session total Claude Code logs in a `cost-state` entry (herdr-session-stats
+// decision D5), which it writes when a session is saved, not per turn. A response after the
+// last such entry is not in it, so the total is stale and is not shown.
 function cost({ logged }) {
   return logged && !logged.stale && isNumber(logged.usd) ? { costUsd: logged.usd } : {};
 }

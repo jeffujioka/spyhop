@@ -5,8 +5,9 @@
 
 export const isNumber = (value) => typeof value === 'number' && Number.isFinite(value);
 
-// Hit rate is over the session's token counts (D6); it needs all three counts to be logged
-// and a non-zero total. The counts are `tally`s (src/core/providers/jsonl.js).
+// Hit rate is over the session's token counts (herdr-session-stats decision D6); it needs all
+// three counts to be logged and a non-zero total. The counts are `tally`s
+// (src/core/providers/jsonl.js).
 export function cacheRate({ input, cacheRead, cacheWrite }) {
   if (input.sum === undefined || cacheRead.sum === undefined || cacheWrite.sum === undefined) return {};
   const total = input.sum + cacheRead.sum + cacheWrite.sum;

@@ -4,22 +4,19 @@
 import { afterEach, assert, mount, mountWorker, test, type MockHost, type TestElement, type TestPanel, type TestWorker } from 'orca/testing';
 import * as panelModule from '../src/panel.tsx';
 import * as workerModule from '../src/worker.ts';
-import { tempHome } from './helpers/agent-cards.ts';
+import { useTempHome } from './helpers/env.ts';
 import { orcaHost, type HostWorkspace } from './helpers/orca-host.ts';
 
 let panel: TestPanel | undefined;
 let worker: TestWorker | undefined;
-const realHome = process.env.HOME;
 afterEach(async () => {
   await panel?.unmount();
   await worker?.deactivate();
-  process.env.HOME = realHome;
 });
 
 // Opens the panel, with its worker, on this computer's Orca host.
 async function open(workspaces: HostWorkspace[], focused?: string) {
-  const home = tempHome();
-  process.env.HOME = home;
+  const home = useTempHome();
   const host: MockHost = orcaHost(home, { workspaces, focused });
   worker = await mountWorker(workerModule, { host });
   panel = await mount(panelModule, { host });

@@ -13,6 +13,7 @@ import { run } from './exec.ts';
 import { orca as cli, readRemoteHosts, readServerAgents } from './hosts.ts';
 import type { CardView, TreeAnswer } from './protocol.ts';
 import { buildTree, type TreeAgent, workspaceRowId } from './tree.ts';
+import { worktreeId } from './worktree-id.ts';
 
 // Orca's id of this computer's host; a workspace that records no host is on this computer.
 const LOCAL = 'local';
@@ -28,8 +29,8 @@ export default function activate(orca: OrcaWorkerApi): void {
   orca.commands.register('spyhop.show', async () => {
     const { plugins } = await cli(run, ['plugin', 'list']);
     const self = plugins.find(
-      (plugin: { pluginKey: string; panels: { id: string }[] }) =>
-        plugin.pluginKey.endsWith('.spyhop') && plugin.panels.some((panel) => panel.id === 'spyhop'),
+      (plugin: { pluginKey: string; panels?: { id: string }[] }) =>
+        plugin.pluginKey.endsWith('.spyhop') && plugin.panels?.some((panel) => panel.id === 'spyhop'),
     );
     if (!self) throw new Error('Orca lists no spyhop plugin');
     await cli(run, ['plugin', 'open', self.pluginKey, '--panel', 'spyhop']);
@@ -100,6 +101,6 @@ export default function activate(orca: OrcaWorkerApi): void {
   });
 }
 
-// `<repoId>::<path>`, as Orca names a worktree, the repoId being the Orca project's id.
+// The worktreeId of a `workspace.list` row, its repoId the Orca project's id.
 const worktreeOf = (workspace: { id: string; projectId?: string | null; path: string }) =>
-  `${workspace.projectId ?? workspace.id}::${workspace.path}`;
+  worktreeId(workspace.projectId ?? workspace.id, workspace.path);

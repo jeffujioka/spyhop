@@ -1,39 +1,17 @@
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { after, describe, test } from 'node:test';
+import { describe, test } from 'node:test';
 import { NA, createSessions, readStats } from '../../src/core/providers/index.js';
 import { run } from '../../src/exec.ts';
+import { opencodeDatabase } from '../helpers/agent-cards.ts';
+import { tempHome } from '../helpers/files.ts';
 import { expect } from './helpers/expect.ts';
+import { recordingRun } from './helpers/recording-run.ts';
 
 const T0 = 1790000000000;
-const roots = [];
-after(() => roots.forEach((root) => rmSync(root, { recursive: true, force: true })));
-
-// A home folder holding opencode's database built from a fixture with the sqlite3 CLI (test
-// code only; the mod reads the database through the app's `exec`).
-function homeWith(fixture) {
-  const home = mkdtempSync(join(tmpdir(), 'opencode-home-'));
-  roots.push(home);
-  const dir = join(home, '.local/share/opencode');
-  mkdirSync(dir, { recursive: true });
-  const sql = new URL(`../fixtures/opencode/${fixture}.sql`, import.meta.url).pathname;
-  execFileSync('sh', ['-c', `sqlite3 "$1" < "$2"`, 'sh', join(dir, 'opencode.db'), sql]);
-  return home;
-}
-
-// herdr's `exec` signature over the real runner, recording calls.
-function realExec(calls = []) {
-  return (command, args = []) => {
-    calls.push([command, ...args]);
-    return run(command, args);
-  };
-}
 
 // Stats of the folder's session as the card builder reads them: link, read, readStats.
-async function statsOf(home, cwd, now, calls) {
-  const hook = createSessions('opencode', { execOn: () => realExec(calls), readTextOn: () => async () => null });
+async function statsOf(home, cwd, now, exec = run) {
+  const hook = createSessions('opencode', { execOn: () => exec, readTextOn: () => async () => null });
   const file = await hook.link({ machine: null, cwd, home, os: 'Darwin', now });
   const input = await hook.read(file, { machine: null, home, now });
   return readStats('opencode', input, now);
@@ -41,10 +19,11 @@ async function statsOf(home, cwd, now, calls) {
 
 describe('opencode session', () => {
   test('opencode session details', async () => {
-    const home = homeWith('basic');
+    const home = tempHome();
+    opencodeDatabase(home);
     const now = T0 + 530000;
-    const calls = [];
-    const stats = await statsOf(home, '/work/demo', now, calls);
+    const { exec, calls } = recordingRun();
+    const stats = await statsOf(home, '/work/demo', now, exec);
 
     expect(stats.harness).toBe('opencode');
     // model and thinking level of the latest assistant turn that is not a compaction summary
@@ -75,7 +54,7 @@ describe('opencode session', () => {
 
     // the database is only ever opened read-only, through sqlite3
     expect(calls.length).toBeGreaterThan(0);
-    for (const [command, ...args] of calls) {
+    for (const { command, args } of calls) {
       expect(command).toBe('sqlite3');
       expect(args.slice(0, 2)).toEqual(['-readonly', '-json']);
       expect(args.at(-1)).toMatch(/^SELECT /);
@@ -83,8 +62,9 @@ describe('opencode session', () => {
   });
 
   test('opencode unverified fields are n/a', async () => {
-    const home = homeWith('no-cache');
-    const stats = await statsOf(home, '/work/legacy', T0 + 40000, []);
+    const home = tempHome();
+    opencodeDatabase(home, 'no-cache');
+    const stats = await statsOf(home, '/work/legacy', T0 + 40000);
 
     // what the database holds still shows
     expect(stats.harness).toBe('opencode');
@@ -139,16 +119,16 @@ describe('opencode session', () => {
   });
 
   test('opencode is read only when its database changed', async () => {
-    const home = homeWith('basic');
-    const database = join(home, '.local/share/opencode/opencode.db');
-    const calls = [];
-    const hook = createSessions('opencode', { execOn: () => realExec(calls), readTextOn: () => async () => null });
+    const home = tempHome();
+    const database = opencodeDatabase(home);
+    const { exec, calls } = recordingRun();
+    const hook = createSessions('opencode', { execOn: () => exec, readTextOn: () => async () => null });
     // what a refresh does: the change check (link), then the read; returns what each ran
     async function refresh(now) {
       calls.length = 0;
       const file = await hook.link({ machine: null, cwd: '/work/demo', home, os: 'Darwin', now });
       const input = await hook.read(file, { machine: null, home, now });
-      const queries = calls.map((call) => call[call.length - 1]);
+      const queries = calls.map((call) => call.args.at(-1));
       return {
         input,
         link: queries.filter((q) => q.includes('FROM session')).length,
@@ -190,11 +170,13 @@ describe('opencode session', () => {
 
 describe('opencode session link', () => {
   test('links the folder to its newest top-level session', async () => {
-    const home = homeWith('basic');
-    const hook = createSessions('opencode', { execOn: () => realExec(), readTextOn: () => async () => null });
+    const home = tempHome();
+    opencodeDatabase(home);
+    const hook = createSessions('opencode', { execOn: () => run, readTextOn: () => async () => null });
     const link = (cwd, now) => hook.link({ machine: null, cwd, home, os: 'Darwin', now });
 
-    // ses_child is newer and ses_archived newest of the folder, but neither is the pane's session
+    // ses_child is newer and ses_archived newest of the folder, but neither is the Orca agent's
+    // session
     const file = await link('/work/demo', T0 + 530000);
     expect(file.path).toBe('ses_basic');
     expect(file.mtimeMs).toBe(T0 + 520000);
@@ -208,9 +190,8 @@ describe('opencode session link', () => {
   });
 
   test('a missing database is no session', async () => {
-    const home = mkdtempSync(join(tmpdir(), 'opencode-home-'));
-    roots.push(home);
-    const hook = createSessions('opencode', { execOn: () => realExec(), readTextOn: () => async () => null });
+    const home = tempHome();
+    const hook = createSessions('opencode', { execOn: () => run, readTextOn: () => async () => null });
 
     expect(await hook.link({ machine: null, cwd: '/work/demo', home, os: 'Darwin', now: T0 })).toBeNull();
   });

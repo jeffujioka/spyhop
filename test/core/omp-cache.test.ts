@@ -1,5 +1,6 @@
 import { describe, test } from 'node:test';
 import { NA, readStats } from '../../src/core/providers/index.js';
+import { ompMessage } from './helpers/entries.ts';
 import { expect } from './helpers/expect.ts';
 
 const MINUTE = 60 * 1000;
@@ -7,11 +8,7 @@ const NOW = Date.parse('2026-11-02T12:00:00.000Z');
 
 // One synthetic assistant message entry. `usage` and `extra` (message fields such as
 // completedAt) are merged in as given.
-function assistant(usage, extra = {}) {
-  const message = { role: 'assistant', provider: 'p', model: 'm', stopReason: 'stop', ...extra };
-  if (usage) message.usage = usage;
-  return JSON.stringify({ type: 'message', id: 'a', timestamp: '2026-11-02T11:00:00.000Z', message });
-}
+const assistant = (usage, extra = {}) => ompMessage('assistant', '2026-11-02T11:00:00.000Z', usage, extra);
 
 const tokens = (input, cacheRead, cacheWrite) => ({ input, cacheRead, cacheWrite });
 

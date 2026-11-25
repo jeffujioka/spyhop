@@ -1,5 +1,6 @@
 import { describe, test } from 'node:test';
 import { NA, readStats } from '../../src/core/providers/index.js';
+import { ompMessage } from './helpers/entries.ts';
 import { expect } from './helpers/expect.ts';
 
 const SECOND = 1000;
@@ -7,14 +8,8 @@ const MINUTE = 60 * SECOND;
 const START = Date.parse('2026-11-02T10:00:00.000Z');
 const iso = (ms) => new Date(ms).toISOString();
 
-// One synthetic message entry at `at` ms (epoch); `usage` and `extra` are merged into an
-// assistant message as given.
-function message(role, at, usage, extra = {}) {
-  const body = { role, ...extra };
-  if (role === 'assistant') Object.assign(body, { provider: 'p', model: 'm', stopReason: 'stop' });
-  if (usage) body.usage = usage;
-  return JSON.stringify({ type: 'message', id: role, timestamp: iso(at), message: body });
-}
+// One synthetic message entry of `role` at `at` ms (epoch).
+const message = (role, at, usage) => ompMessage(role, iso(at), usage);
 
 const user = (at) => message('user', at);
 const assistant = (at, usage) => message('assistant', at, usage);

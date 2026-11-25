@@ -1,10 +1,12 @@
 // Stand-ins for the two programs a test cannot run for real: `orca` (as ORCA_CLI_COMMAND), which
 // answers the commands it is given with recorded output shaped on this Mac's Orca, and
 // `ssh <alias> <command>`, which runs the command after the alias here, under the remote host's
-// own home folder, or fails as an unreachable host does. Both log each call.
+// own home folder, or fails as an unreachable host does. Both log each call. `standIns` sets
+// PATH and ORCA_CLI_COMMAND for the test (test/helpers/env.ts).
 import { chmodSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { tempHome } from './agent-cards.ts';
+import { setEnv } from './env.ts';
+import { tempHome } from './files.ts';
 
 // `{ ok, result }`, as every `orca … --json` answers.
 export const answer = (result: unknown) => JSON.stringify({ id: 'local', ok: true, result });
@@ -36,15 +38,15 @@ export function standIns({ homes, orca }: { homes: Record<string, string>; orca:
       ...sshCases,
       '  *) echo "ssh: connect to host $1 port 22: Connection refused" >&2; exit 255 ;;',
       'esac',
-      '[ "$2 $3 $4" = "-o BatchMode=yes --" ] && [ $# -eq 5 ] || exit 255',
-      'exec /bin/sh -c "$5"',
+      '[ "$2 $3 $4 $5 $6" = "-o BatchMode=yes -o ConnectTimeout=5 --" ] && [ $# -eq 7 ] || exit 255',
+      'exec /bin/sh -c "$7"',
       '',
     ].join('\n'),
   );
   chmodSync(join(bin, 'orca'), 0o755);
   chmodSync(join(bin, 'ssh'), 0o755);
-  process.env.ORCA_CLI_COMMAND = join(bin, 'orca');
-  process.env.PATH = `${bin}:${process.env.PATH}`;
+  setEnv('ORCA_CLI_COMMAND', join(bin, 'orca'));
+  setEnv('PATH', `${bin}:${process.env.PATH}`);
   const calls = () =>
     readFileSync(log, 'utf8')
       .split('\n')

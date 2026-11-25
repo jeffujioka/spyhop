@@ -1,44 +1,31 @@
 // The open panel builds its tree again every REFRESH_INTERVAL_MS and redraws it; a closed panel,
 // hidden or unmounted, builds nothing. Time is node:test's mock clock; the worker reads the
 // session file with the real programs under a temporary home.
-import { appendFileSync, mkdirSync, writeFileSync } from 'node:fs';
+import { appendFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { mock } from 'node:test';
 import { afterEach, assert, hostError, mount, mountWorker, test, type TestPanel, type TestWorker } from 'orca/testing';
 import { REFRESH_INTERVAL_MS } from '../src/core/refresh.js';
 import * as panelModule from '../src/panel.tsx';
 import * as workerModule from '../src/worker.ts';
-import { tempHome } from './helpers/agent-cards.ts';
+import { costTurn, ompSessionOf } from './helpers/agent-cards.ts';
+import { useTempHome } from './helpers/env.ts';
 import { orcaHost } from './helpers/orca-host.ts';
 
 let panel: TestPanel | undefined;
 let worker: TestWorker | undefined;
-const realHome = process.env.HOME;
 afterEach(async () => {
   await panel?.unmount();
   await worker?.deactivate();
   mock.timers.reset();
-  process.env.HOME = realHome;
 });
-
-// An omp turn that logs `usd`.
-const turn = (usd: number) =>
-  `${JSON.stringify({
-    type: 'message',
-    timestamp: '2026-11-25T11:59:00.000Z',
-    message: { role: 'assistant', usage: { totalTokens: 100, cost: { total: usd } } },
-  })}\n`;
 
 // Opens the panel, with its worker, on one Orca workspace `api`/`main` holding one omp agent
 // whose session has logged 0.10 USD. Returns the panel and the session file.
 async function openOnSession() {
-  const home = tempHome();
-  process.env.HOME = home;
+  const home = useTempHome();
   const host = orcaHost(home, { workspaces: [{ project: 'api', name: 'main', agents: ['working'] }], focused: 'main' });
-  const dir = join(home, '.omp/agent/sessions/-work-api-main');
-  mkdirSync(dir, { recursive: true });
-  const file = join(dir, '2026-11-25T11-58-00-000Z_s1.jsonl');
-  writeFileSync(file, `${JSON.stringify({ type: 'session', version: 3, id: 's1', timestamp: '2026-11-25T11:58:00.000Z' })}\n${turn(0.1)}`);
+  const file = ompSessionOf(home, join(home, 'work/api-main'));
   mock.timers.enable({ apis: ['setTimeout'] });
   worker = await mountWorker(workerModule, { host });
   panel = await mount(panelModule, { host });
@@ -59,7 +46,7 @@ test('Open panel refreshes', async () => {
   const { view, file } = await openOnSession();
   assert.equal(costOf(view), '$0.10');
 
-  appendFileSync(file, turn(0.15));
+  appendFileSync(file, costTurn(0.15));
   await twoSecondsPass(view);
 
   assert.equal(costOf(view), '$0.25');
@@ -68,7 +55,7 @@ test('Open panel refreshes', async () => {
 
 test('A failed refresh keeps the tree and the next one redraws', async () => {
   const { view, file } = await openOnSession();
-  appendFileSync(file, turn(0.15));
+  appendFileSync(file, costTurn(0.15));
 
   view.host.respond('workspace.readContext', () => {
     throw hostError('unavailable');

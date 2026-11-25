@@ -7,6 +7,7 @@
 import type { OrcaAgent } from './agent-cards.ts';
 import type { Run } from './exec.ts';
 import type { TreeAgent } from './tree.ts';
+import { splitWorktreeId } from './worktree-id.ts';
 
 // An Orca host's name, as Orca names it, and the alias of its SSH target.
 export type RemoteHost = { name: string; alias: string };
@@ -27,9 +28,9 @@ export async function orca(run: Run, args: string[]): Promise<Listed> {
 // not list is named by its id, as is its alias.
 export async function readRemoteHosts(run: Run, hostIds: string[]): Promise<Map<string, RemoteHost>> {
   const [hosts, environments] = await Promise.all([
-    orca(run, ['host', 'list']).then((result) => result.hosts as Listed[], () => []),
+    orca(run, ['host', 'list']).then((result) => (result.hosts ?? []) as Listed[], () => []),
     hostIds.some((id) => id.startsWith('runtime:'))
-      ? orca(run, ['environment', 'list']).then((result) => result.environments as Listed[], () => [])
+      ? orca(run, ['environment', 'list']).then((result) => (result.environments ?? []) as Listed[], () => [])
       : [],
   ]);
   const targets = new Map(hosts.filter((host) => host.kind === 'ssh').map((host) => [host.id, host.name as string]));
@@ -54,24 +55,20 @@ export async function readRemoteHosts(run: Run, hostIds: string[]): Promise<Map<
 export async function readServerAgents(run: Run, hostId: string, host: RemoteHost): Promise<(OrcaAgent & TreeAgent)[]> {
   try {
     const { agents } = await orca(run, ['agent', 'list', '--environment', host.name]);
-    return (agents as Listed[]).map((agent, n) => {
-      // `<repoId>::<worktreePath>`
-      const at = agent.worktreeId.indexOf('::');
-      return {
-        id: `${hostId}\0${agent.paneKey ?? n}`,
-        agent: agent.agent ?? null,
-        state: agent.state,
-        title: agent.title ?? null,
-        // `orcaSessionId` is Orca's id, not the harness's
-        sessionId: null,
-        path: at < 0 ? null : agent.worktreeId.slice(at + 2),
-        machine: host.alias,
-        hostId,
-        repo: agent.repo,
-        workspace: agent.workspace,
-        worktreeId: agent.worktreeId,
-      };
-    });
+    return (agents as Listed[]).map((agent, n) => ({
+      id: `${hostId}\0${agent.paneKey ?? n}`,
+      agent: agent.agent ?? null,
+      state: agent.state,
+      title: agent.title ?? null,
+      // `orcaSessionId` is Orca's id, not the harness's
+      sessionId: null,
+      path: splitWorktreeId(agent.worktreeId)?.path ?? null,
+      machine: host.alias,
+      hostId,
+      repo: agent.repo,
+      workspace: agent.workspace,
+      worktreeId: agent.worktreeId,
+    }));
   } catch {
     return [];
   }

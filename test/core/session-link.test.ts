@@ -1,12 +1,14 @@
+// Ported from herdr-session-stats (test/session-link.test.js), its herdr panes named here as
+// the Orca agents spyhop links.
 import { describe, test } from 'node:test';
-import { collapseBySession, linkSession, shareSessions } from '../../src/core/session-link.js';
+import { collapseBySession, linkAgents, linkSession, shareSessions } from '../../src/core/session-link.js';
 import { expect } from './helpers/expect.ts';
 
 const NOW = Date.parse('2026-05-01T12:00:00Z');
 const MIN = 60_000;
 const file = (path, minutesAgo, title) => ({ path, mtimeMs: NOW - minutesAgo * MIN, ...(title === undefined ? {} : { title }) });
 
-describe('Pane to session link', () => {
+describe('Orca agent to session link', () => {
   test('newest file wins', () => {
     const files = [file('/s/c.jsonl', 9), file('/s/a.jsonl', 1), file('/s/b.jsonl', 2)];
 
@@ -23,8 +25,8 @@ describe('Pane to session link', () => {
     expect(linkSession([])).toBeNull();
   });
 
-  test('panes in one folder get their own sessions', () => {
-    // two panes in one folder: their terminal titles contain the titles of two sessions
+  test('agents in one folder get their own sessions', () => {
+    // two agents in one folder: their titles contain the titles of two sessions
     const files = [file('/s/new.jsonl', 1, 'Fix the login bug'), file('/s/old.jsonl', 30, 'FACT: Enable factory config')];
     const titles = ['π > FACT: Enable factory config', 'π > Fix the login bug'];
 
@@ -37,32 +39,42 @@ describe('Pane to session link', () => {
     ]);
   });
 
-  test('a pane without a title match takes the newest unmatched session', () => {
+  test('an agent without a title match takes the newest unmatched session', () => {
     const files = [file('/s/c.jsonl', 1, ''), file('/s/b.jsonl', 5, ''), file('/s/a.jsonl', 30, 'FACT: Enable factory config')];
-    // the first pane is a new session with no title yet (its terminal title is the folder name)
+    // the first agent is a new session with no title yet (its title is the folder name)
     const titles = ['π > jeffujioka', 'π > FACT: Enable factory config'];
 
     expect(shareSessions(files, titles).map((f) => f.path)).toEqual(['/s/c.jsonl', '/s/a.jsonl']);
-    // several unmatched panes take the unmatched sessions newest first, in pane order
+    // several unmatched agents take the unmatched sessions newest first, in agent order
     expect(shareSessions(files, ['x', 'y', 'z']).map((f) => f.path)).toEqual(['/s/c.jsonl', '/s/b.jsonl', '/s/a.jsonl']);
-    // panes beyond the sessions get the newest session; no files gives null
+    // agents beyond the sessions get the newest session; no files gives null
     expect(shareSessions([files[0]], ['x', 'y']).map((f) => f.path)).toEqual(['/s/c.jsonl', '/s/c.jsonl']);
     expect(shareSessions([], ['x', 'y'])).toEqual([null, null]);
   });
+
+  test('agents whose session id named a session keep it; the others share the candidates', () => {
+    const named = file('/s/named.jsonl', 40);
+    const candidates = [file('/s/new.jsonl', 1, 'Fix the login bug'), file('/s/old.jsonl', 30, 'Write the docs')];
+    const agents = [{ title: 'π > Write the docs' }, { title: 'anything' }, { title: 'π > Fix the login bug' }];
+
+    expect(linkAgents([null, named, null], candidates, agents).map((f) => f.path)).toEqual(['/s/old.jsonl', '/s/named.jsonl', '/s/new.jsonl']);
+    // no candidates leaves the unnamed agents unlinked
+    expect(linkAgents([named, null], [], agents.slice(0, 2))).toEqual([named, null]);
+  });
 });
 
-describe('One card per agent pane', () => {
+describe('One card per Orca agent', () => {
   test('same session collapses to one', () => {
-    const panes = [
-      { paneId: 'p1', sessionPath: '/s/a.jsonl' },
-      { paneId: 'p2', sessionPath: '/s/a.jsonl' },
-      { paneId: 'p3', sessionPath: '/s/b.jsonl' },
-      { paneId: 'p4', sessionPath: null },
-      { paneId: 'p5', sessionPath: null },
+    const agents = [
+      { id: 'a1', sessionPath: '/s/a.jsonl' },
+      { id: 'a2', sessionPath: '/s/a.jsonl' },
+      { id: 'a3', sessionPath: '/s/b.jsonl' },
+      { id: 'a4', sessionPath: null },
+      { id: 'a5', sessionPath: null },
     ];
 
-    const cards = collapseBySession(panes);
+    const cards = collapseBySession(agents);
 
-    expect(cards.map((pane) => pane.paneId)).toEqual(['p1', 'p3', 'p4', 'p5']);
+    expect(cards.map((agent) => agent.id)).toEqual(['a1', 'a3', 'a4', 'a5']);
   });
 });

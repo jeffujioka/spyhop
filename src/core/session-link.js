@@ -40,14 +40,11 @@ export function shareSessions(files, agentTitles) {
 }
 
 // The session files the Orca agents of one folder (one Orca host, one harness) link to, one
-// file (or null) for each agent, in agent order. files: as for shareSessions; agents:
-// [{ sessionId?, title }]. An agent whose sessionId names one of the files gets that file (omp
-// names a session file `<start time>_<id>.jsonl`); the other agents share out the files no
-// sessionId named (shareSessions), or all of them when every file is named.
-export function linkAgents(files, agents) {
-  const named = agents.map(({ sessionId }) => (sessionId && files.find((file) => file.path.endsWith(`_${sessionId}.jsonl`))) || null);
-  const unnamed = files.filter((file) => !named.includes(file));
-  const shared = shareSessions(unnamed.length ? unnamed : files, agents.filter((_, i) => !named[i]).map((agent) => agent.title));
+// file (or null) for each agent, in agent order. named: for each agent, the file its sessionId
+// names by its harness's own rule (the provider hook's `named`), or null; candidates: as files
+// for shareSessions, the files the agents left share out; agents: [{ title }].
+export function linkAgents(named, candidates, agents) {
+  const shared = shareSessions(candidates, agents.filter((_, i) => !named[i]).map((agent) => agent.title));
   return named.map((file) => file ?? shared.shift());
 }
 

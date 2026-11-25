@@ -10,19 +10,24 @@
 // get` write omp's agent.db and its natives folder when they start, so the compaction settings
 // are read from config.yml itself.
 
+import { createLimit } from '../limit.js';
+import { createTtlCache } from '../ttl-cache.js';
 import { parseEntries } from './jsonl.js';
 import { ompProvider } from './omp.js';
-import { findSessionFile, listSessionFiles, sessionReaders } from './session-files.js';
+import { findNamedFiles, findSessionFile, listSessionFiles, sessionReaders } from './session-files.js';
+
+// Most title reads (`head`) run at once by one hook.
+const TITLE_READS = 4;
 
 // The model catalogue and the compaction settings change rarely; they are read again after
 // this long rather than at every refresh.
 export const SLOW_SOURCE_TTL_MS = 60 * 1000;
 
-// Name of omp's session folder for a working folder (docs/omp-session-format.md): under the
-// home folder it is the path below home with `/` as `-` and a `-` in front (home itself is
-// `-`); elsewhere it is the path with `/` as `-` between two dashes on each end. omp's own
-// rule has a third case for folders under the system temp folder, which spyhop leaves out:
-// such a folder has no linked session, so its card reads n/a.
+// Name of omp's session folder for a working folder (herdr-session-stats
+// docs/omp-session-format.md): under the home folder it is the path below home with `/` as `-`
+// and a `-` in front (home itself is `-`); elsewhere it is the path with `/` as `-` between two
+// dashes on each end. omp's own rule has a third case for folders under the system temp
+// folder, which spyhop leaves out: such a folder has no linked session, so its card reads n/a.
 export function sessionDirSlug(cwd, home) {
   const flat = (path) => path.replace(/[/\\:]/g, '-');
   const path = cwd.length > 1 ? cwd.replace(/\/+$/, '') : cwd;
@@ -117,7 +122,8 @@ export function parseCompactionConfig(text) {
   }
 }
 
-// Models of one provider from the newest catalogue row (D8 (b)): `[{ id, contextWindow }]`.
+// Models of one provider from the newest catalogue row (herdr-session-stats decision D8 (b)):
+// `[{ id, contextWindow }]`.
 // `provider` comes from a session file, so it is only used when it is a plain name.
 function catalogueQuery(provider) {
   return (
@@ -159,6 +165,7 @@ export function createOmpSessions({ execOn, readTextOn }) {
   // changes. A line that could not be read is kept as '' too: a file being written changes its
   // size when the line is whole, and is read again then.
   const titles = new Map();
+  const titleReads = createLimit(TITLE_READS);
   async function titleOf(machine, file) {
     const key = `${machine ?? ''}\0${file.path}`;
     const hit = titles.get(key);
@@ -168,15 +175,8 @@ export function createOmpSessions({ execOn, readTextOn }) {
     return title;
   }
 
-  // key -> { at, value: Promise }: a value reused for `ttl` ms, also by agents asking at once
-  const cache = new Map();
-  function cached(key, now, load) {
-    const hit = cache.get(key);
-    if (hit && now - hit.at < SLOW_SOURCE_TTL_MS) return hit.value;
-    const value = load();
-    cache.set(key, { at: now, value });
-    return value;
-  }
+  // the slow sources, each reused for SLOW_SOURCE_TTL_MS, also by agents asking at once
+  const cached = createTtlCache(SLOW_SOURCE_TTL_MS);
 
   // A missing sqlite3 or database, or a model of no window, reads as null (the figures read n/a).
   function readCatalogue(machine, home, provider, now) {
@@ -207,15 +207,26 @@ export function createOmpSessions({ execOn, readTextOn }) {
   }
 
   return {
-    // The session file the agent's folder links to (`{ path, mtimeMs, size }`), or null.
-    link({ machine, cwd, home, os }) {
-      return findSessionFile(execOn(machine), { dir: sessionDir(cwd, home), os });
+    // The session file the agent's folder links to (`{ path, mtimeMs, size }`) that is not in
+    // `except`, or null.
+    link({ machine, cwd, home, os, except }) {
+      return findSessionFile(execOn(machine), { dir: sessionDir(cwd, home), os, except });
     },
 
-    // The `limit` newest session files of the folder, each with its title.
-    async list({ machine, cwd, home, os, limit }) {
-      const files = await listSessionFiles(execOn(machine), { dir: sessionDir(cwd, home), os, limit });
-      return Promise.all(files.map(async (file) => ({ ...file, title: await titleOf(machine, file) })));
+    // The session file each of `sessionIds` names in the folder, or null: omp names a session
+    // file `<start time>_<id>.jsonl`.
+    named({ machine, cwd, home, os }, sessionIds) {
+      const dir = sessionDir(cwd, home);
+      return findNamedFiles(execOn(machine), { dir, os }, sessionIds, (path, id) => path.endsWith(`_${id}.jsonl`));
+    },
+
+    // The `limit` newest session files of the folder not in `except` (see listSessionFiles),
+    // each with its title when there are two or more to share out (one goes to its agent
+    // whatever its title), TITLE_READS read at a time.
+    async list({ machine, cwd, home, os, limit, except }) {
+      const files = await listSessionFiles(execOn(machine), { dir: sessionDir(cwd, home), os, limit, except });
+      if (files.length < 2) return files;
+      return Promise.all(files.map((file) => titleReads(async () => ({ ...file, title: await titleOf(machine, file) }))));
     },
 
     // The `input` of `readStats('omp', input, now)` for a linked file.
