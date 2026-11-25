@@ -61,14 +61,28 @@ ConnectTimeout=5`, at most four commands at once per host, with read-only comman
 The hosts and the paired servers' agents are listed with the `orca` CLI on every refresh while
 the panel is open: every paired server `orca environment list` lists gets its agents from `orca
 agent list --environment <name>`, since Orca lists no paired server's workspace to a plugin, and
-`orca host list` and `orca environment list` are asked again once a minute. The plugin is
+the terminals of their panes from `orca terminal list --environment <name>`; `orca host list` and
+`orca environment list` are asked again once a minute. A paired server that cannot be listed, or
+answers anything but its agents, shows none, and every other host is still drawn. The plugin is
 installed on the Mac only; nothing is installed on the other hosts.
 
 ## Refresh
 
-While the panel is open it asks for the tree every 2 seconds. While it is closed, hidden or
-unmounted it asks for nothing: a refresh that was running when it closed runs to its end, and
-no other starts.
+While the panel is open it asks for the tree every 2 seconds, and at once when focus moves to
+another workspace. While it is closed, hidden or unmounted it asks for nothing: a refresh that
+was running when it closed runs to its end, and no other starts.
+
+## Focus pane
+
+A card whose agent has a pane shows a **Focus pane** button; a card whose agent has none (an
+agent of a paired server in a pane no listed terminal is in, for one) shows no button. Pressing
+it focuses that agent's pane in this computer's Orca window, showing its workspace, as clicking
+the pane does; a card that agents share focuses the first of them in Orca's order. For an agent
+on this computer or an SSH workspace it asks Orca through `terminal.focus`; for one on a paired
+Orca server it runs `orca terminal switch --environment <name> --terminal <handle>`, the handle
+`orca terminal list` gave for the pane. Neither writes anything on any host or runs anything
+over ssh. A press that cannot focus changes nothing in the panel, and writes the reason to the
+plugin's log (`orca plugin logs`). Orca's desktop app only.
 
 ## Command and key
 
@@ -83,7 +97,11 @@ plugin list` and runs `orca plugin open <key> --panel spyhop`.
   clone with no `node_modules` folder: `orca plugin install <dir>`. Orca may refuse a folder
   that holds `node_modules`, over the `node_modules/.bin/tsc` symlink `npm install` writes.
   spyhop runs code in a worker, so Orca asks for approval (`approval_required`) and prints the
-  command to re-run with `--approve <fingerprint>`.
+  command to re-run with `--approve <fingerprint>`. It needs Orca 1.4.259 or newer, and is
+  granted three capabilities: `workspace:read` and `agent:read` to list the workspaces and
+  agents, and `workspace:write` for the Focus pane button only (`terminal.focus`, no other
+  method of it). An installed spyhop without `workspace:write` asks for approval again when
+  updated.
 - Develop: `orca plugin dev watch .` loads the folder and reloads on each save;
   `orca plugin types .` writes the typings into `.orca/types/` (`npm run typecheck` also runs
   `tsc`).

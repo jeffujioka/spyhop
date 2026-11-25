@@ -154,7 +154,7 @@ test('Agent on an SSH workspace', async () => {
 // `main` of its project `spyhop`, whose session has logged 0.10 USD; and this computer's
 // workspace `api`/`main` without one. Orca's `workspace.list` lists this computer's workspaces
 // only: a paired server's are told of by its own `orca agent list`.
-function pairedServer() {
+function pairedServer(orca: Record<string, string> = {}) {
   const home = useTempHome();
   const localFolder = join(home, 'work/api-main');
   mkdirSync(localFolder, { recursive: true });
@@ -183,7 +183,13 @@ function pairedServer() {
   });
   const calls = standIns({
     homes: { jeff: remoteHome },
-    orca: { 'host list --json': hostList, 'environment list --json': environmentList, 'agent list --environment jeff-server --json': agents },
+    orca: {
+      'host list --json': hostList,
+      'environment list --json': environmentList,
+      'agent list --environment jeff-server --json': agents,
+      'terminal list --environment jeff-server --json': answer({ terminals: [], totalCount: 0, truncated: false }),
+      ...orca,
+    },
   });
   return { rows: [workspaceRow('local', 'api', 'main', localFolder)], worktreeId, calls };
 }
@@ -213,12 +219,13 @@ test('Agent on a paired Orca server', async () => {
   const ssh = calls.ssh();
   assert.ok(ssh.length > 0);
   assert.deepEqual(ssh.filter((args) => args[0] !== 'jeff' || !readOnlyLine(args.at(-1)!)), []);
-  assert.deepEqual(calls.orca().filter((args) => !/^((host|environment) list|agent list --environment jeff-server) --json$/.test(args)), []);
+  assert.deepEqual(calls.orca().filter((args) => !/^((host|environment) list|(agent|terminal) list --environment jeff-server) --json$/.test(args)), []);
+  // and one terminal list of the server per refresh, for the panes of its agents
   assert.deepEqual(
-    ['host list --json', 'environment list --json', 'agent list --environment jeff-server --json'].map(
+    ['host list --json', 'environment list --json', 'agent list --environment jeff-server --json', 'terminal list --environment jeff-server --json'].map(
       (line) => calls.orca().filter((args) => args === line).length,
     ),
-    [1, 1, 2],
+    [1, 1, 2, 2],
   );
 });
 
@@ -235,6 +242,23 @@ test('Focused workspace on a paired Orca server', async () => {
   assert.ok(workspace, JSON.stringify(tree.hosts.map((host) => host.name)));
   assert.equal(tree.focused, workspace.id);
 });
+
+// A paired server that answers its lists with no result, or with a null agent, still leaves the
+// tree drawn: this computer's cards, and the server's agents when only its terminals are odd.
+for (const [what, orca, serverCards] of [
+  ['terminal list answers no result', { 'terminal list --environment jeff-server --json': answer(null) }, 1],
+  ['agent list answers no result', { 'agent list --environment jeff-server --json': answer(null) }, 0],
+  ['agent list answers a null agent', { 'agent list --environment jeff-server --json': answer({ agents: [null] }) }, 0],
+] as const) {
+  test(`Paired server whose ${what}`, async () => {
+    const { rows } = pairedServer(orca);
+
+    const tree = await treeOf(rows);
+
+    assert.equal(cardsUnder(tree, 'local', 'api', 'main')?.length, 1, JSON.stringify(tree.hosts.map((host) => host.name)));
+    assert.equal(cardsUnder(tree, 'jeff-server', 'spyhop', 'main')?.length ?? 0, serverCards);
+  });
+}
 
 test('Host lists without hosts', async () => {
   standIns({ homes: {}, orca: { 'host list --json': answer({}), 'environment list --json': answer({}) } });

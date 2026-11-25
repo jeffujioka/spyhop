@@ -5,10 +5,12 @@
 // Orca workspace, its project and its host are expanded and every other row collapsed; when focus
 // moves, the newly focused workspace, its project and host are expanded, and the workspace row
 // expanded for the previous focus collapses unless the developer opened or closed it since. Any
-// other row stays as the developer opens and closes it.
+// other row stays as the developer opens and closes it. A card whose agent has a pane shows a
+// Focus pane button, which asks the worker to focus that pane in this computer's Orca window.
 import {
   atom,
   Badge,
+  Button,
   Card,
   Collapsible,
   EmptyState,
@@ -154,10 +156,9 @@ export function setup({ signal, subscriptions, visible }: PanelContext): void {
 
 const totalsText = ({ cost, tokens, premium }: Totals) => `${cost} · ${tokens} tokens · ${premium} premium`;
 
-function cardOf(card: CardView) {
-  const [identity, ...groups] = card.groups;
+function cardOf({ id, groups: [identity, ...groups], pane }: CardView) {
   return (
-    <Card key={card.id} title={identity.name.value} description={identity.session?.value}>
+    <Card key={id} title={identity.name.value} description={identity.session?.value}>
       <Stack gap="sm">
         <Badge tone={STATUS_TONES[identity.status.label] ?? 'neutral'}>{identity.status.label}</Badge>
         <KeyValue
@@ -182,6 +183,12 @@ function cardOf(card: CardView) {
             ]}
           />
         ))}
+        {pane && (
+          // a press the worker cannot answer changes nothing; the worker logs why it could not focus
+          <Button icon="terminal" onPress={() => plugin.request('spyhop.focus', pane).catch(() => undefined)}>
+            Focus pane
+          </Button>
+        )}
       </Stack>
     </Card>
   );

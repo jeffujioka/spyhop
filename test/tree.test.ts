@@ -83,3 +83,11 @@ test('Cards ordered by Orca state', () => {
   const [main] = buildTree(agents, ids.map((id) => card(id, {}, states[id])))[0].projects[0].workspaces;
   assert.deepEqual(main.cards.map((c) => c.id), ['c', 'e', 'd', 'b', 'a']);
 });
+
+test('Cards of a state Orca does not name go last', () => {
+  const states = { a: 'idle', b: 'done', c: 'working', d: 'paused' };
+  const ids = Object.keys(states) as (keyof typeof states)[];
+  const agents: TreeAgent[] = ids.map((id) => ({ id, hostId: 'local', repo: 'app', workspace: 'main', worktreeId: 'w1::/work/app' }));
+  const [main] = buildTree(agents, ids.map((id) => card(id, {}, states[id])))[0].projects[0].workspaces;
+  assert.deepEqual(main.cards.map((c) => c.id), ['c', 'b', 'a', 'd']);
+});
