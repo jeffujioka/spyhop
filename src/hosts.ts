@@ -1,8 +1,9 @@
 // The Orca hosts other than this computer, as the `orca` CLI tells of them: an SSH host (a
 // `workspace.list` hostId `ssh:<target id>`) and a paired Orca server (`runtime:<environment
 // id>`), each with the name its host row shows and the alias `ssh` reaches it by, and the Orca
-// agents of a paired server. Only the CLI's list commands run, through `run` (src/exec.ts) on
-// this computer; whatever cannot be listed is left out or named by its id, never rejected.
+// agents of a paired server. Only the CLI's list commands run here, through `run` (src/exec.ts)
+// on this computer; whatever cannot be listed is left out or named by its id, never rejected.
+// `orca` is also how the worker's palette command asks Orca to show the panel.
 import type { OrcaAgent } from './agent-cards.ts';
 import type { Run } from './exec.ts';
 import type { TreeAgent } from './tree.ts';
@@ -14,7 +15,7 @@ type Listed = Record<string, any>;
 
 // What `orca <args> --json` answers (`{ ok, result }`): its result. The CLI is the one Orca's
 // guide names: ORCA_CLI_COMMAND when set, else `orca` on PATH.
-async function orca(run: Run, args: string[]): Promise<Listed> {
+export async function orca(run: Run, args: string[]): Promise<Listed> {
   const { code, stdout } = await run(process.env.ORCA_CLI_COMMAND || 'orca', [...args, '--json']);
   if (code !== 0) throw new Error(`orca ${args.join(' ')} failed`);
   return JSON.parse(stdout).result;

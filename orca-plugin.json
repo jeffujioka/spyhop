@@ -19,6 +19,18 @@
         "entry": "src/panel.tsx",
         "ui": "components"
       }
+    ],
+    "commands": [
+      {
+        "id": "spyhop.show",
+        "title": "Spyhop: Show session stats"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "spyhop.show",
+        "key": "Mod+Alt+Shift+S"
+      }
     ]
   },
   "capabilities": [
