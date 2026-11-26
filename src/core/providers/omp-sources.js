@@ -155,10 +155,11 @@ async function readTitle(run, path) {
 
 // `execOn(machine)` and `readTextOn(machine)`: the plugin's runner and text reader bound to an
 // Orca host (null: this computer). State kept between calls (the
-// per-machine session readers, the slow sources) lives in the returned object.
-export function createOmpSessions({ execOn, readTextOn }) {
-  // machine -> the reader that keeps that machine's per-file totals
-  const readerOn = sessionReaders(execOn, ompProvider.fold);
+// per-machine session readers, the slow sources) lives in the returned object. `kept`: the
+// scans of omp session files an earlier run kept (see `sessionReaders`).
+export function createOmpSessions({ execOn, readTextOn, kept }) {
+  // each machine's reader, which keeps that machine's per-file totals
+  const readers = sessionReaders(execOn, ompProvider.fold, kept);
 
   // machine and path -> { mtimeMs, size, title }: a title is read again only when the file
   // changed, so a refresh of quiet files runs no program. One entry per file, replaced when it
@@ -231,12 +232,15 @@ export function createOmpSessions({ execOn, readTextOn }) {
 
     // The `input` of `readStats('omp', input, now)` for a linked file.
     async read(file, { machine, home, now }) {
-      const { text, sources, state } = await readerOn(machine).read(file);
+      const { text, sources, state } = await readers.on(machine).read(file);
       const [catalogue, compaction] = await Promise.all([
         readCatalogue(machine, home, lastAssistantProvider(text), now),
         readCompaction(machine, home, now),
       ]);
       return { text, state, sources: { ...sources, catalogue, compaction } };
     },
+
+    // The finished scans of the files read, to keep for a later run (see `sessionReaders`).
+    scanned: readers.scanned,
   };
 }

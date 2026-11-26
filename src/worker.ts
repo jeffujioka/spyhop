@@ -6,7 +6,11 @@
 // host's read over `ssh` (src/agent-cards.ts), each Orca host's apart from the others', a paired
 // server's started on the agents it listed at the previous refresh, while its lists load. It
 // posts each host's row to the panel as soon as that host's cards are built, and answers with
-// the tree of them all (src/tree.ts). The CLI runs on each request, so only while the panel is
+// the tree of them all (src/tree.ts). The session reader's totals of each scanned session file
+// are kept in the plugin's storage (capability `storage:own`), and nothing else is: they are
+// loaded when the worker starts, which the first request waits for, and written at the end of
+// a request when a scan changed, at most once every 30 seconds, so a file scanned before is not
+// scanned again from its start. The CLI runs on each request, so only while the panel is
 // open, and for the palette command `spyhop.show`, which shows the panel. A card's Focus pane
 // button asks it
 // to focus the card's pane (`spyhop.focus`) in this computer's Orca window: an agent on this
@@ -17,6 +21,7 @@ import { homedir } from 'node:os';
 import type { OrcaWorkerApi } from 'orca/worker';
 import { createAgentCards, type OrcaAgent, sameButStates } from './agent-cards.ts';
 import { cardModel } from './core/card-model.js';
+import { decodeScans, encodeScans } from './core/refresh.js';
 import { createTtlCache } from './core/ttl-cache.js';
 import { run } from './exec.ts';
 import { orca as cli, type HostLists, listHosts, readServerAgents, type RemoteHost, remoteHosts, type ServerAgent } from './hosts.ts';
@@ -29,11 +34,25 @@ const LOCAL = 'local';
 // How long Orca's lists of hosts and paired servers are kept: a server is paired seldom, its
 // agents change each refresh.
 const HOST_LISTS_TTL_MS = 60 * 1000;
+// The key of the plugin's storage that holds the kept scans (src/core/refresh.js), and the
+// least time between two writes of them.
+const KEPT_KEY = 'session-totals';
+const KEPT_WRITE_MS = 30 * 1000;
 
 export default function activate(orca: OrcaWorkerApi): void {
   const home = homedir();
-  // kept for the worker's life: it keeps the state of its session reads between builds
-  const cards = createAgentCards({ run, home });
+  // The card builder, kept for the worker's life: it keeps the state of its session reads
+  // between builds, which start from the scans the storage holds. A storage that cannot be read
+  // (the capability not granted), or holds anything but this version's kept scans, gives none.
+  const starting = orca.storage
+    .get(KEPT_KEY)
+    .then(decodeScans, () => [])
+    .then((kept) => createAgentCards({ run, home, kept }));
+  type Cards = Awaited<typeof starting>;
+  // when the kept scans were last written, or tried to, and whether a scan has changed that no
+  // write holds yet
+  let keptAt = -Infinity;
+  let unkept = false;
   const hostLists = createTtlCache(HOST_LISTS_TTL_MS);
   // hostId of a paired server -> the agents it listed at the previous refresh
   const listedBefore = new Map<string, ServerAgent[]>();
@@ -43,7 +62,7 @@ export default function activate(orca: OrcaWorkerApi): void {
   // new list names the same agents, but for their states, which are the new list's. When it
   // differs, the cards are built again from the new list, once the early build has ended, so
   // that no session file is read twice at once and the unchanged ones' reads are found kept.
-  async function serverCards(hostId: string, host: RemoteHost) {
+  async function serverCards(cards: Cards, hostId: string, host: RemoteHost) {
     const before = listedBefore.get(hostId) ?? [];
     const early = cards.build(before, Date.now());
     const agents = await readServerAgents(run, hostId, host, (message) => orca.log(message));
@@ -71,6 +90,7 @@ export default function activate(orca: OrcaWorkerApi): void {
   });
 
   orca.panels.handle('spyhop.tree', async (input): Promise<TreeAnswer> => {
+    const cards = await starting;
     const [{ workspaces }, context, listed] = await Promise.all([
       orca.host.call('workspace.list'),
       orca.host.call('workspace.readContext'),
@@ -144,13 +164,29 @@ export default function activate(orca: OrcaWorkerApi): void {
     }
     const [others, servers] = await Promise.all([
       Promise.all([...new Set(asked.map(hostOf))].map((hostId) => posted(workspaceCards(hostId)))),
-      Promise.all([...remote].filter(([hostId]) => hostId.startsWith('runtime:')).map(([hostId, host]) => posted(serverCards(hostId, host)))),
+      Promise.all([...remote].filter(([hostId]) => hostId.startsWith('runtime:')).map(([hostId, host]) => posted(serverCards(cards, hostId, host)))),
     ]);
     // the agents in the order Orca lists them, which is the order of the rows
     const tree = buildTree(
       [...(await Promise.all(listing)).flat(), ...servers.flatMap(({ agents }) => agents)],
       [...others, ...servers].flatMap(({ cards }) => cards),
     );
+    // The kept scans are written when one changed and the last write, or try, is 30 s old. A
+    // write that fails is tried again by the first refresh 30 s later, and fails no request.
+    const now = Date.now();
+    if (now - keptAt >= KEPT_WRITE_MS) {
+      const { changed, scans } = cards.scanned();
+      unkept ||= changed;
+      if (unkept) {
+        keptAt = now;
+        try {
+          await orca.storage.set(KEPT_KEY, encodeScans(scans));
+          unkept = false;
+        } catch (error) {
+          orca.log(`spyhop: cannot keep the session totals: ${(error as Error).message}`);
+        }
+      }
+    }
     return { hosts: tree.map(rowOf), focused };
   });
 

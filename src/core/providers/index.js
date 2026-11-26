@@ -17,13 +17,14 @@
 // in pieces, which is how src/core/refresh.js reads a file larger than the tail window (once in
 // chunks, then only what was appended). Its `createSessions` hands the reader this `fold`.
 //
-// A provider may also carry `createSessions({ execOn, readTextOn })`, the hook that finds its
+// A provider may also carry `createSessions({ execOn, readTextOn, kept })`, the hook that finds its
 // sessions and reads their plain-value sources; it lives in the provider's own
 // `src/core/providers/<harness>-sources.js`, so adding a harness touches only its provider, its
 // sources file and one registry line below. `execOn(machine)` and `readTextOn(machine)` run a
 // program and read a text file on an Orca host (null: this computer), through the plugin's
-// runner (src/exec.ts), read-only use only. `createSessions` runs once per card builder and
-// returns
+// runner (src/exec.ts), read-only use only; `kept` is the scans of this provider's session
+// files that an earlier run kept (see `sessionReaders`, session-files.js). `createSessions`
+// runs once per card builder and returns
 //   link({ machine, cwd, home, os, except }) -> Promise<{ path, mtimeMs, size } | null>
 //     the session file the Orca agent's workspace folder links to (the newest one whose path
 //     is not in `except`, the named ones, however long ago it changed, see session-link.js),
@@ -39,7 +40,10 @@
 //     that no sessionId named (`shareSessions`, src/core/session-link.js, by the agents'
 //     titles). A provider with no titles leaves `list` out;
 //   read(file, { machine, home, now })     -> Promise<input>
-//     the `input` of this provider's `readStats` for a linked file.
+//     the `input` of this provider's `readStats` for a linked file;
+//   scanned()                              -> { changed, scans }
+//     optional, for a provider that scans session files: the finished scans of the files read,
+//     to keep for a later run, and whether any changed since it was last asked.
 // Each may reject: the card then reads n/a. A provider without the hook yields no session.
 //
 // Stats shape (single place; herdr-session-stats docs/omp-session-format.md repeats it with the

@@ -69,6 +69,66 @@ function dropBytes(text, n) {
 // byte begins a line).
 const newScan = () => ({ state: undefined, block: 0, skip: 0, carry: '', pos: -1 });
 
+// The kept scans of the session files, as the plugin stores them between runs: the finished
+// scans (`{ provider, machine, path, pos, state }`: the provider whose `fold` built the state,
+// the Orca host of the file, null for this computer, and the scan's `pos` and `state`) under
+// the number of the version that wrote them. A stored value is JSON, so a state is written in
+// plain values that read back as the same state: `undefined`, `NaN` and a `Map`, which JSON
+// has no word for, are written as an object whose `$` names them, and so is an object that
+// has a `$` field of its own, as `fields`.
+// Raise KEPT_VERSION when a provider's state changes shape: values of another number are
+// ignored.
+export const KEPT_VERSION = 1;
+
+function encode(value) {
+  if (value === undefined) return { $: 'undefined' };
+  if (Number.isNaN(value)) return { $: 'NaN' };
+  if (value instanceof Map) return { $: 'Map', entries: [...value].map((entry) => entry.map(encode)) };
+  if (Array.isArray(value)) return value.map(encode);
+  if (value !== null && typeof value === 'object') {
+    const fields = Object.fromEntries(Object.entries(value).map(([key, field]) => [key, encode(field)]));
+    return '$' in fields ? { $: 'fields', fields } : fields;
+  }
+  return value;
+}
+
+function decode(value) {
+  if (Array.isArray(value)) return value.map(decode);
+  if (value === null || typeof value !== 'object') return value;
+  if (value.$ === 'undefined') return undefined;
+  if (value.$ === 'NaN') return NaN;
+  if (value.$ === 'Map') return new Map(value.entries.map((entry) => entry.map(decode)));
+  return Object.fromEntries(Object.entries(value.$ === 'fields' ? value.fields : value).map(([key, field]) => [key, decode(field)]));
+}
+
+// The value to store for `scans`. The states are read at once: a later fold changes them.
+export function encodeScans(scans) {
+  return { version: KEPT_VERSION, scans: scans.map((scan) => ({ ...scan, state: encode(scan.state) })) };
+}
+
+const isKeptScan = (scan) =>
+  scan !== null &&
+  typeof scan === 'object' &&
+  typeof scan.provider === 'string' &&
+  (scan.machine === null || typeof scan.machine === 'string') &&
+  typeof scan.path === 'string' &&
+  Number.isInteger(scan.pos) &&
+  scan.pos >= 0 &&
+  'state' in scan;
+
+// The kept scans a stored value holds; none when it is not what `encodeScans` of this version
+// gives (another version's number, a text, an array, a scan that lacks a field or whose `pos`
+// is not a whole number from 0 up), or when a state cannot be read back.
+export function decodeScans(value) {
+  if (value === null || typeof value !== 'object' || value.version !== KEPT_VERSION) return [];
+  if (!Array.isArray(value.scans) || !value.scans.every(isKeptScan)) return [];
+  try {
+    return value.scans.map((scan) => ({ ...scan, state: decode(scan.state) }));
+  } catch {
+    return [];
+  }
+}
+
 // `exec`: the plugin's runner. `fold(state, entries)`: the provider's accumulator (see
 // src/core/providers/omp.js). `read(file)` takes `{ path, mtimeMs, size }` of a linked session file
 // and resolves to the `input` of `readStats(harness, input, now)`: `{ text, sources, state }`
@@ -78,12 +138,23 @@ const newScan = () => ({ state: undefined, block: 0, skip: 0, carry: '', pos: -1
 // over the whole file (see `advance`), or `null` when it could not be built, so that every
 // figure of the session totals reads n/a and is tried again at the next refresh. A tail
 // that cannot be read gives an empty text, so the figures about the end of the file read n/a
-// for that refresh; the scan of a large file is kept, and so are its totals. A file whose size
-// and modified time are those of its last read that failed in nothing is not read again: that
-// read is the input.
-export function createSessionReader({ exec, fold }) {
+// for that refresh; the scan of a large file is kept, and so are its totals. A file is not
+// read again while its size and modified time are those of its last read, when neither the tail
+// nor the scan of that read failed: that read is the input.
+//
+// `kept`: the finished scans an earlier run kept (`{ path, pos, state }` each), which the
+// scans of those files start from; the reader owns their states from then on. `scanned()` is
+// what a later run can be given as `kept`: `{ changed, scans }`, the finished scans of the
+// files read by this reader (a kept scan of a file never read is left out), and whether any of
+// them changed since `scanned()` was last asked. Their states are the reader's own, which a
+// later read changes.
+export function createSessionReader({ exec, fold, kept = [] }) {
   // path -> the scan of that file
   const scans = new Map();
+  // path -> the kept scan of a file not read yet
+  const keptScans = new Map(kept.map((scan) => [scan.path, scan]));
+  // whether a finished scan changed since `scanned()` was last asked
+  let changed = false;
   // path -> the last scan step of that file: agents of one file ask at once, and two steps on
   // one scan would fold the same bytes twice
   const queues = new Map();
@@ -114,11 +185,19 @@ export function createSessionReader({ exec, fold }) {
   // - When more was appended than one read can take, the pass goes on in blocks from the one
   //   that holds `pos`, dropping its bytes that are covered already.
   // - A smaller file than scanned was replaced, so the scan starts over.
+  // - A file with a kept scan and none yet starts from the kept one, as if this reader had
+  //   scanned it: the two checks above tell when it is not the file that was scanned.
   //
   // A read that fails leaves the scan as it was (a block is folded only once read), so the next
   // refresh goes on from there, and throws.
   async function advance(path, size) {
     let scan = scans.get(path);
+    const keptScan = keptScans.get(path);
+    if (!scan && keptScan) {
+      scan = { ...newScan(), state: keptScan.state, pos: keptScan.pos };
+      scans.set(path, scan);
+      keptScans.delete(path);
+    }
     if (scan && (size < (scan.pos >= 0 ? scan.pos : scan.block * SCAN_CHUNK_BYTES) || scan.pos === 0)) scan = undefined;
     if (scan?.pos >= 0) {
       if (size === scan.pos) return scan.state;
@@ -135,6 +214,7 @@ export function createSessionReader({ exec, fold }) {
           const whole = rest.slice(0, rest.lastIndexOf('\n') + 1);
           scan.state = fold(scan.state, parseEntries(whole));
           scan.pos += utf8Length(whole);
+          if (whole) changed = true;
           return scan.state;
         }
         scan = undefined;
@@ -167,6 +247,7 @@ export function createSessionReader({ exec, fold }) {
       if (length < SCAN_CHUNK_BYTES) {
         scan.pos = scan.block * SCAN_CHUNK_BYTES + length - utf8Length(scan.carry);
         scan.carry = '';
+        changed = true;
       }
       scan.block += 1;
     }
@@ -181,8 +262,8 @@ export function createSessionReader({ exec, fold }) {
 
   return {
     async read(file) {
-      const kept = reads.get(file.path);
-      if (kept?.mtimeMs === file.mtimeMs && kept.size === file.size) return kept.input;
+      const last = reads.get(file.path);
+      if (last?.mtimeMs === file.mtimeMs && last.size === file.size) return last.input;
       // a tail that cannot be read, or cannot be started, is an empty text
       const tail = await exec('tail', ['-c', String(TAIL_BYTES), '--', file.path]).catch(() => ({ code: -1 }));
       const text = tail.code === 0 ? tail.stdout : '';
@@ -194,7 +275,8 @@ export function createSessionReader({ exec, fold }) {
       let input;
       // a tail that failed on a file the listing says fits is not tried again with a scan
       if (whole || (tail.code !== 0 && file.size <= TAIL_BYTES)) {
-        scans.delete(file.path);
+        if (scans.delete(file.path)) changed = true;
+        if (keptScans.delete(file.path)) changed = true;
         input = whole ? { text, sources: { wholeFile: true } } : { text, sources: {} };
       } else {
         const state = await queued(file.path, () => advance(file.path, file.size)).catch(() => null);
@@ -203,6 +285,14 @@ export function createSessionReader({ exec, fold }) {
       if (tail.code === 0 && input.state !== null) reads.set(file.path, { mtimeMs: file.mtimeMs, size: file.size, input });
       else reads.delete(file.path);
       return input;
+    },
+
+    scanned() {
+      const finished = [];
+      for (const [path, { pos, state }] of scans) if (pos >= 0) finished.push({ path, pos, state });
+      const was = changed;
+      changed = false;
+      return { changed: was, scans: finished };
     },
   };
 }

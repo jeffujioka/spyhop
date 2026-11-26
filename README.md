@@ -92,6 +92,17 @@ for another host: this computer's are not held up by a slow SSH host or paired s
 refresh ends the whole tree replaces what is drawn, so the rows of a host that is gone
 disappear then.
 
+## What spyhop stores
+
+Session totals only, in the plugin's own storage on this computer (`storage:own`): for each
+session file larger than the 256 KiB a refresh reads from its end, the totals the session reader
+counted over the file and the position they cover, by harness, machine and path. No session
+text is stored, and nothing is written on any other host. They are there so that a file scanned
+once is not scanned again from its start after Orca restarts: the reader goes on from the kept
+position, and scans the file again when it is not the one that was scanned. They are written
+at most once every 30 seconds, and only when a scan changed. Deleting the storage costs one
+scan of each file, nothing else.
+
 ## Focus pane
 
 A card whose agent has a pane shows a **Focus pane** button; a card whose agent has none (an
@@ -118,9 +129,10 @@ plugin list` and runs `orca plugin open <key> --panel spyhop`.
   that holds `node_modules`, over the `node_modules/.bin/tsc` symlink `npm install` writes.
   spyhop runs code in a worker, so Orca asks for approval (`approval_required`) and prints the
   command to re-run with `--approve <fingerprint>`. It needs Orca 1.4.259 or newer, and is
-  granted three capabilities: `workspace:read` and `agent:read` to list the workspaces and
-  agents, and `workspace:write` for the Focus pane button only (`terminal.focus`, no other
-  method of it). An installed spyhop without `workspace:write` asks for approval again when
+  granted four capabilities: `workspace:read` and `agent:read` to list the workspaces and
+  agents, `workspace:write` for the Focus pane button only (`terminal.focus`, no other
+  method of it), and `storage:own` for the session totals it keeps (see What spyhop stores).
+  An installed spyhop without `workspace:write` or `storage:own` asks for approval again when
   updated.
 - Develop: `orca plugin dev watch .` loads the folder and reloads on each save;
   `orca plugin types .` writes the typings into `.orca/types/` (`npm run typecheck` also runs

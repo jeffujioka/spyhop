@@ -1,7 +1,7 @@
 import { describe, test } from 'node:test';
 import { NA, readStats } from '../../src/core/providers/index.js';
 import { ompProvider } from '../../src/core/providers/omp.js';
-import { REFRESH_INTERVAL_MS, SCAN_CHUNK_BYTES, TAIL_BYTES, createSessionReader } from '../../src/core/refresh.js';
+import { REFRESH_INTERVAL_MS, SCAN_CHUNK_BYTES, TAIL_BYTES, createSessionReader, decodeScans, encodeScans } from '../../src/core/refresh.js';
 import { sessionFile } from './helpers/entries.ts';
 import { expect } from './helpers/expect.ts';
 import { localExec } from './helpers/local-exec.ts';
@@ -347,6 +347,36 @@ describe('refresh', () => {
     expect(calls.slice(mark).some((call) => call.command === 'dd')).toBe(true);
   });
 
+  test('a kept scan is dropped by a file seen whole in the tail', async () => {
+    const scanned = bigSession();
+    const files = new Map([[PATH, scanned]]);
+    const { exec, calls } = localExec(files);
+    const earlier = newReader(exec);
+    await earlier.read(file(scanned));
+    const kept = earlier.scanned().scans;
+    expect(kept.map((scan) => scan.pos)).toEqual([scanned.length]);
+
+    // another session at that path, within the window
+    const small = `${compaction('n1')}\n`;
+    files.set(PATH, small);
+    const reader = createSessionReader({ exec, fold: ompProvider.fold, kept });
+    expect((await reader.read(file(small, 2000))).sources).toEqual({ wholeFile: true });
+    // the dropped scan is a change to write, and the scans to write no longer hold the path
+    expect(reader.scanned()).toEqual({ changed: true, scans: [] });
+
+    // it grows past the kept position, with a newline as the byte before it: a line that ends
+    // where the scanned file did, then a compaction
+    const note = (length) => `${JSON.stringify({ type: 'custom', note: 'y'.repeat(length) })}\n`;
+    const grown = `${small}${note(scanned.length - small.length - note(0).length)}${compaction('n2')}\n`;
+    expect(grown[scanned.length - 1]).toBe('\n');
+    files.set(PATH, grown);
+    const mark = calls.length;
+    // the two compactions of the file, not the kept scan's two and the appended one
+    expect(await counted(reader, file(grown, 3000))).toBe(2);
+    const blocks = calls.slice(mark).filter((call) => call.command === 'dd').map((call) => call.args[2]);
+    expect(blocks).toEqual(['skip=0']);
+  });
+
   test('Orca agents of one file asking at once fold its lines once', async () => {
     const text = bigSession();
     const files = new Map([[PATH, text]]);
@@ -436,5 +466,28 @@ describe('refresh', () => {
     expect(calls.slice(mark).filter(isTail)).toHaveLength(1);
     expect(stats.model).toBe('tail-model');
     expect(stats.sinceActivityMs).toBe(8 * 60_000);
+  });
+
+  test('kept scans read back as they were', () => {
+    const state = {
+      costUsd: { sum: NaN, last: undefined, byModel: { opus: { turns: [1, NaN, undefined], cost: 0.5 } } },
+      responses: new Map([
+        ['r1', { tokens: 100, cost: undefined }],
+        ['r2', { tokens: NaN, parts: new Map([[1, null]]) }],
+      ]),
+      // fields named as the words the stored value is written in
+      $: 'Map',
+      entries: 3,
+      marks: { $: 'undefined' },
+    };
+    const scans = [
+      { provider: 'claude-code', machine: null, path: PATH, pos: 12, state },
+      { provider: 'omp', machine: 'devbox', path: `${PATH}.2`, pos: 0, state: undefined },
+    ];
+
+    // a stored value is JSON
+    const stored = JSON.parse(JSON.stringify(encodeScans(scans)));
+
+    expect(decodeScans(stored)).toEqual(scans);
   });
 });

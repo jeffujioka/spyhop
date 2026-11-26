@@ -21,10 +21,11 @@ export function sessionDirSlug(cwd) {
 // The folder Claude Code keeps the sessions of a working folder in.
 const sessionDir = (cwd, home) => `${home}/.claude/projects/${sessionDirSlug(cwd)}`;
 
-// `execOn(machine)`: the plugin's runner bound to an Orca host (null: this computer).
-export function createClaudeSessions({ execOn }) {
-  // machine -> the reader that keeps that machine's per-file totals
-  const readerOn = sessionReaders(execOn, claudeProvider.fold);
+// `execOn(machine)`: the plugin's runner bound to an Orca host (null: this computer). `kept`:
+// the scans of Claude Code session files an earlier run kept (see `sessionReaders`).
+export function createClaudeSessions({ execOn, kept }) {
+  // each machine's reader, which keeps that machine's per-file totals
+  const readers = sessionReaders(execOn, claudeProvider.fold, kept);
 
   return {
     // The session file the agent's folder links to (`{ path, mtimeMs, size }`) that is not in
@@ -44,7 +45,10 @@ export function createClaudeSessions({ execOn }) {
     // The `input` of `readStats('claude-code', input, now)` for a linked file: its tail window,
     // and the totals over the whole file when that is larger.
     read(file, { machine }) {
-      return readerOn(machine).read(file);
+      return readers.on(machine).read(file);
     },
+
+    // The finished scans of the files read, to keep for a later run (see `sessionReaders`).
+    scanned: readers.scanned,
   };
 }

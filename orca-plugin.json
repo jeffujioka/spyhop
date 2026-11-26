@@ -42,6 +42,9 @@
     },
     {
       "kind": "workspace:write"
+    },
+    {
+      "kind": "storage:own"
     }
   ]
 }

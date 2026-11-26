@@ -53,8 +53,13 @@ const HARNESS_NAMES: Record<string, string> = { omp: 'omp', claude: 'Claude Code
 
 type Machine = string | null;
 
-// `home`: this computer's home folder.
-export function createAgentCards({ run, home }: { run: Run; home: string }) {
+// A finished scan of a session file, kept between runs of the worker (src/core/refresh.js): the
+// provider's totals `state` over the file's first `pos` bytes.
+export type KeptScan = { provider: string; machine: Machine; path: string; pos: number; state: unknown };
+
+// `home`: this computer's home folder. `kept`: the scans an earlier run kept, which the session
+// reads of those files start from.
+export function createAgentCards({ run, home, kept = [] }: { run: Run; home: string; kept?: KeptScan[] }) {
   // `run` bound to a machine (null: this computer). ssh exits 255 when it cannot reach the host:
   // the machine's place is then forgotten, so while the host stays down a build costs the one
   // place lookup (see placeOn).
@@ -100,7 +105,9 @@ export function createAgentCards({ run, home }: { run: Run; home: string }) {
   // state of its session reads between builds
   const hooks = new Map();
   function hookOf(provider: string) {
-    if (!hooks.has(provider)) hooks.set(provider, createSessions(provider, { execOn, readTextOn }));
+    if (!hooks.has(provider)) {
+      hooks.set(provider, createSessions(provider, { execOn, readTextOn, kept: kept.filter((scan) => scan.provider === provider) }));
+    }
     return hooks.get(provider) ?? null;
   }
 
@@ -194,6 +201,20 @@ export function createAgentCards({ run, home }: { run: Run; home: string }) {
         }),
       );
       return collapseBySession(entries).map((entry: (typeof entries)[number]) => entry.card);
+    },
+
+    // The finished scans of the session files read since this builder was made, to keep for a
+    // later run, and whether any changed since this was last asked. Their states are the
+    // readers' own, which a later build changes: encode them at once.
+    scanned() {
+      const all: { changed: boolean; scans: KeptScan[] } = { changed: false, scans: [] };
+      for (const [provider, hook] of hooks) {
+        // a provider that reads no session file (opencode) has no scan
+        const { changed, scans } = hook?.scanned?.() ?? { changed: false, scans: [] };
+        all.changed ||= changed;
+        for (const scan of scans) all.scans.push({ provider, ...scan });
+      }
+      return all;
     },
   };
 }
