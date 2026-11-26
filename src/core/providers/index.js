@@ -29,8 +29,9 @@
 //     for each of the Orca agents' sessionIds (null: none), the session on the folder's host
 //     that the id names by the harness's own rule, or null; the hook alone knows that rule.
 //     The session can be one of another folder than the agent's workspace folder `cwd`: a
-//     harness that ran in a sub-folder of it keeps its session with that sub-folder's (omp
-//     looks in every session folder of the host);
+//     harness that ran in a sub-folder of it keeps its session with that sub-folder's. So no
+//     built-in hook reads `cwd` here: omp and Claude Code look in every session folder of the
+//     host, opencode in every row of its database;
 //   An agent no sessionId named links by one of the next two, of which a hook has one:
 //   list({ machine, cwd, home, os, except }) -> Promise<Array<{ path, mtimeMs, size, title }>>
 //     for a harness that writes a title into its sessions (omp): the sessions such an agent
@@ -42,19 +43,22 @@
 //     while unchanged, and one it has not read yet is given by a later call;
 //   link({ machine, cwd, home, os, except }) -> Promise<{ path, mtimeMs, size } | null>
 //     for a harness without titles (Claude Code, opencode): the session all such agents of
-//     the workspace folder `cwd` link to, the newest one of that folder whose path is not in
-//     `except`, however long ago it changed (see session-link.js), or null; `home` and `os`
-//     (`uname -s`) are the host's;
+//     the workspace folder `cwd` link to, the newest one of that folder itself, never of a
+//     folder below it, whose path is not in `except`, however long ago it changed (see
+//     session-link.js), or null; `home` and `os` (`uname -s`) are the host's;
 //   read(file, { machine, home, now })     -> Promise<input>
 //     the `input` of this provider's `readStats` for a linked file;
 //   folder(file, { machine })              -> Promise<string | null>
 //     optional: the folder the session of a linked file records as its own (omp: the `cwd` of
-//     its `session` entry), which is the card's folder and where its git facts are read; null
-//     when it cannot be told, and the card then keeps the agent's workspace folder, as it does
-//     for a provider without `folder`. It is the one way a card learns its session's folder,
-//     however the file was linked (`named`, `list` or `link`). The builder asks it once
-//     `read` of the file has resolved, so a hook answers from what that read or its listing
-//     already gave and runs a program only where they did not;
+//     its `session` entry; Claude Code: the `cwd` of its first entry that holds one; opencode:
+//     the `directory` of its row), which is the card's folder and where its git facts are read;
+//     null when it cannot be told, and the card then keeps the agent's workspace folder, as it
+//     does for a provider without `folder`. It is the one way a card learns its session's
+//     folder, however the file was linked (`named`, `list` or `link`). The builder asks it
+//     once `read` of the file has resolved, with the file as the hook gave it (a hook may keep
+//     more on it than `path`, `mtimeMs` and `size`, as opencode does the folder), so a hook
+//     answers from what that read or its listing already gave and runs a program only where
+//     they did not;
 //   scanned()                              -> { changed, scans }
 //     optional, for a provider that scans session files: the finished scans of the files read,
 //     to keep for a later run, and whether any changed since it was last asked.

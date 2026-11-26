@@ -1,8 +1,8 @@
-import { mkdirSync, utimesSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, test } from 'node:test';
 import { TAIL_BYTES } from '../../src/core/refresh.js';
-import { createClaudeSessions, sessionDirSlug } from '../../src/core/providers/claude-sources.js';
+import { START_BYTES, createClaudeSessions, sessionDirSlug } from '../../src/core/providers/claude-sources.js';
 import { NA, readStats } from '../../src/core/providers/index.js';
 import { run, type Run } from '../../src/exec.ts';
 import { tempHome } from '../helpers/files.ts';
@@ -83,5 +83,117 @@ describe('claude sessions', () => {
 
     expect(stats.totalTokens).toBe(NA);
     expect(stats.autocompactions).toBe(NA);
+  });
+});
+
+const OS = (await run('uname', ['-s'])).stdout.trim();
+type Named = { path: string; mtimeMs: number; size: number } | null;
+
+describe('a Claude Code session named by its id', () => {
+  // The files `names` under a new home's `.claude/projects`; returns that folder.
+  function projectsWith(names: string[]) {
+    const projects = join(tempHome(), '.claude/projects');
+    for (const name of names) {
+      mkdirSync(join(projects, name, '..'), { recursive: true });
+      writeFileSync(join(projects, name), 'x');
+    }
+    return projects;
+  }
+
+  test('is found in whichever session folder holds it, in one listing', async () => {
+    // `three` is sub-agent data, in a folder beside the sessions of `-b`; `four` is in no
+    // session folder
+    const projects = projectsWith(['-a/one.jsonl', '-a/other.jsonl', '-b/two.jsonl', '-b/two/subagents/three.jsonl', '-b/two/three.jsonl', 'four.jsonl']);
+    const { exec, calls } = recordingRun();
+    const hook = createClaudeSessions({ execOn: () => exec });
+
+    // the workspace folder is none of the folders the sessions ran in
+    const where = { machine: null, cwd: '/elsewhere', home: join(projects, '../..'), os: OS };
+    const files: Named[] = await hook.named(where, ['two', null, 'three', 'one', 'four', 'none']);
+
+    expect(files.map((file) => file?.path ?? null)).toEqual([`${projects}/-b/two.jsonl`, null, null, `${projects}/-a/one.jsonl`, null, null]);
+    expect(calls.map((call) => call.command)).toEqual(['find']);
+    // only the files the ids can name are printed, and the folders beside them not descended
+    expect(calls[0].args.slice(0, 4)).toEqual(['-H', projects, '-maxdepth', '2']);
+    expect(calls[0].args.filter((arg) => arg.endsWith('.jsonl'))).toEqual(['two.jsonl', 'three.jsonl', 'one.jsonl', 'four.jsonl', 'none.jsonl']);
+  });
+
+  test('is found below a projects folder that is a symbolic link', async () => {
+    // a dotfile manager keeps the sessions elsewhere and links the folder
+    const home = tempHome();
+    mkdirSync(join(home, 'kept/-a'), { recursive: true });
+    mkdirSync(join(home, '.claude'));
+    writeFileSync(join(home, 'kept/-a/one.jsonl'), 'x');
+    symlinkSync(join(home, 'kept'), join(home, '.claude/projects'));
+    const { exec } = recordingRun();
+    const hook = createClaudeSessions({ execOn: () => exec });
+
+    const [file]: Named[] = await hook.named({ machine: null, cwd: '/elsewhere', home, os: OS }, ['one']);
+
+    expect(file?.path).toBe(`${home}/.claude/projects/-a/one.jsonl`);
+  });
+});
+
+describe('the folder a Claude Code session records', () => {
+  const entry = (fields: object) => `${JSON.stringify({ type: 'user', sessionId: 's1', ...fields })}\n`;
+  // the first entries hold no folder, or none that is absolute; the session then moves on
+  const START = `${entry({ type: 'summary' })}${entry({ type: 'file-history-snapshot' })}${entry({ cwd: 'relative/app' })}${entry({ cwd: '/work/app/sub' })}`;
+  const LATER = entry({ cwd: '/work/other' });
+  // lines that carry no figure, far more than the tail window holds
+  const FILLER = '{"type":"attachment"}\n'.repeat(Math.ceil((TAIL_BYTES * 2) / 22));
+
+  // A hook over a home whose session `s1` holds `text`, with the session as `named` finds it.
+  async function sessionOf(text: string) {
+    const { home, dir } = homeWith([{ name: 's1.jsonl', mtimeMs: NOW - 1_000, text }]);
+    const { exec, calls } = recordingRun();
+    const hook = createClaudeSessions({ execOn: () => exec });
+    const [file]: Named[] = await hook.named({ machine: null, cwd: CWD, home, os: OS }, ['s1']);
+    const heads = () => calls.filter((call) => call.command === 'head');
+    return { hook, file: file!, path: `${dir}/s1.jsonl`, heads };
+  }
+
+  test('is the folder it started in, from the text read of a file that fits the tail window', async () => {
+    const { hook, file, heads } = await sessionOf(`${START}${LATER}`);
+
+    await hook.read(file, { machine: null });
+
+    expect(await hook.folder(file, { machine: null })).toBe('/work/app/sub');
+    expect(heads()).toHaveLength(0);
+  });
+
+  test('of a larger file is read from its head, once', async () => {
+    const { hook, file, path, heads } = await sessionOf(`${START}${FILLER}${LATER}`);
+
+    await hook.read(file, { machine: null });
+    const folders = [await hook.folder(file, { machine: null })];
+    // the file grows: where the session started holds
+    folders.push(await hook.folder({ ...file, size: file.size + 1, mtimeMs: file.mtimeMs + 1000 }, { machine: null }));
+
+    expect(folders).toEqual(['/work/app/sub', '/work/app/sub']);
+    expect(heads().map((call) => call.args)).toEqual([['-c', String(START_BYTES), '--', path]]);
+  });
+
+  test('is none when the head of the file holds none, which is remembered while the file is unchanged', async () => {
+    // the first entry with a folder lies behind the head that is read
+    const { hook, file, heads } = await sessionOf(`${entry({ type: 'summary' })}${FILLER}${LATER}`);
+
+    const folders = [await hook.folder(file, { machine: null }), await hook.folder(file, { machine: null })];
+    expect(folders).toEqual([null, null]);
+    expect(heads()).toHaveLength(1);
+
+    await hook.folder({ ...file, size: file.size + 1 }, { machine: null });
+    expect(heads()).toHaveLength(2);
+  });
+
+  test('is asked again after a head that could not be read', async () => {
+    const { hook, file, path } = await sessionOf(`${START}${FILLER}`);
+
+    // the real `head` fails on a file it may not read, as it would when ssh fails
+    chmodSync(path, 0o000);
+    const failed = await hook.folder(file, { machine: null });
+    chmodSync(path, 0o644);
+
+    expect(failed).toBe(null);
+    expect(await hook.folder(file, { machine: null })).toBe('/work/app/sub');
   });
 });

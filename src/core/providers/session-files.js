@@ -1,12 +1,93 @@
 // Copied from herdr-session-stats (src/providers/session-files.js).
 //
-// Finding a harness's session files and keeping the readers of them: shared by the providers'
-// `createSessions` hooks. Runtime-neutral: it takes the plugin's runner bound to an Orca host
-// and runs only `find` with `stat`, and `tail` and `dd` through the session reader
-// (src/core/refresh.js).
+// Finding a harness's session files, keeping the readers of them and what their heads told:
+// shared by the providers' `createSessions` hooks. Runtime-neutral: it takes the plugin's runner
+// bound to an Orca host and runs only `find` with `stat`, `head`, and `tail` and `dd` through
+// the session reader (src/core/refresh.js).
 
+import { createLimit } from '../limit.js';
 import { createSessionReader } from '../refresh.js';
 import { linkSession, newestFirst } from '../session-link.js';
+
+// Most `head` reads (the folder a session records, and what else its head tells) run at once
+// by one hook.
+const HEAD_READS = 4;
+
+// A folder a session records as its own, or null for a value that names none. A path that is
+// not absolute names none: git would be run in it relative to the plugin's own process folder.
+export const absoluteFolder = (value) => (typeof value === 'string' && value.startsWith('/') ? value : null);
+
+// Whether `file` is as it was when the head `hit` was read from it, by its time and size.
+export const unchangedSince = (hit, file) => hit.mtimeMs === file.mtimeMs && hit.size === file.size;
+
+// What the heads of one hook's session files told, kept between calls. `head`: the arguments of
+// `head` that bound the read (`['-n', '2']`). `tells(text)`: what a text that starts with the
+// head of a file tells, an object with `cwd`, the folder the session records as its own or
+// null, and whatever else the hook reads there (omp: the title).
+//
+// machine and path -> { mtimeMs, size, cwd, ... }: what `tells` gave, with the time and size of
+// the file it was read from. One entry per file, replaced when the file is read again.
+// - What it told besides the folder holds while the file is unchanged, so a refresh of quiet
+//   files runs no program.
+// - A folder found is kept for good, since a harness writes where a session started once, when
+//   it starts; null (no folder in what was read) is asked again only when the file changed.
+// - A head that could not be read (a failed program, as when ssh fails) leaves no entry and
+//   replaces none: nothing was learned, so the next call reads the file again.
+export function sessionHeads(execOn, { head, tells }) {
+  const heads = new Map();
+  const reads = createLimit(HEAD_READS);
+  const keyOf = (machine, file) => `${machine ?? ''}\0${file.path}`;
+  const keep = (machine, file, text, hit) => {
+    const told = { mtimeMs: file.mtimeMs, size: file.size, ...tells(text) };
+    if (hit?.cwd) told.cwd = hit.cwd;
+    heads.set(keyOf(machine, file), told);
+    return told;
+  };
+  // The entry of `file` when it tells the file's folder as it is now: a folder found, or none
+  // in a file unchanged since; else null.
+  function known(machine, file) {
+    const hit = heads.get(keyOf(machine, file));
+    return hit && (hit.cwd !== null || unchangedSince(hit, file)) ? hit : null;
+  }
+  // The text of the head of a file, or null when it could not be read (a failed program).
+  async function readHead(machine, path) {
+    try {
+      const { code, stdout } = await execOn(machine)('head', [...head, '--', path]);
+      return code === 0 ? stdout : null;
+    } catch {
+      return null;
+    }
+  }
+
+  const self = {
+    // The entry last kept of `file`, whatever the file is now, or null.
+    last(machine, file) {
+      return heads.get(keyOf(machine, file)) ?? null;
+    },
+
+    // The entry of `file`, from one `head` when the file changed since it was read, or never
+    // was. When that read fails it is the earlier entry, or null without one.
+    async of(machine, file) {
+      const hit = self.last(machine, file);
+      if (hit && unchangedSince(hit, file)) return hit;
+      const text = await reads(() => readHead(machine, file.path));
+      return text === null ? hit : keep(machine, file, text, hit);
+    },
+
+    // Takes what `text` tells, the text of a session reader's read of `file` that holds the
+    // whole file, unless the file's folder is known: no `head` is run for such a file.
+    learn(machine, file, text) {
+      if (!known(machine, file)) keep(machine, file, text, null);
+    },
+
+    // The folder the session of `file` records, or null: from what is known of the file, else
+    // from one `head`, and again at the next call when that read failed.
+    async folder(machine, file) {
+      return (known(machine, file) ?? (await self.of(machine, file)))?.cwd ?? null;
+    },
+  };
+  return self;
+}
 
 // The readers of one hook. `on(machine)`: the reader that keeps that host's per-file totals,
 // made on first use. `execOn(machine)` is the plugin's runner bound to a host, `fold` the

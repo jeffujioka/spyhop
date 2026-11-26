@@ -8,6 +8,8 @@
 // and nothing is written. The database and its layout: herdr-session-stats
 // docs/opencode-session-format.md.
 
+import { absoluteFolder } from './session-files.js';
+
 // opencode's database under the host's home folder. opencode follows `XDG_DATA_HOME`; the
 // plugin reads the default place only, and an agent whose opencode keeps it elsewhere reads n/a.
 const databaseOf = (home) => `${home}/.local/share/opencode/opencode.db`;
@@ -22,7 +24,7 @@ function sessionQuery(cwd, except = []) {
   const folder = cwd.length > 1 ? cwd.replace(/\/+$/, '') : cwd;
   const others = except.length ? `AND id NOT IN (${except.map(literal).join(', ')}) ` : '';
   return (
-    'SELECT id, time_updated AS mtimeMs FROM session ' +
+    'SELECT id, time_updated AS mtimeMs, directory FROM session ' +
     `WHERE directory = ${literal(folder)} AND parent_id IS NULL AND time_archived IS NULL ${others}` +
     'ORDER BY time_updated DESC LIMIT 1'
   );
@@ -30,15 +32,17 @@ function sessionQuery(cwd, except = []) {
 
 // The sessions whose ids are `ids`, whatever their folder.
 function namedQuery(ids) {
-  return `SELECT id, time_updated AS mtimeMs FROM session WHERE id IN (${ids.map(literal).join(', ')})`;
+  return `SELECT id, time_updated AS mtimeMs, directory FROM session WHERE id IN (${ids.map(literal).join(', ')})`;
 }
 
-// A session row as the session `{ path, mtimeMs, size }` it links: `path` is the session id,
-// which names it on its host, and `size` is 0, the database being one file for all sessions.
-// Null for no row or a row of another shape.
+// A session row as the session `{ path, mtimeMs, size, folder }` it links: `path` is the
+// session id, which names it on its host, `size` is 0, the database being one file for all
+// sessions, and `folder` is the row's `directory`, the folder the session is of (see
+// `absoluteFolder`), which the hook's `folder` answers with. Null for no row or a row of
+// another shape.
 function sessionOf(row) {
   if (!row || typeof row.id !== 'string' || !Number.isFinite(row.mtimeMs)) return null;
-  return { path: row.id, mtimeMs: row.mtimeMs, size: 0 };
+  return { path: row.id, mtimeMs: row.mtimeMs, size: 0, folder: absoluteFolder(row.directory) };
 }
 
 // One row per message of a session with the figures of its `data` column; `summary` is 1 on
@@ -109,7 +113,7 @@ export function createOpencodeSessions({ execOn }) {
     },
 
     // The session each of `sessionIds` names, or null: an opencode session id is the `id` of
-    // its row. All null when the database cannot be read.
+    // its row, whatever folder the session is of. All null when the database cannot be read.
     async named({ machine, home }, sessionIds) {
       const ids = sessionIds.filter(Boolean);
       const rows = ids.length ? await select(execOn(machine), databaseOf(home), namedQuery(ids)) : [];
@@ -139,6 +143,12 @@ export function createOpencodeSessions({ execOn }) {
       reads.set(key, { mtimeMs: file.mtimeMs, at: now, input });
       if (reads.size > MAX_CACHED) reads.delete(reads.keys().next().value);
       return input;
+    },
+
+    // The folder the linked session is of, or null: the `directory` of the row that found it,
+    // so no program is run.
+    async folder(file) {
+      return file.folder;
     },
   };
 }

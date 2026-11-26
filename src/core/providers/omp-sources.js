@@ -10,20 +10,17 @@
 // get` write omp's agent.db and its natives folder when they start, so the compaction settings
 // are read from config.yml itself.
 
-import { createLimit } from '../limit.js';
 import { createTtlCache } from '../ttl-cache.js';
 import { parseEntries } from './jsonl.js';
 import { ompProvider } from './omp.js';
-import { findNamedFiles, listFilesOfFolders, sessionReaders } from './session-files.js';
-
-// Most `head` reads (a session's title and the folder it records) run at once by one hook.
-const HEAD_READS = 4;
+import { absoluteFolder, findNamedFiles, listFilesOfFolders, sessionHeads, sessionReaders, unchangedSince } from './session-files.js';
 
 // Most heads one listing reads for the agents no session id named: those of the newest listed
 // files whose head is not known yet or whose file changed since. It bounds what a refresh
 // costs, not which sessions an agent may link to: a head once read costs nothing while its file
-// is unchanged, so a workspace with years of sessions is read 32 heads per refresh, HEAD_READS
-// at a time, until every head is known, and an idle agent's old session is reached then.
+// is unchanged, so a workspace with years of sessions is read 32 heads per refresh, a few at a
+// time (see `sessionHeads`), until every head is known, and an idle agent's old session is
+// reached then.
 export const HEADS_PER_LISTING = 32;
 
 // The model catalogue and the compaction settings change rarely; they are read again after
@@ -147,17 +144,6 @@ function catalogueQuery(provider) {
 // The folder omp keeps every working folder's session folder in.
 const sessionsRoot = (home) => `${home}/.omp/agent/sessions`;
 
-// The text of the first `lines` lines of a file, or null when it could not be read (a failed
-// program).
-async function readHead(run, path, lines) {
-  try {
-    const { code, stdout } = await run('head', ['-n', String(lines), '--', path]);
-    return code === 0 ? stdout : null;
-  } catch {
-    return null;
-  }
-}
-
 // The title of a session, from `text`, which starts with the file's first line: omp writes the
 // `title` entry there and rewrites it in place when the title changes (it always equals the
 // latest `title_change` entry). '' when the line is not a title entry: the session then matches
@@ -172,13 +158,12 @@ function titleIn(text) {
 const SESSION_ENTRY_LINES = 2;
 
 // The folder a session records as its own, the `cwd` of its `session` entry, from `text`, which
-// starts with the file's first lines; null when those hold no such entry or it names no folder.
-// A path that is not absolute names none: git would be run in it relative to the plugin's own
-// process folder.
+// starts with the file's first lines; null when those hold no such entry or it names no folder
+// (see `absoluteFolder`).
 function recordedFolder(text) {
   const head = text.split('\n', SESSION_ENTRY_LINES).join('\n');
   const entry = parseEntries(head).find(({ type }) => type === 'session');
-  return typeof entry?.cwd === 'string' && entry.cwd.startsWith('/') ? entry.cwd : null;
+  return absoluteFolder(entry?.cwd);
 }
 
 // Whether `folder` is the folder `top` or one below it.
@@ -195,34 +180,12 @@ export function createOmpSessions({ execOn, readTextOn, kept }) {
   // each machine's reader, which keeps that machine's per-file totals
   const readers = sessionReaders(execOn, ompProvider.fold, kept);
 
-  // machine and path -> { mtimeMs, size, title, cwd }: what the head of a session file told,
-  // its title (see titleIn) and the folder it records (see recordedFolder), with the time and
-  // size of the file it was read from. One entry per file, replaced when the file is read again.
-  // - The title holds while the file is unchanged, so a refresh of quiet files runs no program.
-  // - A folder found is kept for good, since omp writes the `session` entry once, when the
-  //   session starts; null (no such entry in what was read) is asked again only when the file
-  //   changed.
-  // - A head that could not be read (a failed program, as when ssh fails) leaves no entry and
-  //   replaces none: nothing was learned, so the next call reads the file again.
-  const heads = new Map();
-  const headReads = createLimit(HEAD_READS);
-  const keyOf = (machine, file) => `${machine ?? ''}\0${file.path}`;
-  const unchanged = (hit, file) => hit.mtimeMs === file.mtimeMs && hit.size === file.size;
-  function knownFolder(machine, file) {
-    const hit = heads.get(keyOf(machine, file));
-    return hit && (hit.cwd !== null || unchanged(hit, file)) ? hit : null;
-  }
-  // The entry of `file`, from one `head` when the file changed since it was read, or never was.
-  // When that read fails it is the earlier entry, or null without one.
-  async function headOf(machine, file) {
-    const hit = heads.get(keyOf(machine, file));
-    if (hit && unchanged(hit, file)) return hit;
-    const text = await headReads(() => readHead(execOn(machine), file.path, SESSION_ENTRY_LINES));
-    if (text === null) return hit ?? null;
-    const head = { mtimeMs: file.mtimeMs, size: file.size, title: titleIn(text), cwd: hit?.cwd ?? recordedFolder(text) };
-    heads.set(keyOf(machine, file), head);
-    return head;
-  }
+  // What the head of each session file told (see `sessionHeads`): its title (see titleIn) and
+  // the folder it records (see recordedFolder).
+  const heads = sessionHeads(execOn, {
+    head: ['-n', String(SESSION_ENTRY_LINES)],
+    tells: (text) => ({ title: titleIn(text), cwd: recordedFolder(text) }),
+  });
 
   // the slow sources, each reused for SLOW_SOURCE_TTL_MS, also by agents asking at once
   const cached = createTtlCache(SLOW_SOURCE_TTL_MS);
@@ -280,11 +243,11 @@ export function createOmpSessions({ execOn, readTextOn, kept }) {
         listed
           .filter((file) => !except.includes(file.path))
           .map(async (file) => {
-            const hit = heads.get(keyOf(machine, file));
-            const settled = hit && (unchanged(hit, file) || (hit.cwd !== null && !isAtOrBelow(hit.cwd, cwd)));
+            const hit = heads.last(machine, file);
+            const settled = hit && (unchangedSince(hit, file) || (hit.cwd !== null && !isAtOrBelow(hit.cwd, cwd)));
             if (settled || reads >= HEADS_PER_LISTING) return { file, head: hit };
             reads += 1;
-            return { file, head: await headOf(machine, file) };
+            return { file, head: await heads.of(machine, file) };
           }),
       );
       return found.filter(({ head }) => head?.cwd && isAtOrBelow(head.cwd, cwd)).map(({ file, head }) => ({ ...file, title: head.title }));
@@ -294,9 +257,7 @@ export function createOmpSessions({ execOn, readTextOn, kept }) {
     // the text read also tells the folder it records, for `folder`.
     async read(file, { machine, home, now }) {
       const { text, sources, state } = await readers.on(machine).read(file);
-      if (sources.wholeFile && !knownFolder(machine, file)) {
-        heads.set(keyOf(machine, file), { mtimeMs: file.mtimeMs, size: file.size, title: titleIn(text), cwd: recordedFolder(text) });
-      }
+      if (sources.wholeFile) heads.learn(machine, file, text);
       const [catalogue, compaction] = await Promise.all([
         readCatalogue(machine, home, lastAssistantProvider(text), now),
         readCompaction(machine, home, now),
@@ -308,8 +269,8 @@ export function createOmpSessions({ execOn, readTextOn, kept }) {
     // `read` of a file that is whole in its window found answers; the head of a larger file
     // linked by its id is outside that window and is read once, by one `head`, and again at
     // the next call when that read failed.
-    async folder(file, { machine }) {
-      return (knownFolder(machine, file) ?? (await headOf(machine, file)))?.cwd ?? null;
+    folder(file, { machine }) {
+      return heads.folder(machine, file);
     },
 
     // The finished scans of the files read, to keep for a later run (see `sessionReaders`).

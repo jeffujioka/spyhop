@@ -12,7 +12,7 @@ import { sessionDirSlug as claudeSlug } from '../src/core/providers/claude-sourc
 import { NA, STAT_FIELDS } from '../src/core/providers/index.js';
 import { HEADS_PER_LISTING } from '../src/core/providers/omp-sources.js';
 import { run, type Run } from '../src/exec.ts';
-import { NOW, agent, cardsOf, costOf, ompSessionDir, opencodeDatabase, refreshing, sessions, tokensOf, workspace } from './helpers/agent-cards.ts';
+import { NOW, agent, cardsOf, costOf, ompSessionDir, opencodeDatabase, refreshing, tokensOf, workspace } from './helpers/agent-cards.ts';
 import { fixtureText, tempHome } from './helpers/files.ts';
 
 // The ids of the omp fixtures' sessions (their `session` entries); omp names a session file
@@ -36,13 +36,23 @@ function ompSession(home: string, path: string, session: typeof BASIC, minutesAg
   return file;
 }
 
-// Claude Code names a session file `<id>.jsonl`: `aaaa` holds basic.jsonl (181k tokens) and is
-// the newest, `bbbb` holds no-usage.jsonl (no tokens).
-function claudeSessions(home: string, path: string) {
+// Writes a Claude Code session of the fixture into the session folder of `path`, which its
+// entries record as their folder, modified `minutesAgo` before NOW: Claude Code names a session
+// file `<id>.jsonl`.
+function claudeSession(home: string, path: string, id: string, from: string, minutesAgo: number) {
   const dir = join(home, '.claude/projects', claudeSlug(path));
-  sessions(dir, { 'aaaa.jsonl': 'claude/basic.jsonl', 'bbbb.jsonl': 'claude/no-usage.jsonl' });
-  utimesSync(join(dir, 'aaaa.jsonl'), new Date(NOW - 60_000), new Date(NOW - 60_000));
-  utimesSync(join(dir, 'bbbb.jsonl'), new Date(NOW - 30 * 60_000), new Date(NOW - 30 * 60_000));
+  const file = join(dir, `${id}.jsonl`);
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(file, fixtureText(from).replaceAll('"isSidechain":false', `"isSidechain":false,"cwd":${JSON.stringify(path)}`));
+  const time = new Date(NOW - minutesAgo * 60_000);
+  utimesSync(file, time, time);
+}
+
+// The Claude Code sessions of `path`: `aaaa` holds basic.jsonl (181k tokens) and is the newest,
+// `bbbb` holds no-usage.jsonl (no tokens).
+function claudeSessions(home: string, path: string) {
+  claudeSession(home, path, 'aaaa', 'claude/basic.jsonl', 1);
+  claudeSession(home, path, 'bbbb', 'claude/no-usage.jsonl', 30);
 }
 
 // The real runner, counting the `head` runs (omp's title reads) and the most at once.
@@ -215,6 +225,35 @@ test('A session id that names no session links as without one', async () => {
   assert.equal(tokensOf(model), '181k');
 });
 
+test('Claude Code session of a sub-folder found by session id', async () => {
+  const home = tempHome();
+  // the workspace folder has no Claude Code session of its own
+  const projects = join(home, 'projects');
+  const boto = join(projects, 'boto');
+  mkdirSync(boto, { recursive: true });
+  claudeSession(home, boto, 'aaaa', 'claude/basic.jsonl', 1);
+
+  const [{ model }] = await cardsOf(home, [agent({ agent: 'claude', sessionId: 'aaaa', path: projects })]);
+
+  assert.equal(tokensOf(model), '181k');
+  assert.equal(model.groups[0].path.value, '~/projects/boto');
+});
+
+test('Harness without titles keeps the newest session of the workspace folder', async () => {
+  const home = tempHome();
+  const projects = join(home, 'projects');
+  const boto = join(projects, 'boto');
+  mkdirSync(boto, { recursive: true });
+  claudeSessions(home, projects);
+  // the sub-folder's session is newer than both, and logs no tokens
+  claudeSession(home, boto, 'cccc', 'claude/no-usage.jsonl', 0);
+
+  const [{ model }] = await cardsOf(home, [agent({ agent: 'claude', path: projects })]);
+
+  assert.equal(tokensOf(model), '181k');
+  assert.equal(model.groups[0].path.value, '~/projects');
+});
+
 test('Two opencode agents told apart by session id', async () => {
   const home = tempHome();
   opencodeDatabase(home);
@@ -232,6 +271,17 @@ test('Two opencode agents told apart by session id', async () => {
       ['t2', '$0.41'],
     ],
   );
+});
+
+test('opencode session of another folder found by session id', async () => {
+  const home = tempHome();
+  opencodeDatabase(home);
+
+  // ses_basic is a session of /work/demo and logs $0.41
+  const [{ model }] = await cardsOf(home, [agent({ agent: 'opencode', sessionId: 'ses_basic', path: '/work' })]);
+
+  assert.equal(costOf(model), '$0.41');
+  assert.equal(model.groups[0].path.value, '/work/demo');
 });
 
 test('An agent without a session id never takes a named session', async () => {
