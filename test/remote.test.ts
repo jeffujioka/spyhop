@@ -240,7 +240,9 @@ test('Focused workspace on a paired Orca server', async () => {
     ?.projects.find((project) => project.name === 'spyhop')
     ?.workspaces.find((row) => row.name === 'main');
   assert.ok(workspace, JSON.stringify(tree.hosts.map((host) => host.name)));
-  assert.equal(tree.focused, workspace.id);
+  // the worker names Orca's id of the focused workspace, by which the panel finds its row
+  assert.equal(tree.focused, worktreeId);
+  assert.ok(workspace.workspaceIds.includes(worktreeId), JSON.stringify(workspace.workspaceIds));
 });
 
 // A paired server that answers its lists with no result, or with a null agent, still leaves the

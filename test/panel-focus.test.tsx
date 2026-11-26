@@ -111,10 +111,12 @@ test('An answer asked before focus moved again moves no row', async () => {
   const second = view.emit('workspace.changed', { context: host.focus('fix-login') });
   try {
     await setTimeout(100);
+    const asked = host.callsOf('workspace.list').length;
     release();
-    // the answer asked again after the second move waits
+    // the answer asked again after the second move waits; it is asked once the stale answer
+    // is drawn
     release = host.holdLists();
-    await setTimeout(100);
+    while (host.callsOf('workspace.list').length === asked) await setTimeout(10);
     assert.equal(isOpen(view, 'fix-login'), true);
     assert.equal(isOpen(view, 'deploy'), false);
   } finally {
@@ -124,6 +126,34 @@ test('An answer asked before focus moved again moves no row', async () => {
   await view.settled();
   assert.equal(isOpen(view, 'fix-login'), true);
   assert.equal(isOpen(view, 'deploy'), false);
+  assert.deepEqual(view.errors, []);
+});
+
+test('Focus change while the panel is hidden shows at once when it is shown again', async () => {
+  const { view, host } = await open(
+    [
+      { project: 'api', name: 'fix-login', agents: ['working'] },
+      { project: 'infra', name: 'deploy', agents: ['working'], hostId: `ssh:${DEVBOX}` },
+    ],
+    'fix-login',
+  );
+  await view.setVisible(false);
+  await view.emit('workspace.changed', { context: host.focus('deploy') });
+  const release = host.holdLists();
+
+  // shown again, the panel asks the worker, whose answer waits for the release
+  const shown = view.setVisible(true);
+  try {
+    await setTimeout(100);
+    for (const name of ['devbox', 'infra', 'deploy']) assert.equal(isOpen(view, name), true, name);
+    assert.equal(isOpen(view, 'fix-login'), false);
+  } finally {
+    release();
+    await shown;
+  }
+  await view.settled();
+  for (const name of ['devbox', 'infra', 'deploy']) assert.equal(isOpen(view, name), true, name);
+  assert.equal(isOpen(view, 'fix-login'), false);
   assert.deepEqual(view.errors, []);
 });
 

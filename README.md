@@ -16,6 +16,10 @@ host are expanded and every other row is collapsed. When focus moves to another 
 workspace, its project and its host are expanded, and the workspace expanded for the previous
 focus collapses unless you opened or closed it since; every other row stays as you leave it.
 
+Above the tree, the Focused block shows the focused workspace: its name, with its host and
+project under it, and its cards, Focus pane buttons included. It follows focus as soon as Orca
+reports that focus moved; while the focused workspace has no Orca agent, it is not shown.
+
 One card per harness session an agent links to (agents on one session share a card), and one
 per agent that links to none. A card has five groups, always in this order:
 

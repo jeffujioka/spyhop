@@ -33,7 +33,8 @@ export type CardView = { id: string; focused: boolean; groups: [CardIdentity, ..
 export type TreeAnswer = {
   // The Orca hosts, with their Orca projects and workspaces that have an Orca agent (src/tree.ts).
   hosts: HostRow<CardView>[];
-  // The id of the focused Orca workspace's row, null when no row is focused.
+  // Orca's id of the focused Orca workspace, as `workspace.readContext` answers it; null when no
+  // workspace is focused. The panel finds its row by the rows' `workspaceIds`.
   focused: string | null;
 };
 
