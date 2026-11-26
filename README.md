@@ -59,7 +59,9 @@ database). An agent of any other harness gets a card whose figures all read `n/a
 
 An agent on an SSH workspace, and an agent on a paired Orca server, get cards too, under their
 own host row. Their session files and git facts are read over `ssh <alias> -o BatchMode=yes -o
-ConnectTimeout=5`, at most four commands at once per host, with read-only commands only: `cd`,
+ConnectTimeout=5`, at most eight commands at once on a host whose SSH connection spyhop keeps
+for itself and four on any other (one whose own SSH settings already reuse connections, or
+whose settings cannot be read), with read-only commands only: `cd`,
 `uname -s`, `printenv HOME`, `cat`, `head`, `tail`, `dd` (reading a block, never writing one),
 `find` with `stat`, `git branch --show-current`, `git remote get-url` and `sqlite3 -readonly`.
 The hosts and the paired servers' agents are listed with the `orca` CLI on every refresh while

@@ -1,32 +1,76 @@
-// The runner on another Orca host: each program a fresh `ssh <alias>`, at most four at once per
-// alias so an SSH server's limit on new connections is not crossed, giving up a connection after
-// 5 s, reusing one connection per alias when the alias's own ssh settings do not, and never
+// The runner on another Orca host: each program a fresh `ssh <alias>`, giving up a connection
+// after 5 s, reusing one connection per alias when the alias's own ssh settings do not, at most
+// eight at once on an alias whose connection is spyhop's own and four on any other, and never
 // reading an alias as an ssh option. `ssh` is the stand-in of test/helpers/stand-ins.ts, which
 // runs the command here; every other program is real.
 import assert from 'node:assert/strict';
-import { chmodSync, lstatSync, mkdirSync, renameSync, rmSync, statSync, symlinkSync } from 'node:fs';
+import { chmodSync, lstatSync, mkdirSync, readdirSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { watch } from 'node:fs/promises';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { run } from '../src/exec.ts';
 import { tempHome } from './helpers/files.ts';
 import { standIns } from './helpers/stand-ins.ts';
 
-test('At most four programs at once on one host', async () => {
-  const running = join(tempHome(), 'running');
-  mkdirSync(running);
-  const calls = standIns({ homes: { box: tempHome() }, orca: {} });
+// A program that runs until the test releases it: it leaves a file named after itself in its
+// host's `running` folder as it starts, ends once the host's home holds `release`, and prints
+// its name.
+const UNTIL_RELEASED = 'touch "$HOME/running/$0"; until [ -e "$HOME/release" ]; do sleep 0.01; done; echo "$0"';
 
-  // each program counts the others running, then runs a while
-  const script = 'ls "$0" | wc -l; touch "$0/$1"; sleep 0.3; rm "$0/$1"';
-  const results = await Promise.all(Array.from({ length: 8 }, (_, i) => run('sh', ['-c', script, running, String(i)], { on: 'box' })));
+// Asks for 12 such programs on an alias, whose home is `home`.
+function twelve(alias: string, home: string) {
+  mkdirSync(join(home, 'running'));
+  return Array.from({ length: 12 }, (_, i) => run('sh', ['-c', UNTIL_RELEASED, `${alias}-${i}`], { on: alias }));
+}
 
-  assert.deepEqual(
-    results.map((result) => result.code),
-    Array(8).fill(0),
-  );
-  const most = Math.max(...results.map((result) => Number(result.stdout.trim())));
-  assert.ok(most <= 3, `${most + 1} programs at once`);
-  assert.deepEqual(calls.ssh()[0].slice(0, 6), ['box', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=5', '--']);
+// How many of a host's programs run at once before the release: the files in `running` once
+// `count` of them are there (or, should they never be, 5 s have passed) and one more program,
+// asked for only then on the alias `elsewhere`, has ended, so that a program over `count` had
+// the time to start too.
+async function atOnce(home: string, count: number) {
+  const folder = join(home, 'running');
+  const changes = watch(folder, { signal: AbortSignal.timeout(5000) });
+  try {
+    while (readdirSync(folder).length < count) await changes.next();
+  } catch {
+    // the 5 s passed: the count below tells
+  } finally {
+    await changes.return();
+  }
+  await run('true', [], { on: 'elsewhere' });
+  return readdirSync(folder).length;
+}
+
+// what the 12 programs of an alias print, each its own name
+const outputs = (alias: string) => Array.from({ length: 12 }, (_, i) => ({ code: 0, stdout: `${alias}-${i}\n`, stderr: '' }));
+
+// `ssh -G` is read at most once a minute per alias for this process, so each test has its own alias.
+
+test('Eight at once on a connection spyhop owns', async () => {
+  const home = tempHome();
+  standIns({ homes: { 'devbox-owned': home, elsewhere: tempHome() }, orca: {}, controlmaster: { 'devbox-owned': 'no' } });
+
+  const programs = twelve('devbox-owned', home);
+  const most = await atOnce(home, 8);
+  writeFileSync(join(home, 'release'), '');
+  const results = await Promise.all(programs);
+
+  assert.equal(most, 8);
+  assert.deepEqual(results, outputs('devbox-owned'));
+});
+
+test('Four at once on a connection spyhop does not own', async () => {
+  const homes = { 'devbox-shared': tempHome(), oldbox: tempHome(), elsewhere: tempHome() };
+  standIns({ homes, orca: {}, controlmaster: { 'devbox-shared': 'auto' } });
+
+  const programs = [...twelve('devbox-shared', homes['devbox-shared']), ...twelve('oldbox', homes.oldbox)];
+  const most = [await atOnce(homes['devbox-shared'], 4), await atOnce(homes.oldbox, 4)];
+  writeFileSync(join(homes['devbox-shared'], 'release'), '');
+  writeFileSync(join(homes.oldbox, 'release'), '');
+  const results = await Promise.all(programs);
+
+  assert.deepEqual(most, [4, 4]);
+  assert.deepEqual(results, [...outputs('devbox-shared'), ...outputs('oldbox')]);
 });
 
 test('An alias that reads as an ssh option is refused', async () => {
@@ -42,8 +86,6 @@ test('An alias that reads as an ssh option is refused', async () => {
 const REUSE = ['ControlMaster=auto', `ControlPath=/tmp/spyhop-${process.getuid!()}/%C`, 'ControlPersist=60'];
 // the options of an ssh call that set connection reuse
 const reuseOptions = (args: string[]) => args.filter((arg) => /^Control(Master|Path|Persist)=/.test(arg));
-
-// `ssh -G` is read at most once a minute per alias for this process, so each test has its own alias.
 
 test('Alias that already reuses connections', async () => {
   // `ssh -G` prints `controlmaster yes` as `true`

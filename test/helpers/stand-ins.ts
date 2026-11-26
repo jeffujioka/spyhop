@@ -29,7 +29,7 @@ export function standIns({
   writeFileSync(log, '');
   // each call one line, the program and its arguments separated by tabs, appended in one write
   // while the line is shorter than the shell's write buffer, so that calls running at once (up to
-  // four per host) never interleave their lines
+  // eight per host) never interleave their lines
   const logCall = (program: string) =>
     `line='${program}'"$(printf '\\t')"; for a in "$@"; do line="$line$a$(printf '\\t')"; done; printf '%s\\n' "$line" >> '${log}'`;
   const orcaCases = Object.entries(orca).map(([args, output], i) => {

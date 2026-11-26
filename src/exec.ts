@@ -7,9 +7,10 @@
 // (`ssh -G <alias>`, read on this computer at most once every SETTINGS_TTL_MS) already reuse
 // connections, `-o ControlMaster=auto -o ControlPath=/tmp/spyhop-<uid>/%C -o ControlPersist=60`
 // follows ConnectTimeout, so the alias's programs share one connection; when `ssh -G` fails, or
-// the socket folder is a symlink or another user's, nothing is added. At most SSH_AT_ONCE
-// programs run on one alias at once, the others waiting their turn, so a host's SSH server never
-// sees more new connections than its default limit lets through. An alias that starts with `-`,
+// the socket folder is a symlink or another user's, nothing is added. At most OWNED_AT_ONCE of
+// an alias's programs run at once with those options, and at most SHARED_AT_ONCE without them,
+// the others waiting their turn, so a host's SSH server never sees more sessions on spyhop's
+// connection, or more new connections, than its default limits let through. An alias that starts with `-`,
 // which ssh would read as an option, is refused as an unreachable host. A program that exits non-zero
 // (ssh too, as for an unreachable host) resolves with its code; one that cannot start, runs past
 // the timeout or prints past the output cap rejects, and the core reads n/a for what it asked.
@@ -25,8 +26,14 @@ export const RUN_TIMEOUT_MS = 10 * 1000;
 // Most a program may print on stdout or stderr; the session reader's scan blocks fit within it.
 export const MAX_OUTPUT_BYTES = 8 * 1024 * 1024;
 
-// Most programs run at once on one other Orca host: below sshd's default `MaxStartups 10`.
-const SSH_AT_ONCE = 4;
+// Most programs run at once on an alias to whose ssh calls spyhop adds its own options for
+// reusing connections: that connection is spyhop's alone, and this is below sshd's default
+// `MaxSessions 10` on one connection.
+const OWNED_AT_ONCE = 8;
+
+// Most programs run at once on any other alias, whose connection is shared with the user's other
+// ssh sessions or where each program is a new connection: below sshd's default `MaxStartups 10`.
+const SHARED_AT_ONCE = 4;
 
 // How long an alias's `ssh -G` settings are kept before they are read again.
 const SETTINGS_TTL_MS = 60 * 1000;
@@ -42,8 +49,10 @@ export type Run = (command: string, args: string[], options?: RunOptions) => Pro
 // A word as the remote POSIX shell reads it back unchanged.
 const quote = (word: string) => `'${word.replaceAll("'", `'\\''`)}'`;
 
-// alias -> the limit its programs run under
-const hosts = new Map<string, (task: () => Promise<RunResult>) => Promise<RunResult>>();
+// alias, after `owned ` for its ssh calls with spyhop's options for reusing connections and
+// `shared ` for those without -> the limit those programs run under. An alias whose settings
+// change has its calls of either kind under that kind's own limit.
+const limits = new Map<string, (task: () => Promise<RunResult>) => Promise<RunResult>>();
 
 // alias -> the options its ssh calls add for reusing connections, as its `ssh -G` settings ask
 const reuse = createTtlCache(SETTINGS_TTL_MS);
@@ -88,6 +97,8 @@ export const run: Run = async (command, args, options = {}) => {
   const reusing: string[] = await reuse(on, Date.now(), () => reuseOptions(on));
   // BatchMode: ssh never asks for a password or a host key, it fails instead
   const argv = [on, '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=5', ...reusing, '--', cwd ? `'cd' ${quote(cwd)} && ${line}` : line];
-  if (!hosts.has(on)) hosts.set(on, createLimit(SSH_AT_ONCE));
-  return hosts.get(on)!(() => execute('ssh', argv, undefined));
+  const owned = reusing.length > 0;
+  const key = `${owned ? 'owned' : 'shared'} ${on}`;
+  if (!limits.has(key)) limits.set(key, createLimit(owned ? OWNED_AT_ONCE : SHARED_AT_ONCE));
+  return limits.get(key)!(() => execute('ssh', argv, undefined));
 };
