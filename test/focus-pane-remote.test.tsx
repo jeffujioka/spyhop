@@ -3,7 +3,9 @@
 // ssh; a card whose agent has no pane shows no button; a switch that fails changes nothing in the
 // panel and lands in the worker's log. The worker and panel are the real ones; the `orca` CLI and
 // `ssh`, stood in for (test/helpers/stand-ins.ts), play the paired server `jeff` and log their
-// calls.
+// calls. The clock is node:test's mock clock, which no test moves: the panel asks for its tree
+// once, so the calls after a press are the press's own.
+import { mock } from 'node:test';
 import { afterEach, assert, mount, mountWorker, test, type TestPanel, type TestWorker } from 'orca/testing';
 import * as panelModule from '../src/panel.tsx';
 import type { TreeAnswer } from '../src/protocol.ts';
@@ -20,6 +22,7 @@ afterEach(async () => {
   await worker?.deactivate();
   panel = undefined;
   worker = undefined;
+  mock.timers.reset();
 });
 
 // Orca's id of the paired server `jeff`'s environment, as `orca environment list` gives it.
@@ -65,6 +68,7 @@ async function openPanel(agents: object[], workspaces: HostWorkspace[] = [], orc
     },
   });
   const host = orcaHost(home, { workspaces });
+  mock.timers.enable({ apis: ['setTimeout'] });
   worker = await mountWorker(workerModule, { host });
   panel = await mount(panelModule, { host });
   // no workspace is focused: the developer opens every row

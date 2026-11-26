@@ -1,5 +1,6 @@
 // The right-sidebar panel: the tree of Orca host → Orca project → Orca workspace → cards, as the
-// worker answers it (src/protocol.ts), asked again every REFRESH_INTERVAL_MS while the panel is
+// worker answers it (src/protocol.ts), asked again REFRESH_INTERVAL_MS after the previous ask
+// started, or at its answer when that came later, while the panel is
 // open and never while it is closed, hidden or unmounted, and at once when Orca reports that
 // focus moved to another Orca workspace. The rows follow focus: when the panel opens, the focused
 // Orca workspace, its project and its host are expanded and every other row collapsed; when focus
@@ -85,7 +86,7 @@ const FIGURE_TONES: Record<string, Tone> = { ok: 'success', warning: 'warning', 
 let refresh: { visible: ReadonlyAtom<boolean>; follow: (visible: boolean) => void } | null = null;
 
 export function setup({ signal, subscriptions, visible }: PanelContext): void {
-  // clears the timer of the next ask; null when none is set
+  // clears the timer of the next ask; null when none is set: it ran out, or the panel was hidden
   let cancel: (() => void) | null = null;
   let asking = false;
   // focus moved during an ask, whose answer may predate it: ask again once it is in
@@ -126,8 +127,15 @@ export function setup({ signal, subscriptions, visible }: PanelContext): void {
     set(tree, answer);
   }
 
+  // Asks the worker, and sets the timer of the next ask, REFRESH_INTERVAL_MS from this one's
+  // start. Never two asks at once: a timer that runs out during an ask leaves the next to its answer.
   function ask() {
-    cancel = null;
+    cancel?.();
+    const timer = setTimeout(() => {
+      cancel = null;
+      if (!asking) ask();
+    }, REFRESH_INTERVAL_MS);
+    cancel = () => clearTimeout(timer);
     asking = true;
     again = false;
     const asked = moves;
@@ -138,10 +146,8 @@ export function setup({ signal, subscriptions, visible }: PanelContext): void {
       .catch(() => undefined)
       .finally(() => {
         asking = false;
-        if (!shown) return;
-        if (again) return ask();
-        const timer = setTimeout(ask, REFRESH_INTERVAL_MS);
-        cancel = () => clearTimeout(timer);
+        // the next ask is due at once when focus moved or no timer is left to start it
+        if (shown && (again || !cancel)) ask();
       });
   }
 
@@ -172,7 +178,6 @@ export function setup({ signal, subscriptions, visible }: PanelContext): void {
         again = true;
       } else if (shown) {
         // hidden, the panel asks nothing; shown again, it asks at once
-        cancel?.();
         ask();
       }
     }),
