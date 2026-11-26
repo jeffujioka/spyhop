@@ -1,10 +1,10 @@
 // Copied from herdr-session-stats (src/git.js).
 //
-// Read-only git facts for a card: the branch and the origin remote URL of an Orca agent's
-// workspace folder. Runtime-neutral: the plugin passes in its runner,
-// `exec(command, args, options)` (`{ code, stdout, stderr }`, src/exec.ts). Only
-// `git branch --show-current` and `git remote get-url origin` are run, in the workspace folder
-// through `cwd`, so no path is an argument; neither writes, and no shell string or
+// Read-only git facts for a card: the branch and the origin remote URL of the card's folder,
+// the one its session records as its own, else its Orca workspace's. Runtime-neutral: the
+// plugin passes in its runner, `exec(command, args, options)` (`{ code, stdout, stderr }`,
+// src/exec.ts). Only `git branch --show-current` and `git remote get-url origin` are run, in
+// that folder through `cwd`, so no path is an argument; neither writes, and no shell string or
 // redirection is used.
 
 // A folder's branch and origin are asked again after this long (copied from herdr-session-stats,
@@ -31,9 +31,9 @@ async function ask(exec, args, options) {
   }
 }
 
-// `{ cwd, on }`: an Orca workspace folder and the Orca host it is on (null or absent for this
-// computer, where `on` is left out of the call). The commands run on that host, not here.
-// A workspace without a folder is not asked: git would answer for the plugin's own folder.
+// `{ cwd, on }`: a card's folder and the Orca host it is on (null or absent for this computer,
+// where `on` is left out of the call). The commands run on that host, not here. A card
+// without a folder is not asked: git would answer for the plugin's own folder.
 // Resolves to `{ branch, origin }`, each a string or null.
 export async function readGit({ exec }, { cwd, on }) {
   if (!cwd) return { branch: null, origin: null };

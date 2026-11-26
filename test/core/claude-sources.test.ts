@@ -1,4 +1,4 @@
-import { chmodSync, mkdirSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
+import { appendFileSync, chmodSync, mkdirSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, test } from 'node:test';
 import { TAIL_BYTES } from '../../src/core/refresh.js';
@@ -173,15 +173,28 @@ describe('the folder a Claude Code session records', () => {
     expect(heads().map((call) => call.args)).toEqual([['-c', String(START_BYTES), '--', path]]);
   });
 
-  test('is none when the head of the file holds none, which is remembered while the file is unchanged', async () => {
+  test('is none for good when the head of a file larger than it holds none', async () => {
     // the first entry with a folder lies behind the head that is read
     const { hook, file, heads } = await sessionOf(`${entry({ type: 'summary' })}${FILLER}${LATER}`);
 
     const folders = [await hook.folder(file, { machine: null }), await hook.folder(file, { machine: null })];
-    expect(folders).toEqual([null, null]);
-    expect(heads()).toHaveLength(1);
+    // the file grows: it is only appended to, so its head is as it was
+    folders.push(await hook.folder({ ...file, size: file.size + 1, mtimeMs: file.mtimeMs + 1000 }, { machine: null }));
 
-    await hook.folder({ ...file, size: file.size + 1 }, { machine: null });
+    expect(folders).toEqual([null, null, null]);
+    expect(heads()).toHaveLength(1);
+  });
+
+  test('is asked again when a file that was whole in the head read grew', async () => {
+    const { hook, file, path, heads } = await sessionOf(entry({ type: 'summary' }));
+
+    const folders = [await hook.folder(file, { machine: null }), await hook.folder(file, { machine: null })];
+    expect(heads()).toHaveLength(1);
+    // the first entry with a folder is written after the head was read
+    appendFileSync(path, LATER);
+    folders.push(await hook.folder({ ...file, size: statSync(path).size, mtimeMs: file.mtimeMs + 1000 }, { machine: null }));
+
+    expect(folders).toEqual([null, null, '/work/other']);
     expect(heads()).toHaveLength(2);
   });
 

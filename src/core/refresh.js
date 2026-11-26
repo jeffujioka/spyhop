@@ -30,7 +30,7 @@ function charBytes(text, i) {
   return unit >= 0xd800 && unit <= 0xdbff && next >= 0xdc00 && next <= 0xdfff ? 4 : 3;
 }
 
-function utf8Length(text) {
+export function utf8Length(text) {
   let bytes = 0;
   for (let i = 0; i < text.length; i++) {
     const length = charBytes(text, i);

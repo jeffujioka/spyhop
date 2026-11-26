@@ -28,19 +28,25 @@ export const HEADS_PER_LISTING = 32;
 export const SLOW_SOURCE_TTL_MS = 60 * 1000;
 
 // Name of omp's session folder for a working folder (herdr-session-stats
-// docs/omp-session-format.md), as its start and its end: under the home folder it is the path
-// below home with `/` as `-` and a `-` in front (home itself is `-`); elsewhere it is the path
-// with `/` as `-` between two dashes on each end. The session folder of a folder below `cwd`
-// starts with the start of `cwd`'s own, and so does that of a folder beside it whose name
-// starts alike (`projects-old` beside `projects`). omp's own rule has a third case for folders
-// under the system temp folder, which spyhop leaves out: such a folder has no linked session,
-// so its card reads n/a.
-export function slugParts(cwd, home) {
+// docs/omp-session-format.md), which `end` ends: under the home folder it is the path below
+// home with `/` as `-` and a `-` in front (home itself is `-`), and has no end; elsewhere it is
+// the path with `/` as `-` between two dashes on each end. omp's own rule has a third case for
+// folders under the system temp folder, which spyhop leaves out: an agent of such a folder
+// without a session id has no linked session, so its card reads n/a.
+function sessionDirName(cwd, home, end) {
   const flat = (path) => path.replace(/[/\\:]/g, '-');
   const path = cwd.length > 1 ? cwd.replace(/\/+$/, '') : cwd;
-  if (home && (path === home || path.startsWith(`${home}/`))) return [`-${flat(path.slice(home.length + 1))}`, ''];
-  return [`--${flat(path.replace(/^[/\\]/, ''))}`, '--'];
+  if (home && (path === home || path.startsWith(`${home}/`))) return `-${flat(path.slice(home.length + 1))}`;
+  return `--${flat(path.replace(/^[/\\]/, ''))}${end}`;
 }
+
+// omp's session folder name for the working folder `cwd`.
+export const sessionDirSlug = (cwd, home) => sessionDirName(cwd, home, '--');
+
+// The start of that name, without the dashes that end it: the session folder of a folder below
+// `cwd` starts with it, and so does that of a folder beside `cwd` whose name starts alike
+// (`projects-old` beside `projects`).
+const sessionDirStart = (cwd, home) => sessionDirName(cwd, home, '');
 
 // Latest provider named by an assistant message of a session tail, or null. The catalogue
 // holds one row per provider, so the model's window is looked up in its provider's.
@@ -237,7 +243,7 @@ export function createOmpSessions({ execOn, readTextOn, kept }) {
     // rest in later ones, which then give their sessions too. A changed file left for a later
     // call keeps the title last read.
     async list({ machine, cwd, home, os, except }) {
-      const listed = await listFilesOfFolders(execOn(machine), { dir: sessionsRoot(home), os, prefix: slugParts(cwd, home)[0] });
+      const listed = await listFilesOfFolders(execOn(machine), { dir: sessionsRoot(home), os, prefix: sessionDirStart(cwd, home) });
       let reads = 0;
       const found = await Promise.all(
         listed

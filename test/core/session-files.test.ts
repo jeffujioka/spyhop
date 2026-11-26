@@ -1,7 +1,7 @@
-import { mkdirSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
+import { appendFileSync, mkdirSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, test } from 'node:test';
-import { findNamedFiles, findSessionFile, listFilesOfFolders } from '../../src/core/providers/session-files.js';
+import { findNamedFiles, findSessionFile, listFilesOfFolders, sessionHeads } from '../../src/core/providers/session-files.js';
 import { tempHome } from '../helpers/files.ts';
 import { expect } from './helpers/expect.ts';
 import { recordingRun } from './helpers/recording-run.ts';
@@ -105,6 +105,44 @@ describe('listing the session files of the folders named alike', () => {
 
     expect(alike.map((file: { path: string }) => file.path)).toEqual([`${root}/-p-sub/new.jsonl`, `${root}/-p/old.jsonl`]);
     expect(odd.map((file: { path: string }) => file.path)).toEqual([`${root}/-[p]-sub/odd.jsonl`]);
+    expect(calls).toHaveLength(2);
+  });
+});
+
+// A guard of what is kept of a head that tells no folder, no scenario of the spec, for a head
+// read by lines as omp's is (Claude Code's, read by bytes: test/core/claude-sources.test.ts).
+describe('a head that tells no folder', () => {
+  // The folder is what follows `cwd ` on one of the first two lines.
+  const tells = (text: string) => ({ cwd: /^cwd (\/.*)$/m.exec(text)?.[1] ?? null });
+  // A session file holding `text`, as a listing gives it, and the heads read of it.
+  function sessionWith(text: string) {
+    const path = join(tempHome(), 's.jsonl');
+    writeFileSync(path, text);
+    const { exec, calls } = recordingRun();
+    const heads = sessionHeads(() => exec, { head: ['-n', '2'], tells });
+    const listed = () => ({ path, mtimeMs: statSync(path).mtimeMs, size: statSync(path).size });
+    return { heads, path, listed, calls };
+  }
+
+  test('is read once when the file goes on after it, whatever is appended later', async () => {
+    const { heads, path, listed, calls } = sessionWith('title\nsession\nturn\n');
+
+    const folders = [await heads.folder(null, listed())];
+    appendFileSync(path, 'cwd /work/app\n');
+    folders.push(await heads.folder(null, listed()));
+
+    expect(folders).toEqual([null, null]);
+    expect(calls).toHaveLength(1);
+  });
+
+  test('is read again when the file it was the whole of grew', async () => {
+    const { heads, path, listed, calls } = sessionWith('title\n');
+
+    const folders = [await heads.folder(null, listed())];
+    appendFileSync(path, 'cwd /work/app\n');
+    folders.push(await heads.folder(null, listed()));
+
+    expect(folders).toEqual([null, '/work/app']);
     expect(calls).toHaveLength(2);
   });
 });

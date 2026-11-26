@@ -12,6 +12,8 @@ import { sessionDirSlug as claudeSlug } from '../src/core/providers/claude-sourc
 import { NA, STAT_FIELDS } from '../src/core/providers/index.js';
 import { HEADS_PER_LISTING } from '../src/core/providers/omp-sources.js';
 import { run, type Run } from '../src/exec.ts';
+import { buildTree } from '../src/tree.ts';
+import { worktreeId } from '../src/worktree-id.ts';
 import { NOW, agent, cardsOf, costOf, ompSessionDir, opencodeDatabase, refreshing, tokensOf, workspace } from './helpers/agent-cards.ts';
 import { fixtureText, tempHome } from './helpers/files.ts';
 
@@ -193,6 +195,46 @@ test('Two agents on one session share a card', async () => {
   assert.equal(cards.length, 1);
   // basic.jsonl, the newest, logs 181k tokens; no-usage.jsonl logs none
   assert.equal(tokensOf(cards[0].model), '181k');
+});
+
+// A guard of the rule that agents share a card of a session within one Orca workspace only
+// (D16), no scenario of the spec: two omp agents without a session id, in workspaces whose
+// folders are nested, whose titles both contain the title of the lower folder's session.
+test('Agents of nested workspaces on one session keep a card each', async () => {
+  const home = tempHome();
+  const projects = join(home, 'projects');
+  const boto = join(projects, 'boto');
+  mkdirSync(boto, { recursive: true });
+  ompSession(home, boto, BASIC, 1, 'Port the banner');
+
+  const cards = await cardsOf(home, [
+    agent({ id: 't1', agent: 'omp', title: 'π - Port the banner', path: projects }),
+    agent({ id: 't2', agent: 'omp', title: 'π - Port the banner - boto', path: boto }),
+  ]);
+
+  assert.deepEqual(
+    cards.map(({ card, model }) => [card.id, costOf(model)]),
+    [
+      ['t1', BASIC.cost],
+      ['t2', BASIC.cost],
+    ],
+  );
+  // each workspace row draws its agent's card
+  const placed = (id: string, name: string, path: string) => {
+    const worktree = worktreeId('r1', path);
+    return { id, hostId: 'local', repo: 'projects', workspace: name, worktreeId: worktree, workspaceId: worktree };
+  };
+  const [host] = buildTree(
+    [placed('t1', 'projects', projects), placed('t2', 'boto', boto)],
+    cards.map(({ card }) => card),
+  );
+  assert.deepEqual(
+    host.projects[0].workspaces.map((row) => [row.name, row.cards.map((card) => card.id)]),
+    [
+      ['projects', ['t1']],
+      ['boto', ['t2']],
+    ],
+  );
 });
 
 test('Two Claude Code agents told apart by session id', async () => {

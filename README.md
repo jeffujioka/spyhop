@@ -175,6 +175,9 @@ plugin list` and runs `orca plugin open <key> --panel spyhop`.
   writes the session's title, which the agent's title then contains. On a paired Orca server,
   whose agents never have a `sessionId`, an omp agent whose title names no session (an
   untitled session, a title the pane does not show) stays `n/a`.
+- **Two omp agents of nested workspace folders can show one session.** Two omp agents without
+  a `sessionId`, in workspaces of which one folder is below the other, whose titles both
+  contain one session's title, show that session on a card each, one in each workspace.
 - **An old omp session may link a few refreshes late.** For the omp agents without a
   `sessionId`, one `find` lists the session files of the workspace folder and of the folders
   named like it, and each refresh reads the first two lines of at most 32 of them that are new

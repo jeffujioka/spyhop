@@ -47,9 +47,10 @@ export function linkAgents(named, candidates, agents) {
   return named.map((file) => file ?? shared.shift());
 }
 
-// agents: [{ sessionPath, ... }] of the Orca agents in Orca's order. Agents that link to the
-// same session path share one card (the first of them); agents with no linked session (null)
-// each keep their own.
+// agents: [{ sessionPath, ... }] of the Orca agents in Orca's order, `sessionPath` naming the
+// session an agent links to and the workspace folder it does so from. Agents of the same
+// session path share one card (the first of them); agents with no linked session (null) each
+// keep their own.
 export function collapseBySession(agents) {
   const seen = new Set();
   return agents.filter((agent) => {

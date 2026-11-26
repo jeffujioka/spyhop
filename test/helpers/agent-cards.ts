@@ -6,7 +6,7 @@ import { copyFileSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createAgentCards, type OrcaAgent } from '../../src/agent-cards.ts';
 import { cardModel } from '../../src/core/card-model.js';
-import { slugParts } from '../../src/core/providers/omp-sources.js';
+import { sessionDirSlug as ompSlug } from '../../src/core/providers/omp-sources.js';
 import { run, type Run } from '../../src/exec.ts';
 import { fixture } from './files.ts';
 
@@ -34,7 +34,7 @@ export const costTurn = (usd: number) =>
   })}\n`;
 
 // omp's session folder of the working folder `path`, under `home`.
-export const ompSessionDir = (home: string, path: string) => join(home, '.omp/agent/sessions', slugParts(path, home).join(''));
+export const ompSessionDir = (home: string, path: string) => join(home, '.omp/agent/sessions', ompSlug(path, home));
 
 // The folder `path` under `home`, with an omp session of it, which records it as its folder,
 // that has logged `usd`, titled `title` when given; returns the session file. Its id is `s1`.

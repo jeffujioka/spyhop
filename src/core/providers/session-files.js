@@ -6,7 +6,7 @@
 // the session reader (src/core/refresh.js).
 
 import { createLimit } from '../limit.js';
-import { createSessionReader } from '../refresh.js';
+import { createSessionReader, utf8Length } from '../refresh.js';
 import { linkSession, newestFirst } from '../session-link.js';
 
 // Most `head` reads (the folder a session records, and what else its head tells) run at once
@@ -30,7 +30,12 @@ export const unchangedSince = (hit, file) => hit.mtimeMs === file.mtimeMs && hit
 // - What it told besides the folder holds while the file is unchanged, so a refresh of quiet
 //   files runs no program.
 // - A folder found is kept for good, since a harness writes where a session started once, when
-//   it starts; null (no folder in what was read) is asked again only when the file changed.
+//   it starts.
+// - No folder in a read that stopped before the end of its file (`folderless`) is kept for
+//   good too: the read held all the head looks at, and a harness only appends after it (omp
+//   rewrites its title line in place, which is asked again through `of`, not the lines that
+//   record the folder). No folder in a read that held the whole file is asked again when the
+//   file changed, since the head may not have been written out yet.
 // - A head that could not be read (a failed program, as when ssh fails) leaves no entry and
 //   replaces none: nothing was learned, so the next call reads the file again.
 export function sessionHeads(execOn, { head, tells }) {
@@ -40,14 +45,15 @@ export function sessionHeads(execOn, { head, tells }) {
   const keep = (machine, file, text, hit) => {
     const told = { mtimeMs: file.mtimeMs, size: file.size, ...tells(text) };
     if (hit?.cwd) told.cwd = hit.cwd;
+    if (told.cwd === null) told.folderless = utf8Length(text) < file.size;
     heads.set(keyOf(machine, file), told);
     return told;
   };
-  // The entry of `file` when it tells the file's folder as it is now: a folder found, or none
-  // in a file unchanged since; else null.
+  // The entry of `file` when it tells the file's folder as it is now: a folder found, none for
+  // good, or none in a file unchanged since; else null.
   function known(machine, file) {
     const hit = heads.get(keyOf(machine, file));
-    return hit && (hit.cwd !== null || unchangedSince(hit, file)) ? hit : null;
+    return hit && (hit.cwd !== null || hit.folderless || unchangedSince(hit, file)) ? hit : null;
   }
   // The text of the head of a file, or null when it could not be read (a failed program).
   async function readHead(machine, path) {
@@ -158,14 +164,15 @@ export async function findSessionFile(exec, { dir, os, except = [] }) {
 
 // The session file each of `sessionIds` names in `dir` (null for a null id and for an id that
 // names no file), by the harness's own rule `names(path, sessionId)`: one listing, and no file
-// is read. A harness that keeps each working folder's sessions in a folder of its own under
-// `dir` gives `depth` 2 and `pattern(sessionId)`, the `find -name` pattern of the file an id
-// can name: the listing then prints those files only, whatever folder holds them, so its cost
-// does not grow with the sessions of the host. The newest file wins when an id names several.
+// is read. A harness keeps each working folder's sessions in a folder of its own under `dir`,
+// so `depth` is 2, and `pattern(sessionId)` is the `find -name` pattern of the file an id can
+// name: the listing then prints those files only, whatever folder holds them, so what it
+// prints does not grow with the sessions of the host, though `find` still walks every session
+// folder. The newest file wins when an id names several.
 export async function findNamedFiles(exec, { dir, os, depth, pattern }, sessionIds, names) {
   const ids = [...new Set(sessionIds.filter(Boolean))];
   if (ids.length === 0) return sessionIds.map(() => null);
-  const files = newestFirst(await listFolder(exec, { dir, os, depth, names: pattern && ids.map(pattern) }));
+  const files = newestFirst(await listFolder(exec, { dir, os, depth, names: ids.map(pattern) }));
   return sessionIds.map((id) => (id ? files.find((file) => names(file.path, id)) : null) ?? null);
 }
 

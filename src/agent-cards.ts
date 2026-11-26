@@ -1,12 +1,12 @@
 // The cards of Orca agents, on this computer and on other Orca hosts: one card per harness
-// session an agent links to, and one per agent that links to none, whatever its state, in the
-// card shape of the core's card model (src/core/card-model.js). Each card holds what Orca says of
-// the agent (its harness, state and title), the stats of the harness session the agent links
-// to, the folder that session records as its own (the folder of the agent's workspace when it
-// links to none, or its session tells none) and the git facts of that folder. Every program
-// runs through `run` (src/exec.ts), read-only, on the agent's host (`on`: its ssh alias);
-// whatever cannot be read, an unreachable host included, shows as n/a on the agent's card, and
-// a build never rejects.
+// session the agents of one workspace folder link to, and one per agent that links to none,
+// whatever its state, in the card shape of the core's card model (src/core/card-model.js).
+// Each card holds what Orca says of the agent (its harness, state and title), the stats of the
+// harness session the agent links to, the folder that session records as its own (the folder
+// of the agent's workspace when it links to none, or its session tells none) and the git facts
+// of that folder. Every program runs through `run` (src/exec.ts), read-only, on the agent's
+// host (`on`: its ssh alias); whatever cannot be read, an unreachable host included, shows as
+// n/a on the agent's card, and a build never rejects.
 
 import { GIT_TTL_MS, readGit } from './core/git.js';
 import { NA, createSessions, readStats } from './core/providers/index.js';
@@ -143,8 +143,9 @@ export function createAgentCards({ run, home, kept = [] }: { run: Run; home: str
   }
 
   return {
-    // The agents' cards, in the order of `agents`, agents that link to one session sharing the
-    // card of the first of them. `now`: epoch milliseconds.
+    // The agents' cards, in the order of `agents`, agents of one harness, workspace folder and
+    // machine that link to one session sharing the card of the first of them. `now`: epoch
+    // milliseconds.
     async build(agents: OrcaAgent[], now: number) {
       // harness, folder and machine -> its agents, in agent order
       const groups = new Map<string, OrcaAgent[]>();
@@ -214,7 +215,10 @@ export function createAgentCards({ run, home, kept = [] }: { run: Run; home: str
             machine,
             stats: session.stats,
           };
-          return { sessionPath, card };
+          // Agents share a card within their workspace folder only: omp agents of nested
+          // workspace folders can link one session by title, and each workspace row draws its
+          // own agent's card of it. The session path tells the harness and the machine.
+          return { sessionPath: sessionPath && `${agent.path}\0${sessionPath}`, card };
         }),
       );
       return collapseBySession(entries).map((entry: (typeof entries)[number]) => entry.card);
