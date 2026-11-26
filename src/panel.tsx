@@ -206,6 +206,11 @@ export function setup({ signal, subscriptions, visible }: PanelContext): void {
 
 const totalsText = ({ cost, tokens, premium }: Totals) => `${cost} · ${tokens} tokens · ${premium} premium`;
 
+// An identity row that is drawn only when it has a value: none for a null, undefined or empty
+// one, which Orca's KeyValue would draw as `–` and which reads as broken where there is nothing
+// to show (no title, no git repository, this computer).
+const rowWithValue = (label: string, value: string | null | undefined) => (value == null || value === '' ? [] : [{ label, value }]);
+
 function cardOf({ id, groups: [identity, ...groups], pane }: CardView) {
   return (
     <Card key={id} title={identity.name.value} description={identity.session?.value}>
@@ -213,12 +218,14 @@ function cardOf({ id, groups: [identity, ...groups], pane }: CardView) {
         <Badge tone={STATUS_TONES[identity.status.label] ?? 'neutral'}>{identity.status.label}</Badge>
         <KeyValue
           label="IDENTITY"
+          // one order on every card, so that cards of one kind line up; Path, Harness and Model
+          // are always drawn, a Model that cannot be read as n/a
           items={[
-            { label: 'Session', value: identity.session?.value ?? null },
+            ...rowWithValue('Session', identity.session?.value),
             { label: 'Path', value: identity.path.value },
-            { label: 'Branch', value: identity.branch },
-            { label: 'Remote', value: identity.remote },
-            { label: 'Machine', value: identity.machine },
+            ...rowWithValue('Branch', identity.branch),
+            ...rowWithValue('Remote', identity.remote),
+            ...rowWithValue('Machine', identity.machine),
             { label: 'Harness', value: identity.harness.value },
             { label: 'Model', value: identity.model.value },
           ]}

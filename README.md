@@ -25,7 +25,7 @@ per agent that links to none. A card has five groups, always in this order:
 
 | Group | Shows |
 | --- | --- |
-| Identity | the agent's state (working, blocked, waiting, done), the session's title, the path (home as `~`), the git branch and remote and, for an agent on another host, the machine; the harness and the model. The path is the folder the linked session records as its own, which can be a sub-folder of the Orca workspace folder, and the branch and remote are that folder's: for omp the folder of the session's `session` entry, for Claude Code the folder the session started in (the first `cwd` in its file), for opencode the session's `directory`. A card with no linked session, of another harness, or whose session tells no folder shows the workspace folder and its branch and remote |
+| Identity | the agent's state (working, blocked, waiting, done) and the rows Session, Path, Branch, Remote, Machine, Harness and Model, always in that order: the session's title, the path (home as `~`), the git branch and remote, the machine, the harness and the model. A row with nothing to show is not drawn: Session for an untitled agent, Branch and Remote for a folder that is no git repository or has no branch or no origin, Machine for an agent on this computer. Path, Harness and Model are always drawn, a model that cannot be read as `n/a`. The path is the folder the linked session records as its own, which can be a sub-folder of the Orca workspace folder, and the branch and remote are that folder's: for omp the folder of the session's `session` entry, for Claude Code the folder the session started in (the first `cwd` in its file), for opencode the session's `directory`. A card with no linked session, of another harness, or whose session tells no folder shows the workspace folder and its branch and remote |
 | Context | the usage as a percent of the model's window, with tokens used, tokens left before compaction and compactions recorded |
 | Spend | the cost the harness logged (there is no price table), cost per hour, tokens used by the session, tokens per minute |
 | Cache | the time until the prompt cache is cold, and the hit rate with the turns that hit and missed it |
@@ -35,7 +35,9 @@ Project and workspace rows carry Totals of cost, tokens and premium requests ove
 under them. A Total reads `n/a` when any of those cards reads `n/a` for it, so a part is never
 shown as the whole.
 
-A figure the session does not give reads `n/a`; the plugin never estimates one.
+A figure the session does not give reads `n/a`; the plugin never estimates one. Only the
+Identity group leaves a row out: the other four groups always draw every figure, so their rows
+stay where they are from card to card.
 
 ## Harnesses
 
@@ -165,9 +167,10 @@ plugin list` and runs `orca plugin open <key> --panel spyhop`.
   workspace folder that no id names: another session's figures when several of them run
   there, and, when the harness runs in a sub-folder, the workspace folder's own newest session
   or `n/a` without one.
-- **A Claude Code card may keep the workspace folder as its path.** The folder a Claude Code
-  session started in is looked for in the first 64 KiB of its file; a session whose first
-  prompt is larger than that shows the workspace folder and its branch and remote.
+- **A Claude Code card may keep the workspace folder as its path.** A session file smaller
+  than 256 KiB is searched whole for the folder the session started in. In a larger one the
+  folder is looked for in the first 64 KiB only: such a session whose first prompt is larger
+  than that shows the workspace folder and its branch and remote.
 - **An omp agent that has just started reads `n/a`** until Orca reports its `sessionId` or omp
   writes the session's title, which the agent's title then contains. On a paired Orca server,
   whose agents never have a `sessionId`, an omp agent whose title names no session (an

@@ -25,6 +25,8 @@
 // runner (src/exec.ts), read-only use only; `kept` is the scans of this provider's session
 // files that an earlier run kept (see `sessionReaders`, session-files.js). `createSessions`
 // runs once per card builder and returns
+// (a session object a hook gives holds at least the fields its signature names here; a hook may
+// add fields of its own, as opencode adds `folder`, and gets the object back as it gave it)
 //   named({ machine, cwd, home, os }, sessionIds) -> Promise<Array<{ path, mtimeMs, size } | null>>
 //     for each of the Orca agents' sessionIds (null: none), the session on the folder's host
 //     that the id names by the harness's own rule, or null; the hook alone knows that rule.
