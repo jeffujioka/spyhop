@@ -26,6 +26,26 @@ export type OrcaAgent = {
   machine?: string | null;
 };
 
+// Whether `agents` are the agents `before`, but for their states: the same ids in the same order,
+// each with the same harness, folder, machine, session id and title, so that both build the same
+// cards, but for the status of each.
+export function sameButStates(before: OrcaAgent[], agents: OrcaAgent[]) {
+  return (
+    before.length === agents.length &&
+    before.every((was, i) => {
+      const now = agents[i];
+      return (
+        was.id === now.id &&
+        was.agent === now.agent &&
+        was.path === now.path &&
+        (was.machine ?? null) === (now.machine ?? null) &&
+        (was.sessionId ?? null) === (now.sessionId ?? null) &&
+        was.title === now.title
+      );
+    })
+  );
+}
+
 // The core's provider of an Orca agent kind, and the name a card gives the harness; a kind
 // without a provider is named as Orca names it.
 const PROVIDERS: Record<string, string> = { omp: 'omp', claude: 'claude-code', opencode: 'opencode' };

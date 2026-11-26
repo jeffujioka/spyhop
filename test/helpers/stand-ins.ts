@@ -3,8 +3,10 @@
 // `ssh -G <alias>` prints the alias's settings, shaped on this Mac's ssh, with the test's
 // `controlmaster`, or fails; `ssh <alias> <command>` runs the command after the alias here, under
 // the remote host's own home folder, or fails as an unreachable host does. Both log each call.
+// `orca` holds back the answer to each command the test names until the test releases it.
 // `standIns` sets PATH and ORCA_CLI_COMMAND for the test (test/helpers/env.ts).
 import { chmodSync, readFileSync, writeFileSync } from 'node:fs';
+import { watch } from 'node:fs/promises';
 import { join } from 'node:path';
 import { setEnv } from './env.ts';
 import { tempHome } from './files.ts';
@@ -14,15 +16,18 @@ export const answer = (result: unknown) => JSON.stringify({ id: 'local', ok: tru
 
 // `homes`: each reachable alias and its home folder; any other alias is unreachable. `orca`: each
 // command line and its recorded answer; any other line fails. `controlmaster`: each alias whose
-// `ssh -G` answers, and the `controlmaster` it prints; `ssh -G` on any other alias fails.
+// `ssh -G` answers, and the `controlmaster` it prints; `ssh -G` on any other alias fails. `held`:
+// each `orca` command line whose answer is held back, its call logged, until `release` of it.
 export function standIns({
   homes,
   orca,
   controlmaster = {},
+  held = [],
 }: {
   homes: Record<string, string>;
   orca: Record<string, string>;
   controlmaster?: Record<string, string>;
+  held?: string[];
 }) {
   const bin = tempHome();
   const log = join(bin, 'calls.log');
@@ -32,9 +37,12 @@ export function standIns({
   // eight per host) never interleave their lines
   const logCall = (program: string) =>
     `line='${program}'"$(printf '\\t')"; for a in "$@"; do line="$line$a$(printf '\\t')"; done; printf '%s\\n' "$line" >> '${log}'`;
+  // the file whose presence lets a held `orca` command answer
+  const releaseOf = (args: string) => join(bin, `released ${args}`);
   const orcaCases = Object.entries(orca).map(([args, output], i) => {
     writeFileSync(join(bin, `orca-${i}.json`), output);
-    return `  '${args}') cat '${join(bin, `orca-${i}.json`)}' ;;`;
+    const wait = held.includes(args) ? `until [ -e '${releaseOf(args)}' ]; do sleep 0.01; done; ` : '';
+    return `  '${args}') ${wait}cat '${join(bin, `orca-${i}.json`)}' ;;`;
   });
   writeFileSync(
     join(bin, 'orca'),
@@ -83,5 +91,17 @@ export function standIns({
     // the aliases `ssh -G` was asked about, one per call
     sshSettings: () => calls().filter(([program, first]) => program === 'ssh' && first === '-G').map(([, , alias]) => alias),
     orca: () => calls().filter(([program]) => program === 'orca').map(([, ...args]) => args.join(' ')),
+    // lets the held `orca` command `args` answer, this call and every later one
+    release: (args: string) => writeFileSync(releaseOf(args), ''),
+    // resolves once `seen()` holds, asked again at each change of the stand-ins' files (a call
+    // logged); rejects when it does not within 5 s
+    async until(seen: () => boolean) {
+      const changes = watch(bin, { signal: AbortSignal.timeout(5000) });
+      try {
+        while (!seen()) await changes.next();
+      } finally {
+        await changes.return();
+      }
+    },
   };
 }
