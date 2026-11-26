@@ -27,15 +27,18 @@ export function standIns({
   const bin = tempHome();
   const log = join(bin, 'calls.log');
   writeFileSync(log, '');
-  // each call one line, its arguments separated by tabs
-  const logCall = `for a in "$@"; do printf '%s\\t' "$a"; done >> '${log}'; printf '\\n' >> '${log}'`;
+  // each call one line, the program and its arguments separated by tabs, appended in one write
+  // while the line is shorter than the shell's write buffer, so that calls running at once (up to
+  // four per host) never interleave their lines
+  const logCall = (program: string) =>
+    `line='${program}'"$(printf '\\t')"; for a in "$@"; do line="$line$a$(printf '\\t')"; done; printf '%s\\n' "$line" >> '${log}'`;
   const orcaCases = Object.entries(orca).map(([args, output], i) => {
     writeFileSync(join(bin, `orca-${i}.json`), output);
     return `  '${args}') cat '${join(bin, `orca-${i}.json`)}' ;;`;
   });
   writeFileSync(
     join(bin, 'orca'),
-    ['#!/bin/sh', `printf 'orca\\t' >> '${log}'`, logCall, 'case "$*" in', ...orcaCases, `  *) echo '{"ok":false,"error":{"code":"not_found"}}'; exit 1 ;;`, 'esac', ''].join('\n'),
+    ['#!/bin/sh', logCall('orca'), 'case "$*" in', ...orcaCases, `  *) echo '{"ok":false,"error":{"code":"not_found"}}'; exit 1 ;;`, 'esac', ''].join('\n'),
   );
   const sshCases = Object.entries(homes).map(([alias, home]) => `  '${alias}') HOME='${home}'; export HOME ;;`);
   const settingsCases = Object.entries(controlmaster).map(
@@ -46,8 +49,7 @@ export function standIns({
     join(bin, 'ssh'),
     [
       '#!/bin/sh',
-      `printf 'ssh\\t' >> '${log}'`,
-      logCall,
+      logCall('ssh'),
       'if [ "$1" = -G ]; then',
       '  [ $# -eq 2 ] || exit 255',
       '  case "$2" in',
