@@ -78,13 +78,18 @@ const newScan = () => ({ state: undefined, block: 0, skip: 0, carry: '', pos: -1
 // over the whole file (see `advance`), or `null` when it could not be built, so that every
 // figure of the session totals reads n/a and is tried again at the next refresh. A tail
 // that cannot be read gives an empty text, so the figures about the end of the file read n/a
-// for that refresh; the scan of a large file is kept, and so are its totals.
+// for that refresh; the scan of a large file is kept, and so are its totals. A file whose size
+// and modified time are those of its last read that failed in nothing is not read again: that
+// read is the input.
 export function createSessionReader({ exec, fold }) {
   // path -> the scan of that file
   const scans = new Map();
   // path -> the last scan step of that file: agents of one file ask at once, and two steps on
   // one scan would fold the same bytes twice
   const queues = new Map();
+  // path -> { mtimeMs, size, input }: the last read of that file, kept when neither its tail nor
+  // its scan failed
+  const reads = new Map();
 
   // The state of the file's first `size` bytes or more, read as little as possible:
   //
@@ -176,6 +181,8 @@ export function createSessionReader({ exec, fold }) {
 
   return {
     async read(file) {
+      const kept = reads.get(file.path);
+      if (kept?.mtimeMs === file.mtimeMs && kept.size === file.size) return kept.input;
       // a tail that cannot be read, or cannot be started, is an empty text
       const tail = await exec('tail', ['-c', String(TAIL_BYTES), '--', file.path]).catch(() => ({ code: -1 }));
       const text = tail.code === 0 ? tail.stdout : '';
@@ -184,13 +191,18 @@ export function createSessionReader({ exec, fold }) {
       // the two). A string of fewer UTF-16 units than the window can still be longer in bytes,
       // so the exact length is counted only for those.
       const whole = tail.code === 0 && text.length < TAIL_BYTES && utf8Length(text) < TAIL_BYTES;
+      let input;
       // a tail that failed on a file the listing says fits is not tried again with a scan
       if (whole || (tail.code !== 0 && file.size <= TAIL_BYTES)) {
         scans.delete(file.path);
-        return whole ? { text, sources: { wholeFile: true } } : { text, sources: {} };
+        input = whole ? { text, sources: { wholeFile: true } } : { text, sources: {} };
+      } else {
+        const state = await queued(file.path, () => advance(file.path, file.size)).catch(() => null);
+        input = { text, sources: {}, state };
       }
-      const state = await queued(file.path, () => advance(file.path, file.size)).catch(() => null);
-      return { text, sources: {}, state };
+      if (tail.code === 0 && input.state !== null) reads.set(file.path, { mtimeMs: file.mtimeMs, size: file.size, input });
+      else reads.delete(file.path);
+      return input;
     },
   };
 }

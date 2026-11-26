@@ -88,9 +88,9 @@ describe('refresh', () => {
     expect(stats.model).toBe('tail-model');
     expect(stats.autocompactions).toBe(2);
 
-    // an unchanged file is counted from the state: no more than the tail is served
+    // a file of the same size is counted from the state: no more than the tail is served
     const mark = calls.length;
-    expect(await counted(reader, file(text))).toBe(2);
+    expect(await counted(reader, file(text, 2000))).toBe(2);
     expect(calls.slice(mark).map((call) => call.command)).toEqual(['tail']);
   });
 
@@ -401,5 +401,40 @@ describe('refresh', () => {
 
     expect(stats.autocompactions).toBe(NA);
     expect(stats.model).toBe(NA);
+  });
+
+  test('Unchanged session is not read again', async () => {
+    const text = `${bigSession()}${message('assistant', 53, { usage: { totalTokens: 1234, cost: { total: 0.5 } } })}\n`;
+    expect(Buffer.byteLength(text)).toBeGreaterThan(TAIL_BYTES);
+    const { exec, calls } = localExec(new Map([[PATH, text]]));
+    const reader = newReader(exec);
+    const before = readStats('omp', await reader.read(file(text)), NOW);
+    expect(before).toMatchObject({ model: 'tail-model', costUsd: 0.5, totalTokens: 1234 });
+
+    // 10 minutes later, the listing gives the same size and modified time
+    const mark = calls.length;
+    const after = readStats('omp', await reader.read(file(text)), NOW + 10 * 60_000);
+
+    expect(calls.slice(mark).map((call) => call.command)).toEqual([]);
+    expect(after).toMatchObject({ model: 'tail-model', costUsd: 0.5, totalTokens: 1234 });
+    expect(after.sinceActivityMs).toBe(before.sinceActivityMs + 10 * 60_000);
+  });
+
+  test('Read that failed is tried again', async () => {
+    const text = bigSession();
+    const isTail = (call) => call.command === 'tail' && call.args[1] === String(TAIL_BYTES);
+    const faults = { fail: isTail };
+    const { exec, calls } = localExec(new Map([[PATH, text]]), faults);
+    const reader = newReader(exec);
+    expect(readStats('omp', await reader.read(file(text)), NOW).model).toBe(NA);
+
+    // the next listing gives the same size and modified time, and tail works
+    faults.fail = null;
+    const mark = calls.length;
+    const stats = readStats('omp', await reader.read(file(text)), NOW);
+
+    expect(calls.slice(mark).filter(isTail)).toHaveLength(1);
+    expect(stats.model).toBe('tail-model');
+    expect(stats.sinceActivityMs).toBe(8 * 60_000);
   });
 });

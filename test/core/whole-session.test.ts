@@ -130,11 +130,10 @@ describe('whole-session figures on a large file', () => {
     const read = ompReader(exec);
     await read(ompFile(text));
 
-    // unchanged: only the tail window is served
+    // unchanged: nothing is read
     let mark = calls.length;
     expect((await read(ompFile(text))).totalTokens).toBe(601);
-    expect(calls.slice(mark).map((call) => call.command)).toEqual(['tail']);
-    expect(served(mark)).toBeLessThanOrEqual(TAIL_BYTES);
+    expect(calls.slice(mark).map((call) => call.command)).toEqual([]);
 
     // the session grows: the tail, the appended lines, and a byte to check where they begin
     const appended = `${ompTurn(9000, [7, 8, 9, 10, 1], 'tail-model')}\n${JSON.stringify({ type: 'compaction', id: 'c3' })}\n`;
