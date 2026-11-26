@@ -25,7 +25,7 @@ per agent that links to none. A card has five groups, always in this order:
 
 | Group | Shows |
 | --- | --- |
-| Identity | the agent's state (working, blocked, waiting, done), the session's title, the path (home as `~`), the git branch and remote and, for an agent on another host, the machine; the harness and the model |
+| Identity | the agent's state (working, blocked, waiting, done) and the rows Session, Path, Branch, Remote, Machine, Harness and Model, always in that order: the session's title, the path (home as `~`), the git branch and remote, the machine, the harness and the model. A row with nothing to show is not drawn: Session for an untitled agent, Branch and Remote for a folder that is no git repository or has no branch or no origin, Machine for an agent on this computer. Path, Harness and Model are always drawn, a model that cannot be read as `n/a`. The path is the folder the linked session records as its own, which can be a sub-folder of the Orca workspace folder, and the branch and remote are that folder's: for omp the folder of the session's `session` entry, for Claude Code the folder the session started in (the first `cwd` in its file), for opencode the session's `directory`. A card with no linked session, of another harness, or whose session tells no folder shows the workspace folder and its branch and remote |
 | Context | the usage as a percent of the model's window, with tokens used, tokens left before compaction and compactions recorded |
 | Spend | the cost the harness logged (there is no price table), cost per hour, tokens used by the session, tokens per minute |
 | Cache | the time until the prompt cache is cold, and the hit rate with the turns that hit and missed it |
@@ -35,7 +35,9 @@ Project and workspace rows carry Totals of cost, tokens and premium requests ove
 under them. A Total reads `n/a` when any of those cards reads `n/a` for it, so a part is never
 shown as the whole.
 
-A figure the session does not give reads `n/a`; the plugin never estimates one.
+A figure the session does not give reads `n/a`; the plugin never estimates one. Only the
+Identity group leaves a row out: the other four groups always draw every figure, so their rows
+stay where they are from card to card.
 
 ## Harnesses
 
@@ -45,15 +47,24 @@ database). An agent of any other harness gets a card whose figures all read `n/a
 ## How an agent is tied to a session
 
 - **By session id**: when Orca reports the agent's `sessionId`, the card links to the session of
-  that id, by the harness's own naming: for omp the session file `<start time>_<id>.jsonl`, for
-  Claude Code the file `<id>.jsonl`, for opencode the database's session of that id. Agents on a
-  paired Orca server have no `sessionId` (Orca's listing there gives only its own id), so they
-  link as below.
-- **Otherwise** (no `sessionId`, or one that names no session): the card links to the newest
-  session of the workspace folder for the agent's harness. Several omp agents in one folder
-  share out the newest sessions no id named by title: an agent whose title contains a session's
-  title gets that session, and the agents left take the newest sessions no agent matched. A
-  folder with no session is not linked, and every session figure on its card reads `n/a`.
+  that id, by the harness's own naming, in whichever folder of the agent's host the harness ran,
+  so also the session of a harness that runs in a sub-folder of the workspace folder: for omp
+  the session file `<start time>_<id>.jsonl` in any of omp's session folders; for Claude Code
+  the file `<id>.jsonl` in any session folder under `~/.claude/projects`; for opencode the
+  database's session of that id, whatever its folder. Agents on a paired Orca server have no
+  `sessionId` (Orca's listing there gives only its own id), so they link as below.
+- **Otherwise** (no `sessionId`, or one that names no session), by the harness's rule:
+  - **omp, by title.** The card links to the omp session whose title the agent's own title
+    contains, the longest title first, one agent per session, among the sessions whose recorded
+    folder is the workspace folder or a folder below it. So an omp that runs in a sub-folder of
+    the workspace folder is found too, while a session of a folder beside it whose name merely
+    starts alike (`projects-old` beside `projects`) is not taken. An agent whose title contains
+    no session's title links to none: every session figure on its card reads `n/a`, and it
+    never takes another session by its age.
+  - **Claude Code and opencode, the newest.** They write no title into their sessions, so the
+    card links to the newest session of the workspace folder itself that no id names, never
+    one of a sub-folder; agents left on one session share its card. A folder with no session
+    is not linked, and every session figure on its card reads `n/a`.
 
 ## Other hosts
 
@@ -150,3 +161,34 @@ plugin list` and runs `orca plugin open <key> --panel spyhop`.
 - **An unreachable paired server disappears.** When its agents cannot be listed, its host row
   is not drawn.
 - **Claude Code and opencode on other hosts are untested.** Their cards there may read `n/a`.
+- **A Claude Code or opencode agent without a `sessionId` shows the newest session of the
+  workspace folder.** With no title to tell sessions apart, such an agent (every one on a
+  paired Orca server, which never gives a `sessionId`) shows the newest session of the
+  workspace folder that no id names: another session's figures when several of them run
+  there, and, when the harness runs in a sub-folder, the workspace folder's own newest session
+  or `n/a` without one.
+- **A Claude Code card may keep the workspace folder as its path.** A session file smaller
+  than 256 KiB is searched whole for the folder the session started in. In a larger one the
+  folder is looked for in the first 64 KiB only: such a session whose first prompt is larger
+  than that shows the workspace folder and its branch and remote.
+- **An omp agent that has just started reads `n/a`** until Orca reports its `sessionId` or omp
+  writes the session's title, which the agent's title then contains. On a paired Orca server,
+  whose agents never have a `sessionId`, an omp agent whose title names no session (an
+  untitled session, a title the pane does not show) stays `n/a`.
+- **Two omp agents of nested workspace folders can show one session.** Two omp agents without
+  a `sessionId`, in workspaces of which one folder is below the other, whose titles both
+  contain one session's title, show that session on a card each, one in each workspace.
+- **An old omp session may link a few refreshes late.** For the omp agents without a
+  `sessionId`, one `find` lists the session files of the workspace folder and of the folders
+  named like it, and each refresh reads the first two lines of at most 32 of them that are new
+  or changed (`head`, the newest first, four at a time). A file once read is not read again
+  until it changes, and one found to be of another folder never. So in a workspace with many
+  sessions, an idle agent whose session is older than the 32 newest reads `n/a` for the first
+  refreshes after Orca starts, one more for every 32 sessions newer than its own.
+- **Some sub-folders are found only by `sessionId`.** The listing takes the session folders
+  whose name starts like the workspace folder's. omp names the session folder of a sub-folder
+  otherwise in two cases, a workspace folder above the home folder and a folder under the
+  system temp folder: an omp agent there without a `sessionId` reads `n/a`.
+- **A sub-folder is found by its path as omp recorded it.** A session counts as the workspace
+  folder's when the folder it records starts with the path Orca gives for the workspace; one
+  recorded under another spelling of that path (through a symbolic link) is not found by title.

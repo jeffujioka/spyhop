@@ -7,10 +7,15 @@
 // terminal it is asked to (`terminal.focus`); `callsOf('terminal.focus')` lists those asks.
 // `holdLists` holds back its `workspace.list` answers, so the worker answers no tree, until the
 // release it returns; `remove` takes a workspace off its lists. `relayPosts` hands a mounted
-// panel what the worker posted, which Orca does and the test kit does not.
+// panel what the worker posted, which Orca does and the test kit does not. `openPanel` opens the
+// plugin's real panel, with its real worker, on such a host under a temporary home.
 import { setImmediate } from 'node:timers/promises';
-import { hostError, mockHost, type MockHostOptions, type TestPanel, type TestWorker } from 'orca/testing';
+import { afterEach, assert, hostError, mockHost, mount, mountWorker, type MockHostOptions, type TestPanel, type TestWorker } from 'orca/testing';
+import * as panelModule from '../../src/panel.tsx';
+import * as workerModule from '../../src/worker.ts';
 import { workspace as folder } from './agent-cards.ts';
+import { useTempHome } from './env.ts';
+import { standIns } from './stand-ins.ts';
 
 type State = 'working' | 'blocked' | 'waiting' | 'done';
 // An Orca workspace `name` of the Orca project `project`, with one Orca agent per state given,
@@ -18,7 +23,9 @@ type State = 'working' | 'blocked' | 'waiting' | 'done';
 // `unreadable`: its `agents.list` fails, as for a workspace removed since `workspace.list`;
 // `hostId`: the Orca host `workspace.list` puts it on, this computer's when not given;
 // `terminals`: the terminal id of each agent, null for one in a chat with no terminal,
-// `<project>-<name>-<i>` when not given.
+// `<project>-<name>-<i>` when not given;
+// `sessionId`: the harness session id Orca reports for each of its agents, none when not given;
+// `title`: the title Orca reports for each of its agents, none when not given.
 export type HostWorkspace = {
   project: string;
   name: string;
@@ -27,13 +34,15 @@ export type HostWorkspace = {
   unreadable?: boolean;
   hostId?: string;
   terminals?: (string | null)[];
+  sessionId?: string;
+  title?: string;
 };
 
 export function orcaHost(
   home: string,
   { workspaces, focused, storage, capabilities }: { workspaces: HostWorkspace[]; focused?: string } & Pick<MockHostOptions, 'storage' | 'capabilities'>,
 ) {
-  const rows = workspaces.map(({ project, name, agents, harness = 'omp', unreadable, hostId = 'local', terminals }) => {
+  const rows = workspaces.map(({ project, name, agents, harness = 'omp', unreadable, hostId = 'local', terminals, sessionId = null, title = null }) => {
     const path = folder(home, `${project}-${name}`);
     const projectId = `repo:${project}`;
     return {
@@ -41,11 +50,11 @@ export function orcaHost(
       row: { id: `${projectId}::${path}`, kind: 'worktree', name, project, projectId, path, branch: name, hostId },
       agents: agents.map((state, i) => ({
         terminalId: terminals ? terminals[i] : `${project}-${name}-${i}`,
-        title: null,
+        title,
         agent: harness,
         state,
         stateStartedAt: 0,
-        sessionId: null,
+        sessionId,
       })),
     };
   });
@@ -101,4 +110,33 @@ export async function relayPosts(posts: TestWorker['posts'], panel: TestPanel, c
   for (const { event, payload } of posts) void panel.post(event as never, payload as never);
   // the panel's draw runs in the task the first `post` queued, before this one
   await setImmediate();
+}
+
+// The panel and the worker `openPanel` last opened, closed after the test.
+let opened: { panel?: TestPanel; worker?: TestWorker } = {};
+afterEach(async () => {
+  await opened.panel?.unmount();
+  await opened.worker?.deactivate();
+  opened = {};
+});
+
+// Opens the panel, with its worker, on this computer's Orca host with `workspaces`, `focused`
+// the focused one, under a temporary home, and returns the panel once it has drawn the worker's
+// answer. The stand-in `orca` lists no other Orca host unless `orca` gives its lists, and the
+// stand-in `ssh` reaches each alias of `homes` (test/helpers/stand-ins.ts). `prepare` runs first
+// with the home, to put files under it.
+export async function openPanel(
+  workspaces: HostWorkspace[],
+  { focused, homes = {}, orca = {}, prepare }: { focused?: string; homes?: Record<string, string>; orca?: Record<string, string>; prepare?: (home: string) => void } = {},
+) {
+  const home = useTempHome();
+  prepare?.(home);
+  standIns({ homes, orca });
+  const host = orcaHost(home, { workspaces, focused });
+  opened.worker = await mountWorker(workerModule, { host });
+  const panel = await mount(panelModule, { host });
+  opened.panel = panel;
+  assert.deepEqual(panel.errors, []);
+  assert.deepEqual(panel.refusals, []);
+  return panel;
 }

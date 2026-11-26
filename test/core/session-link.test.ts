@@ -39,16 +39,19 @@ describe('Orca agent to session link', () => {
     ]);
   });
 
-  test('an agent without a title match takes the newest unmatched session', () => {
-    const files = [file('/s/c.jsonl', 1, ''), file('/s/b.jsonl', 5, ''), file('/s/a.jsonl', 30, 'FACT: Enable factory config')];
+  test('an agent without a title match gets no session', () => {
+    const files = [file('/s/c.jsonl', 1, ''), file('/s/b.jsonl', 5, 'Fix the login bug'), file('/s/a.jsonl', 30, 'FACT: Enable factory config')];
     // the first agent is a new session with no title yet (its title is the folder name)
     const titles = ['π > jeffujioka', 'π > FACT: Enable factory config'];
 
-    expect(shareSessions(files, titles).map((f) => f.path)).toEqual(['/s/c.jsonl', '/s/a.jsonl']);
-    // several unmatched agents take the unmatched sessions newest first, in agent order
-    expect(shareSessions(files, ['x', 'y', 'z']).map((f) => f.path)).toEqual(['/s/c.jsonl', '/s/b.jsonl', '/s/a.jsonl']);
-    // agents beyond the sessions get the newest session; no files gives null
-    expect(shareSessions([files[0]], ['x', 'y']).map((f) => f.path)).toEqual(['/s/c.jsonl', '/s/c.jsonl']);
+    expect(shareSessions(files, titles)).toEqual([null, files[2]]);
+    // also when one agent and one session are left, and for an agent that has no title
+    expect(shareSessions([files[1]], ['x'])).toEqual([null]);
+    expect(shareSessions([files[1]], [null])).toEqual([null]);
+    // a session without a title is nobody's
+    expect(shareSessions([files[0]], ['x', ''])).toEqual([null, null]);
+    // two agents whose titles both contain one session's title: the first of them gets it
+    expect(shareSessions([files[1]], ['π > Fix the login bug', 'π - Fix the login bug - boto'])).toEqual([files[1], null]);
     expect(shareSessions([], ['x', 'y'])).toEqual([null, null]);
   });
 
@@ -58,7 +61,8 @@ describe('Orca agent to session link', () => {
     const agents = [{ title: 'π > Write the docs' }, { title: 'anything' }, { title: 'π > Fix the login bug' }];
 
     expect(linkAgents([null, named, null], candidates, agents).map((f) => f.path)).toEqual(['/s/old.jsonl', '/s/named.jsonl', '/s/new.jsonl']);
-    // no candidates leaves the unnamed agents unlinked
+    // an unnamed agent whose title matches no candidate is unlinked, and so is one without candidates
+    expect(linkAgents([named, null], candidates, [agents[1], agents[1]])).toEqual([named, null]);
     expect(linkAgents([named, null], [], agents.slice(0, 2))).toEqual([named, null]);
   });
 });

@@ -34,7 +34,7 @@ afterEach(async () => {
   mock.timers.reset();
 });
 
-const MAIN: HostWorkspace = { project: 'api', name: 'main', agents: ['working'] };
+const MAIN: HostWorkspace = { project: 'api', name: 'main', agents: ['working'], sessionId: 's1' };
 const DEPLOY: HostWorkspace = { project: 'infra', name: 'deploy', agents: ['working'], hostId: `ssh:${DEVBOX}` };
 
 // The worker on Orca's hosts with `workspaces`, `main` focused, the SSH host `devbox` listed and

@@ -30,7 +30,7 @@ afterEach(async () => {
 async function session() {
   const home = useTempHome();
   const cli = standIns({ homes: {}, orca: {} });
-  const host = orcaHost(home, { workspaces: [{ project: 'api', name: 'main', agents: ['working'] }], focused: 'main' });
+  const host = orcaHost(home, { workspaces: [{ project: 'api', name: 'main', agents: ['working'], sessionId: 's1' }], focused: 'main' });
   const file = ompSessionOf(home, join(home, 'work/api-main'));
   mock.timers.enable({ apis: ['setTimeout'] });
   worker = await mountWorker(workerModule, { host });

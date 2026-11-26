@@ -1,11 +1,12 @@
 // The cards of Orca agents, on this computer and on other Orca hosts: one card per harness
-// session an agent links to, and one per agent that links to none, whatever its state, in the
-// card shape of the core's card model (src/core/card-model.js). Each card holds what Orca says of
-// the agent (its harness, state and title, the folder of its workspace), the git facts of that
-// folder and the stats of the harness session the agent links to. Every program runs through
-// `run` (src/exec.ts), read-only, on the agent's host (`on`: its ssh alias); whatever cannot be
-// read, an unreachable host included, shows as n/a on the agent's card, and a build never
-// rejects.
+// session the agents of one workspace folder link to, and one per agent that links to none,
+// whatever its state, in the card shape of the core's card model (src/core/card-model.js).
+// Each card holds what Orca says of the agent (its harness, state and title), the stats of the
+// harness session the agent links to, the folder that session records as its own (the folder
+// of the agent's workspace when it links to none, or its session tells none) and the git facts
+// of that folder. Every program runs through `run` (src/exec.ts), read-only, on the agent's
+// host (`on`: its ssh alias); whatever cannot be read, an unreachable host included, shows as
+// n/a on the agent's card, and a build never rejects.
 
 import { GIT_TTL_MS, readGit } from './core/git.js';
 import { NA, createSessions, readStats } from './core/providers/index.js';
@@ -79,8 +80,9 @@ export function createAgentCards({ run, home, kept = [] }: { run: Run; home: str
     return read.code === 0 ? read.stdout : null;
   };
 
-  // machine and folder -> its branch and origin, asked again only after GIT_TTL_MS, so a
-  // refresh of known folders runs no git.
+  // machine and folder (a card's: the one its session records, else its workspace's) -> its
+  // branch and origin, asked again only after GIT_TTL_MS, so a refresh of known folders runs
+  // no git.
   const gits = createTtlCache(GIT_TTL_MS);
 
   // A machine's operating system, for the `stat` the session listing runs, and its home folder
@@ -112,11 +114,13 @@ export function createAgentCards({ run, home, kept = [] }: { run: Run; home: str
   }
 
   // The session file each agent of one harness, folder and machine links to (null: none), in
-  // agent order (see linkAgents, src/core/session-link.js), with that machine's home; never
-  // rejects. An agent whose sessionId names a session by its harness's rule (the hook's
-  // `named`) gets it, and no title is read for it. The agents left share out the newest
-  // sessions no id named, by title, when the hook can `list` the folder; else, and for an agent
-  // alone in its folder without a named session, they link to the newest session no id named.
+  // agent order, with that machine's home; never rejects. An agent whose sessionId names a
+  // session by its harness's rule (the hook's `named`) gets it, whatever folder of the host
+  // that session is of, and no title is read for it. The agents left link by their harness's
+  // rule. A hook that can `list` (omp, whose sessions carry a title): each to the session of
+  // the workspace folder or below it whose title its own contains, and to none when no title
+  // matches (see linkAgents, src/core/session-link.js). A hook that cannot (Claude Code,
+  // opencode): all to the newest session of the workspace folder no id named (`link`).
   async function linkAll(agents: OrcaAgent[]) {
     const [{ agent: kind, path, machine = null }] = agents;
     const provider = PROVIDERS[kind ?? ''];
@@ -129,23 +133,19 @@ export function createAgentCards({ run, home, kept = [] }: { run: Run; home: str
       const ids = agents.map((agent) => agent.sessionId ?? null);
       const named = ids.some(Boolean) ? await hook.named(where, ids) : ids.map(() => null);
       const except = named.filter(Boolean).map((file: { path: string }) => file.path);
-      const unnamed = named.filter((file: unknown) => !file).length;
-      let candidates = [];
-      if (unnamed > 0 && hook.list && (unnamed > 1 || except.length > 0)) {
-        candidates = await hook.list({ ...where, limit: unnamed, except });
-      } else if (unnamed > 0) {
-        const file = await hook.link({ ...where, except });
-        candidates = file ? [file] : [];
-      }
-      return { home: place.home, files: linkAgents(named, candidates, agents) };
+      if (named.every(Boolean)) return { home: place.home, files: named };
+      if (hook.list) return { home: place.home, files: linkAgents(named, await hook.list({ ...where, except }), agents) };
+      const newest = await hook.link({ ...where, except });
+      return { home: place.home, files: named.map((file: unknown) => file ?? newest) };
     } catch {
       return none;
     }
   }
 
   return {
-    // The agents' cards, in the order of `agents`, agents that link to one session sharing the
-    // card of the first of them. `now`: epoch milliseconds.
+    // The agents' cards, in the order of `agents`, agents of one harness, workspace folder and
+    // machine that link to one session sharing the card of the first of them. `now`: epoch
+    // milliseconds.
     async build(agents: OrcaAgent[], now: number) {
       // harness, folder and machine -> its agents, in agent order
       const groups = new Map<string, OrcaAgent[]>();
@@ -158,36 +158,54 @@ export function createAgentCards({ run, home, kept = [] }: { run: Run; home: str
         const links = linkAll(group);
         group.forEach((agent, i) => linked.set(agent, links.then(({ home, files }) => files[i] && { file: files[i], home })));
       }
-      // machine and session path -> its stats, read once for the agents that link to it; the
-      // machine is part of the key, since two machines can hold the same path
+      // machine and session path -> its stats and the folder it records (null: untold), read
+      // once for the agents that link to it; the machine is part of the key, since two machines
+      // can hold the same path
       const reads = new Map();
 
       const entries = await Promise.all(
         agents.map(async (agent) => {
           const machine = agent.machine ?? null;
+          const provider = PROVIDERS[agent.agent ?? ''];
+          // the lookup the link waits for too: taken before the link, since a failed one is
+          // forgotten, and asking again after it would cost a dead host a second lookup. An
+          // agent that links to no session (no provider, no folder) asks it where git is read,
+          // whose answer is kept: a dead host of such agents is not asked at every build.
+          const placed = provider && agent.path ? placeOn(machine) : null;
+          const link = await linked.get(agent);
+          const unlinked = { ...readStats('', null, 0), harness: agent.agent ?? NA };
+          const sessionPath = link ? `${machine ?? ''}\0${link.file.path}` : null;
+          if (link && !reads.has(sessionPath)) {
+            const hook = hookOf(provider);
+            reads.set(
+              sessionPath,
+              hook
+                .read(link.file, { machine, home: link.home, now })
+                .then(async (input: unknown) => {
+                  const stats = readStats(provider, input, now);
+                  try {
+                    return { stats, cwd: (await hook.folder?.(link.file, { machine })) ?? null };
+                  } catch {
+                    // a folder that cannot be asked is untold, and the stats stay
+                    return { stats, cwd: null };
+                  }
+                })
+                .catch(() => ({ stats: unlinked, cwd: null })),
+            );
+          }
+          const session = link ? await reads.get(sessionPath) : { stats: unlinked, cwd: null };
+          const folder = session.cwd ?? agent.path;
           // asked only once the machine's place is known: a host that cannot be reached costs
           // the one place lookup, and no git runs there
           const readsGit = () =>
-            placeOn(machine).then(
-              () => readGit({ exec: execOn(machine) }, { cwd: agent.path, on: machine }),
+            (placed ?? placeOn(machine)).then(
+              () => readGit({ exec: execOn(machine) }, { cwd: folder, on: machine }),
               () => ({ branch: null, origin: null }),
             );
-          const [git, link] = await Promise.all([gits(`${machine ?? ''}\0${agent.path}`, now, readsGit), linked.get(agent)]);
-          const unlinked = { ...readStats('', null, 0), harness: agent.agent ?? NA };
-          const provider = PROVIDERS[agent.agent ?? ''];
-          const sessionPath = link ? `${machine ?? ''}\0${link.file.path}` : null;
-          if (link && !reads.has(sessionPath)) {
-            reads.set(
-              sessionPath,
-              hookOf(provider)
-                .read(link.file, { machine, home: link.home, now })
-                .then((input: unknown) => readStats(provider, input, now))
-                .catch(() => unlinked),
-            );
-          }
+          const git = await gits(`${machine ?? ''}\0${folder}`, now, readsGit);
           const card = {
             id: agent.id,
-            folder: agent.path,
+            folder,
             branch: git.branch,
             origin: git.origin,
             harness: agent.agent,
@@ -195,9 +213,12 @@ export function createAgentCards({ run, home, kept = [] }: { run: Run; home: str
             title: agent.title,
             status: agent.state,
             machine,
-            stats: link ? await reads.get(sessionPath) : unlinked,
+            stats: session.stats,
           };
-          return { sessionPath, card };
+          // Agents share a card within their workspace folder only: omp agents of nested
+          // workspace folders can link one session by title, and each workspace row draws its
+          // own agent's card of it. The session path tells the harness and the machine.
+          return { sessionPath: sessionPath && `${agent.path}\0${sessionPath}`, card };
         }),
       );
       return collapseBySession(entries).map((entry: (typeof entries)[number]) => entry.card);
