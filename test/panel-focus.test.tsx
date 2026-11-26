@@ -3,6 +3,7 @@
 // the workspace row it expanded before, unless the developer opened or closed that row since.
 // The worker reads the harnesses' files with the real programs under a temporary home; the
 // `orca` CLI and `ssh`, stood in for (test/helpers/stand-ins.ts), list the SSH host `devbox`.
+import { setTimeout } from 'node:timers/promises';
 import { afterEach, assert, mount, mountWorker, test, type TestPanel, type TestWorker } from 'orca/testing';
 import * as panelModule from '../src/panel.tsx';
 import * as workerModule from '../src/worker.ts';
@@ -43,7 +44,7 @@ async function open(workspaces: HostWorkspace[], focused: string) {
     await view.settled();
     assert.deepEqual(view.errors, []);
   }
-  return { view, moveFocus };
+  return { view, host, moveFocus };
 }
 
 const row = (view: TestPanel, name: string) => view.find({ type: 'Collapsible', label: name })!;
@@ -66,6 +67,94 @@ test('Focus change expands the new workspace', async () => {
   for (const name of ['devbox', 'infra', 'deploy']) assert.equal(isOpen(view, name), true, name);
   const cards = view.findAll({ type: 'Card' }).filter((el) => el.path.startsWith(`${row(view, 'deploy').path}/`));
   assert.equal(cards.length, 1);
+});
+
+test('Focus change expands the new workspace before the worker answers again', async () => {
+  const { view, host } = await open(
+    [
+      { project: 'api', name: 'fix-login', agents: ['working'] },
+      { project: 'infra', name: 'deploy', agents: ['working'], hostId: `ssh:${DEVBOX}` },
+    ],
+    'fix-login',
+  );
+  const release = host.holdLists();
+
+  // the event settles only once the worker has answered, which waits for the release
+  const emitted = view.emit('workspace.changed', { context: host.focus('deploy') });
+  try {
+    await setTimeout(100);
+    for (const name of ['devbox', 'infra', 'deploy']) assert.equal(isOpen(view, name), true, name);
+    assert.equal(isOpen(view, 'fix-login'), false);
+  } finally {
+    release();
+    await emitted;
+  }
+  // the answer, which names the same focus, changes no row
+  await view.settled();
+  for (const name of ['devbox', 'infra', 'deploy']) assert.equal(isOpen(view, name), true, name);
+  assert.equal(isOpen(view, 'fix-login'), false);
+  assert.deepEqual(view.errors, []);
+});
+
+test('An answer asked before focus moved again moves no row', async () => {
+  const { view, host } = await open(
+    [
+      { project: 'api', name: 'fix-login', agents: ['working'] },
+      { project: 'infra', name: 'deploy', agents: ['working'], hostId: `ssh:${DEVBOX}` },
+    ],
+    'fix-login',
+  );
+  let release = host.holdLists();
+  // the worker's answer to this move names `deploy` focused; focus moves back before it is in
+  const first = view.emit('workspace.changed', { context: host.focus('deploy') });
+  await setTimeout(100);
+  const second = view.emit('workspace.changed', { context: host.focus('fix-login') });
+  try {
+    await setTimeout(100);
+    const asked = host.callsOf('workspace.list').length;
+    release();
+    // the answer asked again after the second move waits; it is asked once the stale answer
+    // is drawn
+    release = host.holdLists();
+    while (host.callsOf('workspace.list').length === asked) await setTimeout(10);
+    assert.equal(isOpen(view, 'fix-login'), true);
+    assert.equal(isOpen(view, 'deploy'), false);
+  } finally {
+    release();
+    await Promise.all([first, second]);
+  }
+  await view.settled();
+  assert.equal(isOpen(view, 'fix-login'), true);
+  assert.equal(isOpen(view, 'deploy'), false);
+  assert.deepEqual(view.errors, []);
+});
+
+test('Focus change while the panel is hidden shows at once when it is shown again', async () => {
+  const { view, host } = await open(
+    [
+      { project: 'api', name: 'fix-login', agents: ['working'] },
+      { project: 'infra', name: 'deploy', agents: ['working'], hostId: `ssh:${DEVBOX}` },
+    ],
+    'fix-login',
+  );
+  await view.setVisible(false);
+  await view.emit('workspace.changed', { context: host.focus('deploy') });
+  const release = host.holdLists();
+
+  // shown again, the panel asks the worker, whose answer waits for the release
+  const shown = view.setVisible(true);
+  try {
+    await setTimeout(100);
+    for (const name of ['devbox', 'infra', 'deploy']) assert.equal(isOpen(view, name), true, name);
+    assert.equal(isOpen(view, 'fix-login'), false);
+  } finally {
+    release();
+    await shown;
+  }
+  await view.settled();
+  for (const name of ['devbox', 'infra', 'deploy']) assert.equal(isOpen(view, name), true, name);
+  assert.equal(isOpen(view, 'fix-login'), false);
+  assert.deepEqual(view.errors, []);
 });
 
 test('Previously expanded workspace collapses', async () => {

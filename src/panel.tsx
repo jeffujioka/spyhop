@@ -3,10 +3,13 @@
 // open and never while it is closed, hidden or unmounted, and at once when Orca reports that
 // focus moved to another Orca workspace. The rows follow focus: when the panel opens, the focused
 // Orca workspace, its project and its host are expanded and every other row collapsed; when focus
-// moves, the newly focused workspace, its project and host are expanded, and the workspace row
-// expanded for the previous focus collapses unless the developer opened or closed it since. Any
-// other row stays as the developer opens and closes it. A card whose agent has a pane shows a
-// Focus pane button, which asks the worker to focus that pane in this computer's Orca window.
+// moves, the newly focused workspace, its project and host are expanded, at once when the tree
+// drawn has its row, and the workspace row expanded for the previous focus collapses unless the
+// developer opened or closed it since. Any other row stays as the developer opens and closes
+// it. Above the tree, the Focused block shows the focused Orca workspace's name, its host and
+// project, and its cards; it follows focus as the rows do, and is not drawn while the focused
+// workspace has no row. A card whose agent has a pane shows a Focus pane button, which asks the
+// worker to focus that pane in this computer's Orca window.
 import {
   atom,
   Badge,
@@ -28,7 +31,7 @@ import {
 } from 'orca';
 import { REFRESH_INTERVAL_MS } from './core/refresh.js';
 import type { CardView, TreeAnswer } from './protocol.ts';
-import type { Totals } from './tree.ts';
+import type { Totals, WorkspaceRow } from './tree.ts';
 
 // What the worker answered; null until it does.
 const tree = atom<TreeAnswer | null>(null);
@@ -36,6 +39,9 @@ const tree = atom<TreeAnswer | null>(null);
 // them for focus.
 const opened = atom<ReadonlySet<string>>(new Set());
 const touched = atom<ReadonlySet<string>>(new Set());
+// The focused Orca workspace's row, as followFocus last resolved it; null when the focused
+// workspace has no row.
+const focusedRow = atom<string | null>(null);
 
 // `rows`, with the row `id` in or out of it.
 function withRow(rows: ReadonlySet<string>, id: string, included: boolean): ReadonlySet<string> {
@@ -43,6 +49,18 @@ function withRow(rows: ReadonlySet<string>, id: string, included: boolean): Read
   if (included) next.add(id);
   else next.delete(id);
   return next;
+}
+
+// The first workspace row of `hosts` that `match` picks, with its project and host; undefined
+// when none does.
+function placeOf(hosts: TreeAnswer['hosts'], match: (workspace: WorkspaceRow<CardView>) => boolean) {
+  for (const host of hosts) {
+    for (const project of host.projects) {
+      const workspace = project.workspaces.find(match);
+      if (workspace) return { host, project, workspace };
+    }
+  }
+  return undefined;
 }
 
 // The developer opened or closed the row `id`.
@@ -73,34 +91,38 @@ export function setup({ signal, subscriptions, visible }: PanelContext): void {
   // focus moved during an ask, whose answer may predate it: ask again once it is in
   let again = false;
   let shown = false;
-  // the focused workspace's row of the last answer that named one; and the workspace row
-  // expanded for that focus, null until its row is drawn
+  // Orca's id of the focused workspace as the last answer or event that moved focus named it;
+  // and the workspace row expanded for that focus, null until its row is drawn
   let focus: string | null = null;
   let expanded: string | null = null;
+  // how many times Orca reported focus moving; an answer asked before the latest move names
+  // a focus that may be gone, so its own moves none
+  let moves = 0;
 
-  // An answer that names no focused workspace moves no focus: focus moves to another workspace.
-  function followFocus(answer: TreeAnswer) {
-    if (answer.focused !== null && answer.focused !== focus) {
-      focus = answer.focused;
+  // Focus moves to Orca's workspace `id`; null, no workspace focused, moves none. When it moves,
+  // the workspace row expanded for the previous focus collapses unless the developer opened or
+  // closed it since. The focused row is the row of `hosts` whose agents Orca reports focus by
+  // `id`, none when no row is; it, its project and its host expand once `hosts` holds it.
+  function followFocus(id: string | null, hosts: TreeAnswer['hosts']) {
+    if (id === null) return;
+    if (id !== focus) {
+      focus = id;
       const previous = expanded;
       if (previous && !read(touched).has(previous)) update(opened, (rows) => withRow(rows, previous, false));
       expanded = null;
     }
-    if (expanded !== null || focus === null) return;
-    const id = focus;
-    const rows = answer.hosts.flatMap((host) =>
-      host.projects.flatMap((project) =>
-        project.workspaces.some((workspace) => workspace.id === id) ? [host.id, project.id, id] : [],
-      ),
-    );
-    if (rows.length === 0) return;
-    update(opened, (open) => new Set([...open, ...rows]));
-    update(touched, (open) => withRow(open, id, false));
-    expanded = id;
+    const place = placeOf(hosts, (workspace) => workspace.workspaceIds.includes(id));
+    set(focusedRow, place?.workspace.id ?? null);
+    if (expanded !== null || !place) return;
+    const row = place.workspace.id;
+    update(opened, (open) => new Set([...open, place.host.id, place.project.id, row]));
+    update(touched, (open) => withRow(open, row, false));
+    expanded = row;
   }
 
-  function draw(answer: TreeAnswer) {
-    followFocus(answer);
+  // An answer asked before focus last moved resolves the focus the panel holds, not its own.
+  function draw(answer: TreeAnswer, current: boolean) {
+    followFocus(current ? answer.focused : focus, answer.hosts);
     set(tree, answer);
   }
 
@@ -108,9 +130,10 @@ export function setup({ signal, subscriptions, visible }: PanelContext): void {
     cancel = null;
     asking = true;
     again = false;
+    const asked = moves;
     plugin
       .request('spyhop.tree', undefined, { signal })
-      .then(draw)
+      .then((answer) => draw(answer, asked === moves))
       // a failed answer keeps the last tree drawn; the next refresh asks again
       .catch(() => undefined)
       .finally(() => {
@@ -140,11 +163,15 @@ export function setup({ signal, subscriptions, visible }: PanelContext): void {
       const id = context?.workspaceId ?? null;
       if (id === reported) return;
       reported = id;
-      // hidden, the panel asks nothing; shown again, it asks at once
-      if (!shown) return;
+      moves += 1;
+      // the rows and the Focused block follow at once from the tree drawn, shown or hidden,
+      // without waiting for the worker, whose answer waits for every host's session reads
+      followFocus(id, read(tree)?.hosts ?? []);
+      // an answer being asked may predate the move: it is asked again once in
       if (asking) {
         again = true;
-      } else {
+      } else if (shown) {
+        // hidden, the panel asks nothing; shown again, it asks at once
         cancel?.();
         ask();
       }
@@ -200,8 +227,15 @@ export default function Panel() {
   if (!answer) return <Spinner label="Reading the Orca agents" />;
   if (answer.hosts.length === 0) return <EmptyState title="No Orca agents" icon="agent" />;
   const open = read(opened);
+  const focusedId = read(focusedRow);
+  const focused = placeOf(answer.hosts, (workspace) => workspace.id === focusedId);
   return (
     <Stack gap="sm">
+      {focused && (
+        <Card key="focused" title={focused.workspace.name} description={`${focused.host.name} · ${focused.project.name}`}>
+          <Stack gap="sm">{focused.workspace.cards.map(cardOf)}</Stack>
+        </Card>
+      )}
       {answer.hosts.map((host) => (
         <Collapsible key={host.id} title={host.name} open={open.has(host.id)} onChange={(next) => toggled(host.id, next)}>
           {host.projects.map((project) => (

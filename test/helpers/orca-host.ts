@@ -1,7 +1,8 @@
 // This computer's Orca host as orca/testing's mockHost plays it for the plugin's worker and
 // panel: its Orca workspaces, each with the folder Orca reports under a temporary home, the
 // Orca agents in each, and the focused one, which `focus` moves. It focuses any terminal it is
-// asked to (`terminal.focus`); `callsOf('terminal.focus')` lists those asks.
+// asked to (`terminal.focus`); `callsOf('terminal.focus')` lists those asks. `holdLists` holds
+// back its `workspace.list` answers, so the worker answers no tree, until the release it returns.
 import { hostError, mockHost } from 'orca/testing';
 import { workspace as folder } from './agent-cards.ts';
 
@@ -30,9 +31,14 @@ export function orcaHost(home: string, { workspaces, focused }: { workspaces: Ho
       })),
     };
   });
+  // what `workspace.list` answers wait for
+  let lists = Promise.resolve();
   const host = mockHost({
     results: {
-      'workspace.list': { workspaces: rows.map(({ row }) => row), truncated: false },
+      'workspace.list': async () => {
+        await lists;
+        return { workspaces: rows.map(({ row }) => row), truncated: false };
+      },
       'agents.list': ({ workspaceId }: { workspaceId: string }) => {
         const found = rows.find(({ row }) => row.id === workspaceId);
         if (found?.unreadable) throw hostError('not_found', `no workspace ${workspaceId}`);
@@ -50,5 +56,10 @@ export function orcaHost(home: string, { workspaces, focused }: { workspaces: Ho
     return context;
   }
   focus(focused);
-  return Object.assign(host, { focus });
+  function holdLists() {
+    const { promise, resolve } = Promise.withResolvers<void>();
+    lists = promise;
+    return resolve;
+  }
+  return Object.assign(host, { focus, holdLists });
 }

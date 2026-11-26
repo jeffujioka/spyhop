@@ -3,15 +3,21 @@
 // programs go through it. On this computer no shell string is used; on another Orca host
 // (`on`: the alias of its SSH target) the program runs as `ssh <alias> -o BatchMode=yes -o
 // ConnectTimeout=5 -- <line>`, the line being the program and its arguments, each quoted for the
-// remote shell, after `cd <cwd> &&` when a folder is given. At most SSH_AT_ONCE programs run on
-// one alias at once, the others waiting their turn, so a host's SSH server never sees more new
-// connections than its default limit lets through. An alias that starts with `-`, which ssh
-// would read as an option, is refused as an unreachable host. A program that exits non-zero
+// remote shell, after `cd <cwd> &&` when a folder is given. Unless the alias's own ssh settings
+// (`ssh -G <alias>`, read on this computer at most once every SETTINGS_TTL_MS) already reuse
+// connections, `-o ControlMaster=auto -o ControlPath=/tmp/spyhop-<uid>/%C -o ControlPersist=60`
+// follows ConnectTimeout, so the alias's programs share one connection; when `ssh -G` fails, or
+// the socket folder is a symlink or another user's, nothing is added. At most SSH_AT_ONCE
+// programs run on one alias at once, the others waiting their turn, so a host's SSH server never
+// sees more new connections than its default limit lets through. An alias that starts with `-`,
+// which ssh would read as an option, is refused as an unreachable host. A program that exits non-zero
 // (ssh too, as for an unreachable host) resolves with its code; one that cannot start, runs past
 // the timeout or prints past the output cap rejects, and the core reads n/a for what it asked.
 
 import { execFile } from 'node:child_process';
+import { chmodSync, lstatSync, mkdirSync } from 'node:fs';
 import { createLimit } from './core/limit.js';
+import { createTtlCache } from './core/ttl-cache.js';
 
 // Longest any one program may run, from its start.
 export const RUN_TIMEOUT_MS = 10 * 1000;
@@ -21,6 +27,13 @@ export const MAX_OUTPUT_BYTES = 8 * 1024 * 1024;
 
 // Most programs run at once on one other Orca host: below sshd's default `MaxStartups 10`.
 const SSH_AT_ONCE = 4;
+
+// How long an alias's `ssh -G` settings are kept before they are read again.
+const SETTINGS_TTL_MS = 60 * 1000;
+
+// The `controlmaster` values, as `ssh -G` prints them (`yes` as `true`), of an alias whose own
+// settings already reuse connections.
+const REUSING = ['auto', 'true', 'ask', 'autoask'];
 
 export type RunResult = { code: number; stdout: string; stderr: string };
 export type RunOptions = { cwd?: string; on?: string | null };
@@ -32,6 +45,9 @@ const quote = (word: string) => `'${word.replaceAll("'", `'\\''`)}'`;
 // alias -> the limit its programs run under
 const hosts = new Map<string, (task: () => Promise<RunResult>) => Promise<RunResult>>();
 
+// alias -> the options its ssh calls add for reusing connections, as its `ssh -G` settings ask
+const reuse = createTtlCache(SETTINGS_TTL_MS);
+
 function execute(program: string, argv: string[], cwd: string | undefined) {
   const { promise, resolve, reject } = Promise.withResolvers<RunResult>();
   execFile(program, argv, { cwd, timeout: RUN_TIMEOUT_MS, maxBuffer: MAX_OUTPUT_BYTES, encoding: 'utf8' }, (error, stdout, stderr) => {
@@ -42,13 +58,36 @@ function execute(program: string, argv: string[], cwd: string | undefined) {
   return promise;
 }
 
+// The options that make an alias's ssh calls share one connection: none when the alias's own
+// settings already do, when `ssh -G` fails, or when the socket folder cannot be kept the user's
+// alone; the socket lives on this computer only, in a folder of mode 700.
+async function reuseOptions(alias: string): Promise<string[]> {
+  const settings = await execute('ssh', ['-G', alias], undefined).catch(() => null);
+  if (settings?.code !== 0) return [];
+  if (REUSING.includes(/^controlmaster (\S+)$/m.exec(settings.stdout)?.[1] ?? '')) return [];
+  const uid = process.getuid!();
+  const folder = `/tmp/spyhop-${uid}`;
+  try {
+    mkdirSync(folder, { recursive: true, mode: 0o700 });
+    // a symlink, which another local user may have left there, or a folder of another user's is
+    // not used; a folder left with a wider mode is narrowed
+    const found = lstatSync(folder);
+    if (!found.isDirectory() || found.uid !== uid) return [];
+    chmodSync(folder, 0o700);
+  } catch {
+    return [];
+  }
+  return ['-o', 'ControlMaster=auto', '-o', `ControlPath=${folder}/%C`, '-o', 'ControlPersist=60'];
+}
+
 export const run: Run = async (command, args, options = {}) => {
   const { on, cwd } = options;
   if (!on) return execute(command, args, cwd);
   if (on.startsWith('-')) return { code: 255, stdout: '', stderr: `spyhop: alias ${on} reads as an ssh option` };
   const line = [command, ...args].map(quote).join(' ');
+  const reusing: string[] = await reuse(on, Date.now(), () => reuseOptions(on));
   // BatchMode: ssh never asks for a password or a host key, it fails instead
-  const argv = [on, '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=5', '--', cwd ? `'cd' ${quote(cwd)} && ${line}` : line];
+  const argv = [on, '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=5', ...reusing, '--', cwd ? `'cd' ${quote(cwd)} && ${line}` : line];
   if (!hosts.has(on)) hosts.set(on, createLimit(SSH_AT_ONCE));
   return hosts.get(on)!(() => execute('ssh', argv, undefined));
 };

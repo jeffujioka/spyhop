@@ -18,7 +18,7 @@ import { createTtlCache } from './core/ttl-cache.js';
 import { run } from './exec.ts';
 import { orca as cli, type HostLists, listHosts, readServerAgents, remoteHosts } from './hosts.ts';
 import type { CardView, Pane, TreeAnswer } from './protocol.ts';
-import { buildTree, type TreeAgent, workspaceRowId } from './tree.ts';
+import { buildTree, type TreeAgent } from './tree.ts';
 import { worktreeId } from './worktree-id.ts';
 
 // Orca's id of this computer's host; a workspace that records no host is on this computer.
@@ -73,15 +73,6 @@ export default function activate(orca: OrcaWorkerApi): void {
       ),
     ]);
     const onServers = servers.flat();
-    // The focused workspace is a `workspace.list` row, or else a paired server's: Orca's id of a
-    // workspace is its worktreeId, which that server's agents in it carry.
-    const current = workspaces.find((workspace) => workspace.id === context?.workspaceId);
-    const onServer = context?.workspaceId ? onServers.find((agent) => agent.worktreeId === context.workspaceId) : undefined;
-    const focused = current
-      ? workspaceRowId(hostOf(current), worktreeOf(current))
-      : onServer
-        ? workspaceRowId(onServer.hostId, onServer.worktreeId)
-        : null;
     // agent id -> its pane, for an agent Orca names a terminal of
     const panes = new Map<string, Pane>();
     const agents: (OrcaAgent & TreeAgent)[] = asked.flatMap((workspace, i) => {
@@ -101,6 +92,7 @@ export default function activate(orca: OrcaWorkerApi): void {
           repo: workspace.project ?? workspace.name,
           workspace: workspace.name,
           worktreeId: worktreeOf(workspace),
+          workspaceId: workspace.id,
         };
       });
     });
@@ -122,7 +114,8 @@ export default function activate(orca: OrcaWorkerApi): void {
           })),
         })),
       })),
-      focused,
+      // the panel finds the focused workspace's row by it (the rows' `workspaceIds`)
+      focused: context?.workspaceId ?? null,
     };
   });
 

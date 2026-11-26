@@ -15,8 +15,8 @@ const card = (id: string, figures: Record<string, number | string>, status = 'do
 
 // Two Orca agents of the Orca workspace `main`, the only one of the Orca project `app`.
 const AGENTS: TreeAgent[] = [
-  { id: 'a1', hostId: 'local', repo: 'app', workspace: 'main', worktreeId: 'w1::/work/app' },
-  { id: 'a2', hostId: 'local', repo: 'app', workspace: 'main', worktreeId: 'w1::/work/app' },
+  { id: 'a1', hostId: 'local', repo: 'app', workspace: 'main', worktreeId: 'w1::/work/app', workspaceId: 'w1::/work/app' },
+  { id: 'a2', hostId: 'local', repo: 'app', workspace: 'main', worktreeId: 'w1::/work/app', workspaceId: 'w1::/work/app' },
 ];
 
 test('Totals add up', () => {
@@ -50,8 +50,8 @@ test('One card without the figure', () => {
 
 test('two projects with the same name on one host stay two rows', () => {
   const agents: TreeAgent[] = [
-    { id: 'a1', hostId: 'local', repo: 'app', workspace: 'main', worktreeId: 'w1::/work/app' },
-    { id: 'a2', hostId: 'local', repo: 'app', workspace: 'main', worktreeId: 'w2::/other/app' },
+    { id: 'a1', hostId: 'local', repo: 'app', workspace: 'main', worktreeId: 'w1::/work/app', workspaceId: 'w1::/work/app' },
+    { id: 'a2', hostId: 'local', repo: 'app', workspace: 'main', worktreeId: 'w2::/other/app', workspaceId: 'w2::/other/app' },
   ];
   const cards = [card('a1', { costUsd: 1.2 }), card('a2', { costUsd: 0.3 })];
   const [host] = buildTree(agents, cards);
@@ -66,8 +66,8 @@ test('two projects with the same name on one host stay two rows', () => {
 
 test('a worktreeId without a project id keys its project by name', () => {
   const agents: TreeAgent[] = [
-    { id: 'a1', hostId: 'local', repo: 'app', workspace: 'main', worktreeId: '/work/app' },
-    { id: 'a2', hostId: 'local', repo: 'app', workspace: 'fix', worktreeId: '/work/app-fix' },
+    { id: 'a1', hostId: 'local', repo: 'app', workspace: 'main', worktreeId: '/work/app', workspaceId: '/work/app' },
+    { id: 'a2', hostId: 'local', repo: 'app', workspace: 'fix', worktreeId: '/work/app-fix', workspaceId: '/work/app-fix' },
   ];
   const [host] = buildTree(agents, [card('a1', {}), card('a2', {})]);
   assert.deepEqual(
@@ -79,7 +79,7 @@ test('a worktreeId without a project id keys its project by name', () => {
 test('Cards ordered by Orca state', () => {
   const states = { a: 'done', b: 'waiting', c: 'working', d: 'blocked', e: 'working' };
   const ids = Object.keys(states) as (keyof typeof states)[];
-  const agents: TreeAgent[] = ids.map((id) => ({ id, hostId: 'local', repo: 'app', workspace: 'main', worktreeId: 'w1::/work/app' }));
+  const agents: TreeAgent[] = ids.map((id) => ({ id, hostId: 'local', repo: 'app', workspace: 'main', worktreeId: 'w1::/work/app', workspaceId: 'w1::/work/app' }));
   const [main] = buildTree(agents, ids.map((id) => card(id, {}, states[id])))[0].projects[0].workspaces;
   assert.deepEqual(main.cards.map((c) => c.id), ['c', 'e', 'd', 'b', 'a']);
 });
@@ -87,7 +87,7 @@ test('Cards ordered by Orca state', () => {
 test('Cards of a state Orca does not name go last', () => {
   const states = { a: 'idle', b: 'done', c: 'working', d: 'paused' };
   const ids = Object.keys(states) as (keyof typeof states)[];
-  const agents: TreeAgent[] = ids.map((id) => ({ id, hostId: 'local', repo: 'app', workspace: 'main', worktreeId: 'w1::/work/app' }));
+  const agents: TreeAgent[] = ids.map((id) => ({ id, hostId: 'local', repo: 'app', workspace: 'main', worktreeId: 'w1::/work/app', workspaceId: 'w1::/work/app' }));
   const [main] = buildTree(agents, ids.map((id) => card(id, {}, states[id])))[0].projects[0].workspaces;
   assert.deepEqual(main.cards.map((c) => c.id), ['c', 'b', 'a', 'd']);
 });

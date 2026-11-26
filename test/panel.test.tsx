@@ -64,8 +64,11 @@ test('Agents in two workspaces of one project', async () => {
   );
   assert.equal(identity.find((item) => item.label === 'Path')?.value, '~/work/api-main');
   assert.equal(identity.find((item) => item.label === 'Harness')?.value, 'omp');
-  // Orca's own status words, `waiting` in a colour of its own
-  const tones = view.findAll({ type: 'Badge' }).map((badge) => [badge.text, badge.props.tone]);
+  // Orca's own status words, `waiting` in a colour of its own; the tree's cards, the Focused
+  // block's aside
+  const tones = cardsIn(view, row(view, 'local')!).flatMap((card) =>
+    view.findAll({ type: 'Badge' }).filter((el) => el.path.startsWith(`${card.path}/`)).map((badge) => [badge.text, badge.props.tone]),
+  );
   assert.deepEqual(tones, [
     ['working', 'accent'],
     ['waiting', 'warning'],

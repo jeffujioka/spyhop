@@ -97,6 +97,8 @@ export async function readServerAgents(
         repo: agent.repo,
         workspace: agent.workspace,
         worktreeId: agent.worktreeId,
+        // Orca's id of a paired server's workspace is its worktreeId
+        workspaceId: agent.worktreeId,
         pane: handle ? { environment: host.name, terminal: handle } : null,
       };
     });
