@@ -114,12 +114,13 @@ export function createAgentCards({ run, home, kept = [] }: { run: Run; home: str
   }
 
   // The session file each agent of one harness, folder and machine links to (null: none), in
-  // agent order (see linkAgents, src/core/session-link.js), with that machine's home; never
-  // rejects. An agent whose sessionId names a session by its harness's rule (the hook's
-  // `named`) gets it, whatever folder of the host that session is of, and no title is read for
-  // it. The agents left share out the newest sessions of the workspace folder no id named, by
-  // title, when the hook can `list` the folder; else, and for an agent alone in its folder
-  // without a named session, they link to the newest session no id named.
+  // agent order, with that machine's home; never rejects. An agent whose sessionId names a
+  // session by its harness's rule (the hook's `named`) gets it, whatever folder of the host
+  // that session is of, and no title is read for it. The agents left link by their harness's
+  // rule. A hook that can `list` (omp, whose sessions carry a title): each to the session of
+  // the workspace folder or below it whose title its own contains, and to none when no title
+  // matches (see linkAgents, src/core/session-link.js). A hook that cannot (Claude Code,
+  // opencode): all to the newest session of the workspace folder no id named (`link`).
   async function linkAll(agents: OrcaAgent[]) {
     const [{ agent: kind, path, machine = null }] = agents;
     const provider = PROVIDERS[kind ?? ''];
@@ -132,15 +133,10 @@ export function createAgentCards({ run, home, kept = [] }: { run: Run; home: str
       const ids = agents.map((agent) => agent.sessionId ?? null);
       const named = ids.some(Boolean) ? await hook.named(where, ids) : ids.map(() => null);
       const except = named.filter(Boolean).map((file: { path: string }) => file.path);
-      const unnamed = named.filter((file: unknown) => !file).length;
-      let candidates = [];
-      if (unnamed > 0 && hook.list && (unnamed > 1 || except.length > 0)) {
-        candidates = await hook.list({ ...where, limit: unnamed, except });
-      } else if (unnamed > 0) {
-        const file = await hook.link({ ...where, except });
-        candidates = file ? [file] : [];
-      }
-      return { home: place.home, files: linkAgents(named, candidates, agents) };
+      if (named.every(Boolean)) return { home: place.home, files: named };
+      if (hook.list) return { home: place.home, files: linkAgents(named, await hook.list({ ...where, except }), agents) };
+      const newest = await hook.link({ ...where, except });
+      return { home: place.home, files: named.map((file: unknown) => file ?? newest) };
     } catch {
       return none;
     }

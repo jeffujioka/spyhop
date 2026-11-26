@@ -25,23 +25,26 @@
 // runner (src/exec.ts), read-only use only; `kept` is the scans of this provider's session
 // files that an earlier run kept (see `sessionReaders`, session-files.js). `createSessions`
 // runs once per card builder and returns
-//   link({ machine, cwd, home, os, except }) -> Promise<{ path, mtimeMs, size } | null>
-//     the session file the Orca agent's workspace folder links to (the newest one whose path
-//     is not in `except`, the named ones, however long ago it changed, see session-link.js),
-//     or null; `home` and `os` (`uname -s`) are the host's; used for a provider without
-//     `list`, and for an agent alone in its folder;
 //   named({ machine, cwd, home, os }, sessionIds) -> Promise<Array<{ path, mtimeMs, size } | null>>
 //     for each of the Orca agents' sessionIds (null: none), the session on the folder's host
 //     that the id names by the harness's own rule, or null; the hook alone knows that rule.
 //     The session can be one of another folder than the agent's workspace folder `cwd`: a
 //     harness that ran in a sub-folder of it keeps its session with that sub-folder's (omp
 //     looks in every session folder of the host);
-//   list({ machine, cwd, home, os, limit, except }) -> Promise<Array<{ path, mtimeMs, size, title? }>>
-//     optional: the `limit` newest session files of the folder whose path is not in `except`
-//     (the named ones), newest first, with each file's title where the harness writes one into
-//     it, for sharing the files out among the Orca agents of one folder, host and harness
-//     that no sessionId named (`shareSessions`, src/core/session-link.js, by the agents'
-//     titles). A provider with no titles leaves `list` out;
+//   An agent no sessionId named links by one of the next two, of which a hook has one:
+//   list({ machine, cwd, home, os, except }) -> Promise<Array<{ path, mtimeMs, size, title }>>
+//     for a harness that writes a title into its sessions (omp): the sessions such an agent
+//     of the workspace folder `cwd` may link to, newest first, each with its title: those whose
+//     path is not in `except` (the named ones) and whose recorded folder is `cwd` or a folder
+//     below it. Each agent gets the one whose title its own title contains, and none when no
+//     title matches (`shareSessions`, src/core/session-link.js). The hook bounds what one
+//     call reads, not which sessions it gives: a session it has read before costs nothing
+//     while unchanged, and one it has not read yet is given by a later call;
+//   link({ machine, cwd, home, os, except }) -> Promise<{ path, mtimeMs, size } | null>
+//     for a harness without titles (Claude Code, opencode): the session all such agents of
+//     the workspace folder `cwd` link to, the newest one of that folder whose path is not in
+//     `except`, however long ago it changed (see session-link.js), or null; `home` and `os`
+//     (`uname -s`) are the host's;
 //   read(file, { machine, home, now })     -> Promise<input>
 //     the `input` of this provider's `readStats` for a linked file;
 //   folder(file, { machine })              -> Promise<string | null>

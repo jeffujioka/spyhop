@@ -18,7 +18,8 @@ type State = 'working' | 'blocked' | 'waiting' | 'done';
 // `unreadable`: its `agents.list` fails, as for a workspace removed since `workspace.list`;
 // `hostId`: the Orca host `workspace.list` puts it on, this computer's when not given;
 // `terminals`: the terminal id of each agent, null for one in a chat with no terminal,
-// `<project>-<name>-<i>` when not given.
+// `<project>-<name>-<i>` when not given;
+// `sessionId`: the harness session id Orca reports for each of its agents, none when not given.
 export type HostWorkspace = {
   project: string;
   name: string;
@@ -27,13 +28,14 @@ export type HostWorkspace = {
   unreadable?: boolean;
   hostId?: string;
   terminals?: (string | null)[];
+  sessionId?: string;
 };
 
 export function orcaHost(
   home: string,
   { workspaces, focused, storage, capabilities }: { workspaces: HostWorkspace[]; focused?: string } & Pick<MockHostOptions, 'storage' | 'capabilities'>,
 ) {
-  const rows = workspaces.map(({ project, name, agents, harness = 'omp', unreadable, hostId = 'local', terminals }) => {
+  const rows = workspaces.map(({ project, name, agents, harness = 'omp', unreadable, hostId = 'local', terminals, sessionId = null }) => {
     const path = folder(home, `${project}-${name}`);
     const projectId = `repo:${project}`;
     return {
@@ -45,7 +47,7 @@ export function orcaHost(
         agent: harness,
         state,
         stateStartedAt: 0,
-        sessionId: null,
+        sessionId,
       })),
     };
   });

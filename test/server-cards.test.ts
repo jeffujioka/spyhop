@@ -48,8 +48,8 @@ function jeffLists(remoteHome: string, agents: object[], terminal: string, held 
 const refresh = () => worker!.request('spyhop.tree') as Promise<TreeAnswer>;
 
 // The next refresh, on the lists `agents` and `terminal` with the answer of `orca agent list`
-// held back until `find` listed the session folder `sessions` over `ssh jeff`. Returns its tree
-// and how often `find` listed that folder in it.
+// held back until `find` listed omp's session folders, which `sessions` holds, over `ssh jeff`.
+// Returns its tree and how often `find` listed them in it.
 async function refreshWithListHeld(remoteHome: string, agents: object[], terminal: string, sessions: string) {
   const calls = jeffLists(remoteHome, agents, terminal, true);
   const finds = () => calls.ssh().filter(([alias, ...args]) => alias === 'jeff' && args.at(-1)!.startsWith(`'find' '-H' '${sessions}' `)).length;
@@ -70,7 +70,7 @@ test('Same list uses the cards built meanwhile', async () => {
   const home = useTempHome();
   const remoteHome = tempHome();
   const folder = join(remoteHome, 'work/spyhop-main');
-  const file = ompSession(remoteHome, folder);
+  const file = ompSession(remoteHome, folder, 0.1, 'Fix the login bug');
   const listed = (state: string) => [serverAgent(folder, 'main', 'tab1:leaf2', { state, title: 'Fix the login bug' })];
   jeffLists(remoteHome, listed('working'), 'term-9');
   worker = await mountWorker(workerModule, { host: orcaHost(home, { workspaces: [] }) });
@@ -78,7 +78,7 @@ test('Same list uses the cards built meanwhile', async () => {
   assert.deepEqual([before[0].groups[0].status.label, before[0].pane, costOf(before[0])], ['working', { environment: 'jeff', terminal: 'term-9' }, '$0.10']);
   appendFileSync(file, costTurn(0.15));
 
-  const { tree, finds } = await refreshWithListHeld(remoteHome, listed('waiting'), 'term-12', dirname(file));
+  const { tree, finds } = await refreshWithListHeld(remoteHome, listed('waiting'), 'term-12', dirname(dirname(file)));
 
   // listed before the list answered (the answer was held until then), and not again after it
   assert.equal(finds, 1);
@@ -93,10 +93,10 @@ test('Changed list builds the cards again in the same refresh', async () => {
   const home = useTempHome();
   const remoteHome = tempHome();
   const folder = join(remoteHome, 'work/spyhop-main');
-  const file = ompSession(remoteHome, folder);
+  const file = ompSession(remoteHome, folder, 0.1, 'Fix the login bug');
   const fixLogin = join(remoteHome, 'work/spyhop-fix-login');
-  ompSession(remoteHome, fixLogin, 0.4);
-  const main = serverAgent(folder, 'main', 'tab1:leaf2');
+  ompSession(remoteHome, fixLogin, 0.4, 'Write the docs');
+  const main = serverAgent(folder, 'main', 'tab1:leaf2', { title: 'Fix the login bug' });
   jeffLists(remoteHome, [main], 'term-9');
   worker = await mountWorker(workerModule, { host: orcaHost(home, { workspaces: [] }) });
   assert.deepEqual(
@@ -104,7 +104,8 @@ test('Changed list builds the cards again in the same refresh', async () => {
     [['main', 1]],
   );
 
-  const { tree } = await refreshWithListHeld(remoteHome, [main, serverAgent(fixLogin, 'fix-login', 'tab2:leaf1')], 'term-9', dirname(file));
+  const fixer = serverAgent(fixLogin, 'fix-login', 'tab2:leaf1', { title: 'Write the docs' });
+  const { tree } = await refreshWithListHeld(remoteHome, [main, fixer], 'term-9', dirname(dirname(file)));
 
   const rows = workspacesOf(tree);
   assert.deepEqual(

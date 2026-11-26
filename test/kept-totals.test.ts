@@ -40,7 +40,7 @@ const PADDING = `${JSON.stringify({ type: 'custom', note: 'x'.repeat(2000) })}\n
 function devboxAgent() {
   useTempHome();
   const remoteHome = tempHome();
-  const workspace: HostWorkspace = { project: 'infra', name: 'main', agents: ['working'], hostId: `ssh:${DEVBOX}` };
+  const workspace: HostWorkspace = { project: 'infra', name: 'main', agents: ['working'], hostId: `ssh:${DEVBOX}`, sessionId: 's1' };
   const file = ompSession(remoteHome, join(remoteHome, 'work/infra-main'));
   appendFileSync(file, PADDING);
   const calls = standIns({

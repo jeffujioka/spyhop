@@ -53,16 +53,17 @@ const STAT_COMMANDS = {
   Linux: ['stat', '-c', '%Y %s %n'],
 };
 
-// The files of the `names` (`find -name` patterns) in `dir` and up to `depth` folders deep (1:
-// directly in it), as `{ path, mtimeMs, size }`; none when the folder cannot be listed or the
-// system is one whose `stat` is unknown. `-H` has `find` go into a `dir` that is a symbolic
-// link (a home whose dot-folders a dotfile manager links), which it would only name otherwise.
-async function listFolder(exec, { dir, os, depth = 1, names = ['*.jsonl'] }) {
+// The files in `dir` and up to `depth` folders deep (1: directly in it) that the `names` name
+// (`find -name` patterns), or whose whole path is `path` (a `find -path` pattern) when given, as
+// `{ path, mtimeMs, size }`; none when the folder cannot be listed or the system is one whose
+// `stat` is unknown. `-H` has `find` go into a `dir` that is a symbolic link (a home whose
+// dot-folders a dotfile manager links), which it would only name otherwise.
+async function listFolder(exec, { dir, os, depth = 1, names = ['*.jsonl'], path }) {
   const stat = STAT_COMMANDS[os];
   if (!stat) return [];
-  const tests = names.flatMap((name) => ['-o', '-name', name]).slice(1);
-  const named = names.length > 1 ? ['(', ...tests, ')'] : tests;
-  const listed = await exec('find', ['-H', dir, '-maxdepth', String(depth), ...named, '-exec', ...stat, '{}', '+']);
+  const anyName = names.flatMap((name) => ['-o', '-name', name]).slice(1);
+  const tests = path ? ['-path', path] : names.length > 1 ? ['(', ...anyName, ')'] : anyName;
+  const listed = await exec('find', ['-H', dir, '-maxdepth', String(depth), ...tests, '-exec', ...stat, '{}', '+']);
   return listed.code === 0 ? parseSessionFiles(listed.stdout) : [];
 }
 
@@ -87,10 +88,11 @@ export async function findNamedFiles(exec, { dir, os, depth, pattern }, sessionI
   return sessionIds.map((id) => (id ? files.find((file) => names(file.path, id)) : null) ?? null);
 }
 
-// The `limit` newest session files in `dir` whose path is not in `except`, newest first, as
-// `{ path, mtimeMs, size }`: the candidates for the agents that share the folder (see
-// `shareSessions` in session-link.js). None when `except` holds every file.
-export async function listSessionFiles(exec, { dir, os, limit, except = [] }) {
-  const files = newestFirst(await listFolder(exec, { dir, os }));
-  return files.filter((file) => !except.includes(file.path)).slice(0, limit);
+// The `.jsonl` files directly in the folders of `dir` whose name starts with `prefix`, newest
+// first, as `{ path, mtimeMs, size }`: one listing, whatever the number of those folders, which
+// prints the files of no other folder. `dir` and `prefix` are taken as they are written: a `*`,
+// `?`, `[` or `\` in them is no pattern.
+export async function listFilesOfFolders(exec, { dir, os, prefix }) {
+  const written = `${dir}/${prefix}`.replace(/[\\*?[\]]/g, '\\$&');
+  return newestFirst(await listFolder(exec, { dir, os, depth: 2, path: `${written}*/*.jsonl` }));
 }

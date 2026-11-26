@@ -1,7 +1,7 @@
 import { mkdirSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, test } from 'node:test';
-import { findNamedFiles, findSessionFile } from '../../src/core/providers/session-files.js';
+import { findNamedFiles, findSessionFile, listFilesOfFolders } from '../../src/core/providers/session-files.js';
 import { tempHome } from '../helpers/files.ts';
 import { expect } from './helpers/expect.ts';
 import { recordingRun } from './helpers/recording-run.ts';
@@ -85,5 +85,26 @@ describe('finding the session files that ids name', () => {
     const [file] = await findNamedFiles(exec, where(join(home, 'sessions')), ['one'], names);
 
     expect(file?.path).toBe(`${home}/sessions/-a/t_one.jsonl`);
+  });
+});
+
+describe('listing the session files of the folders named alike', () => {
+  test('in one listing, newest first, the prefix taken as it is written', async () => {
+    const root = tempHome();
+    for (const file of ['-p/old.jsonl', '-p-sub/new.jsonl', '-p/notes.txt', '-q/other.jsonl', '-[p]-sub/odd.jsonl']) {
+      mkdirSync(join(root, file, '..'), { recursive: true });
+      writeFileSync(join(root, file), 'x');
+    }
+    utimesSync(join(root, '-p/old.jsonl'), (NOW - 60_000) / 1000, (NOW - 60_000) / 1000);
+    utimesSync(join(root, '-p-sub/new.jsonl'), NOW / 1000, NOW / 1000);
+    const { exec, calls } = recordingRun();
+
+    const alike = await listFilesOfFolders(exec, { dir: root, os: 'Darwin', prefix: '-p' });
+    // `[p]` names the folder `-[p]-sub`, not every folder that starts with `-p`
+    const odd = await listFilesOfFolders(exec, { dir: root, os: 'Darwin', prefix: '-[p]' });
+
+    expect(alike.map((file: { path: string }) => file.path)).toEqual([`${root}/-p-sub/new.jsonl`, `${root}/-p/old.jsonl`]);
+    expect(odd.map((file: { path: string }) => file.path)).toEqual([`${root}/-[p]-sub/odd.jsonl`]);
+    expect(calls).toHaveLength(2);
   });
 });

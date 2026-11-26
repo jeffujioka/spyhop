@@ -20,9 +20,11 @@ const GROUPS = ['identity', 'context', 'spend', 'cache', 'activity'];
 test('omp agent card', async () => {
   const home = tempHome();
   const path = workspace(home, 'demo');
-  sessions(join(home, '.omp/agent/sessions/-work-demo'), { '2026-11-02_s1.jsonl': 'omp/basic.jsonl' });
+  // basic.jsonl's own session id, in the name omp gives the file
+  const sessionId = '00000000-0000-7000-8000-000000000001';
+  sessions(join(home, '.omp/agent/sessions/-work-demo'), { [`2026-11-02_${sessionId}.jsonl`]: 'omp/basic.jsonl' });
 
-  const [{ model }] = await cardsOf(home, [agent({ agent: 'omp', path })]);
+  const [{ model }] = await cardsOf(home, [agent({ agent: 'omp', sessionId, path })]);
   const [identity, , spend] = model.groups;
 
   assert.deepEqual(model.groups.map((group: { id: string }) => group.id), GROUPS);
@@ -143,8 +145,9 @@ test('Card without a linked session keeps the workspace folder', async () => {
 test('Session that records no folder keeps the workspace folder', async () => {
   const home = tempHome();
   const path = workspace(home, 'demo');
+  const file = ompSessionOf(home, path);
   // its `session` entry holds no `cwd`
-  ompSessionOf(home, path);
+  writeFileSync(file, `${JSON.stringify({ type: 'session', version: 3, id: 's1', timestamp: '2026-11-25T11:58:00.000Z' })}\n${costTurn(0.1)}`);
   const { exec, calls } = recordingRun();
   const cards = createAgentCards({ run: exec, home });
   const agents = [agent({ agent: 'omp', sessionId: 's1', path })];
