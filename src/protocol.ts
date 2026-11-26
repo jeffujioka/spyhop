@@ -38,12 +38,22 @@ export type TreeAnswer = {
   focused: string | null;
 };
 
+// One Orca host's row, posted during a `spyhop.tree` request as soon as that host's cards are
+// built: the row as the answer will hold it, the number the panel gave the request, and the
+// answer's `focused`.
+export type HostRowPost = { request: number; host: HostRow<CardView>; focused: string | null };
+
 declare module 'orca' {
   interface PluginRequests {
-    /** The tree of this computer's Orca agents, built once per request. */
-    'spyhop.tree': { output: TreeAnswer };
+    /** The tree of this computer's Orca agents, built once per request. `request`: the panel's
+     *  number of the request, which the host rows posted during it carry (`spyhop.host`); asked
+     *  without one, the worker posts none. */
+    'spyhop.tree': { input: { request: number } | undefined; output: TreeAnswer };
     /** Focuses the pane in this computer's Orca window; `focused` false when it could not, the
      *  reason in the worker's log. */
     'spyhop.focus': { input: Pane; output: { focused: boolean } };
+  }
+  interface PluginPanelEvents {
+    'spyhop.host': HostRowPost;
   }
 }

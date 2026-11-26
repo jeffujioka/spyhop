@@ -59,7 +59,9 @@ database). An agent of any other harness gets a card whose figures all read `n/a
 
 An agent on an SSH workspace, and an agent on a paired Orca server, get cards too, under their
 own host row. Their session files and git facts are read over `ssh <alias> -o BatchMode=yes -o
-ConnectTimeout=5`, at most four commands at once per host, with read-only commands only: `cd`,
+ConnectTimeout=5`, at most eight commands at once on a host whose SSH connection spyhop keeps
+for itself and four on any other (one whose own SSH settings already reuse connections, or
+whose settings cannot be read), with read-only commands only: `cd`,
 `uname -s`, `printenv HOME`, `cat`, `head`, `tail`, `dd` (reading a block, never writing one),
 `find` with `stat`, `git branch --show-current`, `git remote get-url` and `sqlite3 -readonly`.
 The hosts and the paired servers' agents are listed with the `orca` CLI on every refresh while
@@ -84,6 +86,22 @@ fails, or `/tmp/spyhop-<uid>` is a symlink or another user's folder, the plugin 
 While the panel is open it asks for the tree every 2 seconds, and at once when focus moves to
 another workspace. While it is closed, hidden or unmounted it asks for nothing: a refresh that
 was running when it closed runs to its end, and no other starts.
+
+During a refresh each host's rows appear as soon as that host's cards are built, without waiting
+for another host: this computer's are not held up by a slow SSH host or paired server. When the
+refresh ends the whole tree replaces what is drawn, so the rows of a host that is gone
+disappear then.
+
+## What spyhop stores
+
+Session totals only, in the plugin's own storage on this computer (`storage:own`): for each
+session file larger than the 256 KiB a refresh reads from its end, the totals the session reader
+counted over the file and the position they cover, by harness, machine and path. No session
+text is stored, and nothing is written on any other host. They are there so that a file scanned
+once is not scanned again from its start after Orca restarts: the reader goes on from the kept
+position, and scans the file again when it is not the one that was scanned. They are written
+at most once every 30 seconds, and only when a scan changed. Deleting the storage costs one
+scan of each file, nothing else.
 
 ## Focus pane
 
@@ -111,9 +129,10 @@ plugin list` and runs `orca plugin open <key> --panel spyhop`.
   that holds `node_modules`, over the `node_modules/.bin/tsc` symlink `npm install` writes.
   spyhop runs code in a worker, so Orca asks for approval (`approval_required`) and prints the
   command to re-run with `--approve <fingerprint>`. It needs Orca 1.4.259 or newer, and is
-  granted three capabilities: `workspace:read` and `agent:read` to list the workspaces and
-  agents, and `workspace:write` for the Focus pane button only (`terminal.focus`, no other
-  method of it). An installed spyhop without `workspace:write` asks for approval again when
+  granted four capabilities: `workspace:read` and `agent:read` to list the workspaces and
+  agents, `workspace:write` for the Focus pane button only (`terminal.focus`, no other
+  method of it), and `storage:own` for the session totals it keeps (see What spyhop stores).
+  An installed spyhop without `workspace:write` or `storage:own` asks for approval again when
   updated.
 - Develop: `orca plugin dev watch .` loads the folder and reloads on each save;
   `orca plugin types .` writes the typings into `.orca/types/` (`npm run typecheck` also runs
@@ -125,8 +144,9 @@ plugin list` and runs `orca plugin open <key> --panel spyhop`.
 
 - **A dead host slows every refresh.** ssh waits up to 5 seconds to connect to a host that does
   not answer. Once a command finds the host gone, spyhop asks it nothing more than its place
-  (`uname -s`, `printenv HOME`), so each refresh spends one 5-second attempt on it and the panel
-  refreshes about every 7 seconds instead of every 2.
+  (`uname -s`, `printenv HOME`), so each refresh still spends one 5-second attempt on it and the
+  panel refreshes about every 5 seconds instead of every 2. The other hosts' rows are drawn at
+  the start of each refresh, without waiting for it.
 - **An unreachable paired server disappears.** When its agents cannot be listed, its host row
   is not drawn.
 - **Claude Code and opencode on other hosts are untested.** Their cards there may read `n/a`.

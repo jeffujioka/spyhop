@@ -58,6 +58,9 @@ export function remoteHosts({ hosts, environments }: HostLists, hostIds: string[
   return remote;
 }
 
+// An Orca agent of a paired server, on the server's host row, with its pane, if any.
+export type ServerAgent = OrcaAgent & TreeAgent & { pane: Pane | null };
+
 // The Orca agents of the paired server `hostId` (`orca agent list --environment <name>`), on its
 // host row and read over its alias; none when the server cannot be listed, or answers anything
 // but a list of agents. The server reports them on its own `local` host, which is not this
@@ -70,7 +73,7 @@ export async function readServerAgents(
   hostId: string,
   host: RemoteHost,
   log: (message: string) => void,
-): Promise<(OrcaAgent & TreeAgent & { pane: Pane | null })[]> {
+): Promise<ServerAgent[]> {
   const environment = ['--environment', host.name];
   try {
     const [listed, handles] = await Promise.all([

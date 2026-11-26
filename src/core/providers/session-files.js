@@ -8,13 +8,30 @@
 import { createSessionReader } from '../refresh.js';
 import { linkSession, newestFirst } from '../session-link.js';
 
-// `readerOn(machine)` of one hook: the reader that keeps that host's per-file totals, made on
-// first use. `execOn(machine)` is the plugin's runner bound to a host, `fold` the provider's.
-export function sessionReaders(execOn, fold) {
+// The readers of one hook. `on(machine)`: the reader that keeps that host's per-file totals,
+// made on first use. `execOn(machine)` is the plugin's runner bound to a host, `fold` the
+// provider's. `kept`: the scans an earlier run kept for this provider (`{ machine, path, pos,
+// state }` each), each host's given to its reader; `scanned()` is `{ changed, scans }` of every
+// reader together (see `createSessionReader`), each scan with its `machine`.
+export function sessionReaders(execOn, fold, kept = []) {
   const readers = new Map();
-  return (machine) => {
-    if (!readers.has(machine)) readers.set(machine, createSessionReader({ exec: execOn(machine), fold }));
-    return readers.get(machine);
+  return {
+    on(machine) {
+      if (!readers.has(machine)) {
+        readers.set(machine, createSessionReader({ exec: execOn(machine), fold, kept: kept.filter((scan) => scan.machine === machine) }));
+      }
+      return readers.get(machine);
+    },
+
+    scanned() {
+      const all = { changed: false, scans: [] };
+      for (const [machine, reader] of readers) {
+        const { changed, scans } = reader.scanned();
+        all.changed ||= changed;
+        for (const scan of scans) all.scans.push({ machine, ...scan });
+      }
+      return all;
+    },
   };
 }
 

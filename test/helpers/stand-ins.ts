@@ -3,44 +3,54 @@
 // `ssh -G <alias>` prints the alias's settings, shaped on this Mac's ssh, with the test's
 // `controlmaster`, or fails; `ssh <alias> <command>` runs the command after the alias here, under
 // the remote host's own home folder, or fails as an unreachable host does. Both log each call.
+// `orca` holds back the answer to each command the test names until the test releases it, and
+// `ssh` every command on an alias the test names.
 // `standIns` sets PATH and ORCA_CLI_COMMAND for the test (test/helpers/env.ts).
 import { chmodSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { setEnv } from './env.ts';
-import { tempHome } from './files.ts';
+import { seenIn, tempHome } from './files.ts';
 
 // `{ ok, result }`, as every `orca … --json` answers.
 export const answer = (result: unknown) => JSON.stringify({ id: 'local', ok: true, result });
 
 // `homes`: each reachable alias and its home folder; any other alias is unreachable. `orca`: each
 // command line and its recorded answer; any other line fails. `controlmaster`: each alias whose
-// `ssh -G` answers, and the `controlmaster` it prints; `ssh -G` on any other alias fails.
+// `ssh -G` answers, and the `controlmaster` it prints; `ssh -G` on any other alias fails. `held`:
+// each `orca` command line whose answer is held back, and each `ssh <alias>` whose every command
+// on that alias is, its call logged, until `release` of it.
 export function standIns({
   homes,
   orca,
   controlmaster = {},
+  held = [],
 }: {
   homes: Record<string, string>;
   orca: Record<string, string>;
   controlmaster?: Record<string, string>;
+  held?: string[];
 }) {
   const bin = tempHome();
   const log = join(bin, 'calls.log');
   writeFileSync(log, '');
   // each call one line, the program and its arguments separated by tabs, appended in one write
   // while the line is shorter than the shell's write buffer, so that calls running at once (up to
-  // four per host) never interleave their lines
+  // eight per host) never interleave their lines
   const logCall = (program: string) =>
     `line='${program}'"$(printf '\\t')"; for a in "$@"; do line="$line$a$(printf '\\t')"; done; printf '%s\\n' "$line" >> '${log}'`;
+  // the file whose presence lets what is held as `key` answer
+  const releaseOf = (key: string) => join(bin, `released ${key}`);
+  // the shell's wait for the release of `key`, when the test holds it
+  const hold = (key: string) => (held.includes(key) ? `until [ -e '${releaseOf(key)}' ]; do sleep 0.01; done; ` : '');
   const orcaCases = Object.entries(orca).map(([args, output], i) => {
     writeFileSync(join(bin, `orca-${i}.json`), output);
-    return `  '${args}') cat '${join(bin, `orca-${i}.json`)}' ;;`;
+    return `  '${args}') ${hold(args)}cat '${join(bin, `orca-${i}.json`)}' ;;`;
   });
   writeFileSync(
     join(bin, 'orca'),
     ['#!/bin/sh', logCall('orca'), 'case "$*" in', ...orcaCases, `  *) echo '{"ok":false,"error":{"code":"not_found"}}'; exit 1 ;;`, 'esac', ''].join('\n'),
   );
-  const sshCases = Object.entries(homes).map(([alias, home]) => `  '${alias}') HOME='${home}'; export HOME ;;`);
+  const sshCases = Object.entries(homes).map(([alias, home]) => `  '${alias}') ${hold(`ssh ${alias}`)}HOME='${home}'; export HOME ;;`);
   const settingsCases = Object.entries(controlmaster).map(
     ([alias, value]) => `    '${alias}') printf 'host %s\\nuser dev\\nhostname %s\\nport 22\\ncontrolmaster ${value}\\ncontrolpersist no\\n' "$2" "$2"; exit 0 ;;`,
   );
@@ -83,5 +93,11 @@ export function standIns({
     // the aliases `ssh -G` was asked about, one per call
     sshSettings: () => calls().filter(([program, first]) => program === 'ssh' && first === '-G').map(([, , alias]) => alias),
     orca: () => calls().filter(([program]) => program === 'orca').map(([, ...args]) => args.join(' ')),
+    // lets what is held as `key`, an `orca` command line or `ssh <alias>`, answer, this call and
+    // every later one
+    release: (key: string) => writeFileSync(releaseOf(key), ''),
+    // resolves once `seen()` holds, asked again at each change of the stand-ins' files (a call
+    // logged); rejects when it does not within 5 s
+    until: (seen: () => boolean) => seenIn(bin, seen),
   };
 }

@@ -5,10 +5,8 @@ import { NA, readStats } from '../../src/core/providers/index.js';
 import { parseEntries } from '../../src/core/providers/jsonl.js';
 import { ompProvider } from '../../src/core/providers/omp.js';
 import { fixtureText } from '../helpers/files.ts';
-import { ompMessage } from './helpers/entries.ts';
+import { NOW, ompMessage } from './helpers/entries.ts';
 import { expect } from './helpers/expect.ts';
-
-const NOW = Date.parse('2026-11-02T12:00:00.000Z');
 
 // What the card shows of the context: the hero of its context group, the usage percent with
 // the window as its label.

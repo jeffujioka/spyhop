@@ -6,13 +6,11 @@ import { ompProvider } from '../../src/core/providers/omp.js';
 import { createClaudeSessions } from '../../src/core/providers/claude-sources.js';
 import { createOmpSessions } from '../../src/core/providers/omp-sources.js';
 import { SCAN_CHUNK_BYTES, TAIL_BYTES } from '../../src/core/refresh.js';
-import { claudeAssistant, claudeBoundary, claudeUsage, sessionFile } from './helpers/entries.ts';
+import { NOW, OMP_PATH, claudeAssistant, claudeBoundary, claudeUsage, sessionFile } from './helpers/entries.ts';
 import { expect } from './helpers/expect.ts';
 import { EXEC_CAP, localExec } from './helpers/local-exec.ts';
 
-const NOW = Date.parse('2026-11-02T12:00:00.000Z');
 const T0 = NOW - 24 * 60 * 60_000;
-const OMP_PATH = '/home/u/.omp/agent/sessions/--proj--/big.jsonl';
 const CLAUDE_PATH = '/home/u/.claude/projects/-proj/big.jsonl';
 
 const stamp = (minute) => new Date(T0 + minute * 60_000).toISOString();
@@ -130,11 +128,10 @@ describe('whole-session figures on a large file', () => {
     const read = ompReader(exec);
     await read(ompFile(text));
 
-    // unchanged: only the tail window is served
+    // unchanged: nothing is read
     let mark = calls.length;
     expect((await read(ompFile(text))).totalTokens).toBe(601);
-    expect(calls.slice(mark).map((call) => call.command)).toEqual(['tail']);
-    expect(served(mark)).toBeLessThanOrEqual(TAIL_BYTES);
+    expect(calls.slice(mark).map((call) => call.command)).toEqual([]);
 
     // the session grows: the tail, the appended lines, and a byte to check where they begin
     const appended = `${ompTurn(9000, [7, 8, 9, 10, 1], 'tail-model')}\n${JSON.stringify({ type: 'compaction', id: 'c3' })}\n`;

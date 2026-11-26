@@ -1,5 +1,7 @@
 // The right-sidebar panel: the tree of Orca host → Orca project → Orca workspace → cards, as the
-// worker answers it (src/protocol.ts), asked again every REFRESH_INTERVAL_MS while the panel is
+// worker answers it (src/protocol.ts), each Orca host's row drawn as soon as the worker posts
+// it, before the answer; asked again REFRESH_INTERVAL_MS after the previous ask
+// started, or at its answer when that came later, while the panel is
 // open and never while it is closed, hidden or unmounted, and at once when Orca reports that
 // focus moved to another Orca workspace. The rows follow focus: when the panel opens, the focused
 // Orca workspace, its project and its host are expanded and every other row collapsed; when focus
@@ -31,9 +33,10 @@ import {
 } from 'orca';
 import { REFRESH_INTERVAL_MS } from './core/refresh.js';
 import type { CardView, TreeAnswer } from './protocol.ts';
-import type { Totals, WorkspaceRow } from './tree.ts';
+import { type Totals, withHost, type WorkspaceRow } from './tree.ts';
 
-// What the worker answered; null until it does.
+// The tree drawn: what the worker answered, with the host rows it posted since; null until
+// either.
 const tree = atom<TreeAnswer | null>(null);
 // The rows drawn open, and those the developer opened or closed since the panel last expanded
 // them for focus.
@@ -83,9 +86,12 @@ const FIGURE_TONES: Record<string, Tone> = { ok: 'success', warning: 'warning', 
 // REFRESH_INTERVAL_MS while `visible`, and stops while not. Orca reports `visible` as an atom
 // that only a render can watch, so the panel's render hands it on.
 let refresh: { visible: ReadonlyAtom<boolean>; follow: (visible: boolean) => void } | null = null;
+// How many requests for the tree the panel made since the module loaded, every run of the panel
+// counted: the number of the newest, which no other request has.
+let requests = 0;
 
 export function setup({ signal, subscriptions, visible }: PanelContext): void {
-  // clears the timer of the next ask; null when none is set
+  // clears the timer of the next ask; null when none is set: it ran out, or the panel was hidden
   let cancel: (() => void) | null = null;
   let asking = false;
   // focus moved during an ask, whose answer may predate it: ask again once it is in
@@ -98,6 +104,8 @@ export function setup({ signal, subscriptions, visible }: PanelContext): void {
   // how many times Orca reported focus moving; an answer asked before the latest move names
   // a focus that may be gone, so its own moves none
   let moves = 0;
+  // `moves` when the newest request started
+  let asked = 0;
 
   // Focus moves to Orca's workspace `id`; null, no workspace focused, moves none. When it moves,
   // the workspace row expanded for the previous focus collapses unless the developer opened or
@@ -126,22 +134,28 @@ export function setup({ signal, subscriptions, visible }: PanelContext): void {
     set(tree, answer);
   }
 
+  // Asks the worker, and sets the timer of the next ask, REFRESH_INTERVAL_MS from this one's
+  // start. Never two asks at once: a timer that runs out during an ask leaves the next to its answer.
   function ask() {
-    cancel = null;
+    cancel?.();
+    const timer = setTimeout(() => {
+      cancel = null;
+      if (!asking) ask();
+    }, REFRESH_INTERVAL_MS);
+    cancel = () => clearTimeout(timer);
     asking = true;
     again = false;
-    const asked = moves;
+    asked = moves;
+    requests += 1;
     plugin
-      .request('spyhop.tree', undefined, { signal })
+      .request('spyhop.tree', { request: requests }, { signal })
       .then((answer) => draw(answer, asked === moves))
       // a failed answer keeps the last tree drawn; the next refresh asks again
       .catch(() => undefined)
       .finally(() => {
         asking = false;
-        if (!shown) return;
-        if (again) return ask();
-        const timer = setTimeout(ask, REFRESH_INTERVAL_MS);
-        cancel = () => clearTimeout(timer);
+        // the next ask is due at once when focus moved or no timer is left to start it
+        if (shown && (again || !cancel)) ask();
       });
   }
 
@@ -154,6 +168,16 @@ export function setup({ signal, subscriptions, visible }: PanelContext): void {
       ask();
     }
   }
+
+  // A host row the worker posts is drawn only while the request it was built for is being asked:
+  // one of an older request, or of a request whose answer is drawn, is ignored. It takes the
+  // place of the drawn row of its host, or goes after the rows drawn, and follows focus as an
+  // answer does.
+  subscriptions.push(
+    plugin.on('spyhop.host', ({ request, host, focused }) => {
+      if (asking && request === requests) draw({ hosts: withHost(read(tree)?.hosts ?? [], host), focused }, asked === moves);
+    }),
+  );
 
   // Orca's id of the focused workspace as `workspace.changed` last reported it: the event also
   // reports the focused workspace's terminals changing, which moves no focus
@@ -172,7 +196,6 @@ export function setup({ signal, subscriptions, visible }: PanelContext): void {
         again = true;
       } else if (shown) {
         // hidden, the panel asks nothing; shown again, it asks at once
-        cancel?.();
         ask();
       }
     }),

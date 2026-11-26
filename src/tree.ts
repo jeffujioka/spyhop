@@ -85,3 +85,9 @@ export function buildTree<C extends Card>(agents: TreeAgent[], cards: C[]): Host
     }),
   }));
 }
+
+// `hosts` with `row` in the place of the host row of its id, or after them when none has it.
+export function withHost<C>(hosts: HostRow<C>[], row: HostRow<C>): HostRow<C>[] {
+  const at = hosts.findIndex((host) => host.id === row.id);
+  return at < 0 ? [...hosts, row] : hosts.with(at, row);
+}

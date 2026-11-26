@@ -1,10 +1,9 @@
 import { describe, test } from 'node:test';
 import { NA, readStats } from '../../src/core/providers/index.js';
-import { ompMessage } from './helpers/entries.ts';
+import { MINUTE, ompMessage } from './helpers/entries.ts';
 import { expect } from './helpers/expect.ts';
 
 const SECOND = 1000;
-const MINUTE = 60 * SECOND;
 const START = Date.parse('2026-11-02T10:00:00.000Z');
 const iso = (ms) => new Date(ms).toISOString();
 
