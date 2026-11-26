@@ -13,8 +13,10 @@ import { splitWorktreeId } from './worktree-id.ts';
 
 // Where Orca puts an agent (`orca agent list --json`); `id` is the id its card is built with
 // (src/agent-cards.ts), so agents that share a session find their one card through the first.
-// `worktreeId` is Orca's id of the workspace's worktree (src/worktree-id.ts).
-export type TreeAgent = { id: string; hostId: string; repo: string; workspace: string; worktreeId: string };
+// `worktreeId` is Orca's id of the workspace's worktree (src/worktree-id.ts); `workspaceId` is
+// the id Orca reports the workspace focused by (`workspace.changed`): a `workspace.list` row's
+// id, a paired Orca server's worktreeId.
+export type TreeAgent = { id: string; hostId: string; repo: string; workspace: string; worktreeId: string; workspaceId: string };
 
 type Figure = number | typeof NA;
 // `status`: the Orca state of the card's agent (src/agent-cards.ts).
@@ -24,7 +26,8 @@ type Card = { id: string; status: string; stats: { costUsd: Figure; totalTokens:
 const STATE_ORDER: Record<string, number> = { working: 0, blocked: 1, waiting: 2, done: 3 };
 
 export type Totals = { cost: string; tokens: string; premium: string };
-export type WorkspaceRow<C> = { id: string; name: string; totals: Totals; cards: C[] };
+// `workspaceIds`: the ids Orca reports focus by (TreeAgent's `workspaceId`) of the row's agents.
+export type WorkspaceRow<C> = { id: string; name: string; workspaceIds: string[]; totals: Totals; cards: C[] };
 export type ProjectRow<C> = { id: string; name: string; totals: Totals; workspaces: WorkspaceRow<C>[] };
 export type HostRow<C> = { id: string; name: string; projects: ProjectRow<C>[] };
 
@@ -58,7 +61,7 @@ export function buildTree<C extends Card>(agents: TreeAgent[], cards: C[]): Host
   // unique across hosts: the project's by host and Orca project id (by its name when the
   // worktreeId holds none), so two projects of one name on one host stay apart, the
   // workspace's by host and worktreeId.
-  type Workspace = { name: string; cards: C[] };
+  type Workspace = { name: string; workspaceIds: Set<string>; cards: C[] };
   const hosts = new Map<string, Map<string, { name: string; workspaces: Map<string, Workspace> }>>();
   for (const agent of agents) {
     if (!hosts.has(agent.hostId)) hosts.set(agent.hostId, new Map());
@@ -67,18 +70,20 @@ export function buildTree<C extends Card>(agents: TreeAgent[], cards: C[]): Host
     if (!projects.has(projectId)) projects.set(projectId, { name: agent.repo, workspaces: new Map() });
     const { workspaces } = projects.get(projectId)!;
     const workspaceId = workspaceRowId(agent.hostId, agent.worktreeId);
-    if (!workspaces.has(workspaceId)) workspaces.set(workspaceId, { name: agent.workspace, cards: [] });
+    if (!workspaces.has(workspaceId)) workspaces.set(workspaceId, { name: agent.workspace, workspaceIds: new Set(), cards: [] });
+    const row = workspaces.get(workspaceId)!;
+    row.workspaceIds.add(agent.workspaceId);
     const card = cardOf.get(agent.id);
-    if (card) workspaces.get(workspaceId)!.cards.push(card);
+    if (card) row.cards.push(card);
   }
   return [...hosts].map(([host, projects]) => ({
     id: host,
     name: host,
     projects: [...projects].map(([id, { name, workspaces }]) => {
-      const rows = [...workspaces].map(([id, { name, cards }]) => {
+      const rows = [...workspaces].map(([id, { name, workspaceIds, cards }]) => {
         // stable, so the cards of one state keep the order of their agents
         cards.sort((a, b) => (STATE_ORDER[a.status] ?? 4) - (STATE_ORDER[b.status] ?? 4));
-        return { id, name, totals: totalsOf(cards), cards };
+        return { id, name, workspaceIds: [...workspaceIds], totals: totalsOf(cards), cards };
       });
       return { id, name, totals: totalsOf(rows.flatMap((row) => row.cards)), workspaces: rows };
     }),

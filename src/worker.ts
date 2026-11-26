@@ -101,6 +101,7 @@ export default function activate(orca: OrcaWorkerApi): void {
           repo: workspace.project ?? workspace.name,
           workspace: workspace.name,
           worktreeId: worktreeOf(workspace),
+          workspaceId: workspace.id,
         };
       });
     });
