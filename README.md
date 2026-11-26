@@ -144,8 +144,9 @@ plugin list` and runs `orca plugin open <key> --panel spyhop`.
 
 - **A dead host slows every refresh.** ssh waits up to 5 seconds to connect to a host that does
   not answer. Once a command finds the host gone, spyhop asks it nothing more than its place
-  (`uname -s`, `printenv HOME`), so each refresh spends one 5-second attempt on it and the panel
-  refreshes about every 7 seconds instead of every 2.
+  (`uname -s`, `printenv HOME`), so each refresh still spends one 5-second attempt on it and the
+  panel refreshes about every 5 seconds instead of every 2. The other hosts' rows are drawn at
+  the start of each refresh, without waiting for it.
 - **An unreachable paired server disappears.** When its agents cannot be listed, its host row
   is not drawn.
 - **Claude Code and opencode on other hosts are untested.** Their cards there may read `n/a`.
