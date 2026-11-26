@@ -134,9 +134,11 @@ test('Agent on an SSH workspace', async () => {
   const remoteHome = tempHome();
   const folder = join(remoteHome, 'work/infra-main');
   ompSession(remoteHome, folder);
+  // `devbox` does not reuse connections itself, as `ssh -G jeff` prints on this Mac
   const calls = standIns({
     homes: { devbox: remoteHome },
     orca: { 'host list --json': hostList, 'environment list --json': answer({ environments: [] }) },
+    controlmaster: { devbox: 'false' },
   });
 
   const tree = await treeOf([workspaceRow(`ssh:${DEVBOX}`, 'infra', 'main', folder)]);

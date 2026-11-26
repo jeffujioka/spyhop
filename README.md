@@ -70,6 +70,15 @@ the terminals of their panes from `orca terminal list --environment <name>`; `or
 answers anything but its agents, shows none, and every other host is still drawn. The plugin is
 installed on the Mac only; nothing is installed on the other hosts.
 
+The plugin makes the commands on one host share one SSH connection, unless the alias's own
+settings already do or `ssh -G` fails. For each alias, it reads `ssh -G <alias>` on the Mac, at
+most once a minute. When its `controlmaster` is already `auto`, `yes`, `ask` or `autoask`, the
+alias's own settings decide, and the plugin adds nothing. Otherwise, `ControlMaster no`
+included, it adds `-o ControlMaster=auto -o ControlPath=/tmp/spyhop-<uid>/%C -o
+ControlPersist=60`: the control socket lives on the Mac only, in a folder open to your user
+alone (mode 700), and the connection closes a minute after its last command. When `ssh -G`
+fails, or `/tmp/spyhop-<uid>` is a symlink or another user's folder, the plugin adds nothing.
+
 ## Refresh
 
 While the panel is open it asks for the tree every 2 seconds, and at once when focus moves to
