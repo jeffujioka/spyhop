@@ -25,7 +25,7 @@ per agent that links to none. A card has five groups, always in this order:
 
 | Group | Shows |
 | --- | --- |
-| Identity | the agent's state (working, blocked, waiting, done), the session's title, the path (home as `~`), the git branch and remote and, for an agent on another host, the machine; the harness and the model |
+| Identity | the agent's state (working, blocked, waiting, done), the session's title, the path (home as `~`), the git branch and remote and, for an agent on another host, the machine; the harness and the model. For an omp agent, the path is the folder its linked session records as its own, which can be a sub-folder of the Orca workspace folder, and the branch and remote are that folder's; a card with no linked session, or of another harness, shows the workspace folder and its branch and remote |
 | Context | the usage as a percent of the model's window, with tokens used, tokens left before compaction and compactions recorded |
 | Spend | the cost the harness logged (there is no price table), cost per hour, tokens used by the session, tokens per minute |
 | Cache | the time until the prompt cache is cold, and the hit rate with the turns that hit and missed it |
@@ -45,10 +45,12 @@ database). An agent of any other harness gets a card whose figures all read `n/a
 ## How an agent is tied to a session
 
 - **By session id**: when Orca reports the agent's `sessionId`, the card links to the session of
-  that id, by the harness's own naming: for omp the session file `<start time>_<id>.jsonl`, for
-  Claude Code the file `<id>.jsonl`, for opencode the database's session of that id. Agents on a
-  paired Orca server have no `sessionId` (Orca's listing there gives only its own id), so they
-  link as below.
+  that id, by the harness's own naming: for omp the session file `<start time>_<id>.jsonl` in
+  any of omp's session folders on the agent's host, so also the session of an omp that runs in
+  a sub-folder of the workspace folder; for Claude Code the file `<id>.jsonl` in the workspace
+  folder's session folder; for opencode the database's session of that id. Agents on a paired
+  Orca server have no `sessionId` (Orca's listing there gives only its own id), so they link as
+  below.
 - **Otherwise** (no `sessionId`, or one that names no session): the card links to the newest
   session of the workspace folder for the agent's harness. Several omp agents in one folder
   share out the newest sessions no id named by title: an agent whose title contains a session's

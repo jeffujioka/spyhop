@@ -16,6 +16,7 @@ import * as workerModule from '../src/worker.ts';
 import { NOW, agent, costOf, ompSessionOf as ompSession } from './helpers/agent-cards.ts';
 import { useTempHome } from './helpers/env.ts';
 import { tempHome } from './helpers/files.ts';
+import { recordingRun } from './core/helpers/recording-run.ts';
 import { DEVBOX, DEVBOX_HOST, JEFF_ENV, JEFF_SERVER_ENVIRONMENTS, JEFF_TARGET, LOCAL_HOST, environmentListOf, hostListOf } from './helpers/orca-answers.ts';
 import { answer, standIns } from './helpers/stand-ins.ts';
 
@@ -295,6 +296,21 @@ test('No git read on a host whose place lookup failed', async () => {
 
   // only the place lookup: `uname -s` and `printenv HOME`, each once
   assert.deepEqual(calls.ssh().map((args) => args.at(-1)).sort(), ["'printenv' 'HOME'", "'uname' '-s'"]);
+});
+
+test('A dead host whose agents have no session to read costs one place lookup', async () => {
+  standIns({ homes: {}, orca: {} });
+  // the runner's calls as they start: the second build waits for no lookup it starts
+  const { exec, calls } = recordingRun();
+  // one builder over refreshes, as the worker keeps it
+  const cards = createAgentCards({ run: exec, home: tempHome() });
+  const agents = [agent({ agent: 'codex', path: '/home/dev/work/a', machine: 'gone' })];
+
+  await cards.build(agents, NOW);
+  await cards.build(agents, NOW + 1);
+
+  // the place is asked where git is read, whose answer is kept for GIT_TTL_MS
+  assert.deepEqual(calls.map(({ command }) => command).sort(), ['printenv', 'uname']);
 });
 
 test('A host that stops answering costs one place lookup', async () => {

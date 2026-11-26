@@ -31,8 +31,11 @@
 //     or null; `home` and `os` (`uname -s`) are the host's; used for a provider without
 //     `list`, and for an agent alone in its folder;
 //   named({ machine, cwd, home, os }, sessionIds) -> Promise<Array<{ path, mtimeMs, size } | null>>
-//     for each of the Orca agents' sessionIds (null: none), the session of the folder's host
-//     that the id names by the harness's own rule, or null; the hook alone knows that rule;
+//     for each of the Orca agents' sessionIds (null: none), the session on the folder's host
+//     that the id names by the harness's own rule, or null; the hook alone knows that rule.
+//     The session can be one of another folder than the agent's workspace folder `cwd`: a
+//     harness that ran in a sub-folder of it keeps its session with that sub-folder's (omp
+//     looks in every session folder of the host);
 //   list({ machine, cwd, home, os, limit, except }) -> Promise<Array<{ path, mtimeMs, size, title? }>>
 //     optional: the `limit` newest session files of the folder whose path is not in `except`
 //     (the named ones), newest first, with each file's title where the harness writes one into
@@ -41,10 +44,19 @@
 //     titles). A provider with no titles leaves `list` out;
 //   read(file, { machine, home, now })     -> Promise<input>
 //     the `input` of this provider's `readStats` for a linked file;
+//   folder(file, { machine })              -> Promise<string | null>
+//     optional: the folder the session of a linked file records as its own (omp: the `cwd` of
+//     its `session` entry), which is the card's folder and where its git facts are read; null
+//     when it cannot be told, and the card then keeps the agent's workspace folder, as it does
+//     for a provider without `folder`. It is the one way a card learns its session's folder,
+//     however the file was linked (`named`, `list` or `link`). The builder asks it once
+//     `read` of the file has resolved, so a hook answers from what that read or its listing
+//     already gave and runs a program only where they did not;
 //   scanned()                              -> { changed, scans }
 //     optional, for a provider that scans session files: the finished scans of the files read,
 //     to keep for a later run, and whether any changed since it was last asked.
-// Each may reject: the card then reads n/a. A provider without the hook yields no session.
+// Each may reject: the card then reads n/a (after a `folder` that rejects it keeps its figures
+// and the workspace folder). A provider without the hook yields no session.
 //
 // Stats shape (single place; herdr-session-stats docs/omp-session-format.md repeats it with the
 // omp sources).

@@ -1,7 +1,7 @@
-import { utimesSync, writeFileSync } from 'node:fs';
+import { mkdirSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, test } from 'node:test';
-import { findSessionFile } from '../../src/core/providers/session-files.js';
+import { findNamedFiles, findSessionFile } from '../../src/core/providers/session-files.js';
 import { tempHome } from '../helpers/files.ts';
 import { expect } from './helpers/expect.ts';
 import { recordingRun } from './helpers/recording-run.ts';
@@ -50,5 +50,40 @@ describe('finding a session file', () => {
 
     expect(await findSessionFile(exec, { dir: sessionFolder(), os: 'Plan9' })).toBeNull();
     expect(calls).toEqual([]);
+  });
+});
+
+describe('finding the session files that ids name', () => {
+  // omp's rule: a session file is `<start time>_<id>.jsonl`
+  const where = (dir: string) => ({ dir, os: 'Darwin', depth: 2, pattern: (id: string) => `*_${id}.jsonl` });
+  const names = (path: string, id: string) => path.endsWith(`_${id}.jsonl`);
+
+  test('below a folder, in one listing of the files the ids can name', async () => {
+    const root = tempHome();
+    for (const file of ['-a/t_one.jsonl', '-a/t_other.jsonl', '-b/t_two.jsonl']) {
+      mkdirSync(join(root, file, '..'), { recursive: true });
+      writeFileSync(join(root, file), 'x');
+    }
+    const { exec, calls } = recordingRun();
+
+    const files = await findNamedFiles(exec, where(root), ['two', null, 'none', 'one'], names);
+
+    expect(files.map((file: { path: string } | null) => file?.path ?? null)).toEqual([`${root}/-b/t_two.jsonl`, null, null, `${root}/-a/t_one.jsonl`]);
+    expect(calls).toHaveLength(1);
+    // the listing prints the files of those names only
+    expect(calls[0].args.filter((arg) => arg.endsWith('.jsonl'))).toEqual(['*_two.jsonl', '*_none.jsonl', '*_one.jsonl']);
+  });
+
+  test('below a folder that is a symbolic link', async () => {
+    // a dotfile manager keeps the sessions elsewhere and links the folder
+    const home = tempHome();
+    mkdirSync(join(home, 'kept/-a'), { recursive: true });
+    writeFileSync(join(home, 'kept/-a/t_one.jsonl'), 'x');
+    symlinkSync(join(home, 'kept'), join(home, 'sessions'));
+    const { exec } = recordingRun();
+
+    const [file] = await findNamedFiles(exec, where(join(home, 'sessions')), ['one'], names);
+
+    expect(file?.path).toBe(`${home}/sessions/-a/t_one.jsonl`);
   });
 });

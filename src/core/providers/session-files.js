@@ -53,12 +53,16 @@ const STAT_COMMANDS = {
   Linux: ['stat', '-c', '%Y %s %n'],
 };
 
-// The `.jsonl` files directly in `dir`, as `{ path, mtimeMs, size }`; none when the folder
-// cannot be listed or the system is one whose `stat` is unknown.
-async function listFolder(exec, { dir, os }) {
+// The files of the `names` (`find -name` patterns) in `dir` and up to `depth` folders deep (1:
+// directly in it), as `{ path, mtimeMs, size }`; none when the folder cannot be listed or the
+// system is one whose `stat` is unknown. `-H` has `find` go into a `dir` that is a symbolic
+// link (a home whose dot-folders a dotfile manager links), which it would only name otherwise.
+async function listFolder(exec, { dir, os, depth = 1, names = ['*.jsonl'] }) {
   const stat = STAT_COMMANDS[os];
   if (!stat) return [];
-  const listed = await exec('find', [dir, '-maxdepth', '1', '-name', '*.jsonl', '-exec', ...stat, '{}', '+']);
+  const tests = names.flatMap((name) => ['-o', '-name', name]).slice(1);
+  const named = names.length > 1 ? ['(', ...tests, ')'] : tests;
+  const listed = await exec('find', ['-H', dir, '-maxdepth', String(depth), ...named, '-exec', ...stat, '{}', '+']);
   return listed.code === 0 ? parseSessionFiles(listed.stdout) : [];
 }
 
@@ -71,10 +75,15 @@ export async function findSessionFile(exec, { dir, os, except = [] }) {
 }
 
 // The session file each of `sessionIds` names in `dir` (null for a null id and for an id that
-// names no file), by the harness's own rule `names(path, sessionId)`: one listing of the folder,
-// and no file is read.
-export async function findNamedFiles(exec, { dir, os }, sessionIds, names) {
-  const files = await listFolder(exec, { dir, os });
+// names no file), by the harness's own rule `names(path, sessionId)`: one listing, and no file
+// is read. A harness that keeps each working folder's sessions in a folder of its own under
+// `dir` gives `depth` 2 and `pattern(sessionId)`, the `find -name` pattern of the file an id
+// can name: the listing then prints those files only, whatever folder holds them, so its cost
+// does not grow with the sessions of the host. The newest file wins when an id names several.
+export async function findNamedFiles(exec, { dir, os, depth, pattern }, sessionIds, names) {
+  const ids = [...new Set(sessionIds.filter(Boolean))];
+  if (ids.length === 0) return sessionIds.map(() => null);
+  const files = newestFirst(await listFolder(exec, { dir, os, depth, names: pattern && ids.map(pattern) }));
   return sessionIds.map((id) => (id ? files.find((file) => names(file.path, id)) : null) ?? null);
 }
 

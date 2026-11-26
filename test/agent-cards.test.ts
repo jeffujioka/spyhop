@@ -2,15 +2,16 @@
 // session files, read by the real read-only programs through the real runner.
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { appendFileSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { createAgentCards } from '../src/agent-cards.ts';
 import { GIT_TTL_MS } from '../src/core/git.js';
 import { sessionDirSlug } from '../src/core/providers/claude-sources.js';
 import { NA, STAT_FIELDS } from '../src/core/providers/index.js';
+import { TAIL_BYTES } from '../src/core/refresh.js';
 import { run } from '../src/exec.ts';
-import { NOW, agent, cardsOf, opencodeDatabase, sessions, tokensOf, workspace } from './helpers/agent-cards.ts';
+import { NOW, agent, cardsOf, costTurn, ompSessionOf, opencodeDatabase, sessions, tokensOf, workspace } from './helpers/agent-cards.ts';
 import { fixtureText, tempHome } from './helpers/files.ts';
 import { recordingRun } from './core/helpers/recording-run.ts';
 
@@ -124,6 +125,72 @@ test('Git asked again only after GIT_TTL_MS', async () => {
   execFileSync('git', ['symbolic-ref', 'HEAD', 'refs/heads/other'], { cwd: path });
   assert.equal((await cards.build(agents, NOW + GIT_TTL_MS - 1))[0].branch, 'main');
   assert.equal((await cards.build(agents, NOW + GIT_TTL_MS))[0].branch, 'other');
+});
+
+test('Card without a linked session keeps the workspace folder', async () => {
+  const home = tempHome();
+  const path = workspace(home, 'demo');
+  execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: path });
+
+  const [{ card, model }] = await cardsOf(home, [agent({ agent: 'omp', path })]);
+  const [identity] = model.groups;
+
+  assert.equal(identity.path.value, '~/work/demo');
+  assert.equal(identity.branch, 'main');
+  assert.deepEqual(STAT_FIELDS.filter((field: string) => card.stats[field] !== NA), []);
+});
+
+test('Session that records no folder keeps the workspace folder', async () => {
+  const home = tempHome();
+  const path = workspace(home, 'demo');
+  // its `session` entry holds no `cwd`
+  ompSessionOf(home, path);
+  const { exec, calls } = recordingRun();
+  const cards = createAgentCards({ run: exec, home });
+  const agents = [agent({ agent: 'omp', sessionId: 's1', path })];
+
+  const [card] = await cards.build(agents, NOW);
+  await cards.build(agents, NOW + 1);
+
+  assert.equal(card.stats.costUsd, 0.1);
+  assert.equal(card.folder, path);
+  // the file is whole in the window a refresh reads, which shows that it records none
+  assert.equal(calls.filter(({ command }) => command === 'head').length, 0);
+});
+
+test('Session that records a relative folder keeps the workspace folder', async () => {
+  const home = tempHome();
+  const path = workspace(home, 'demo');
+  const file = ompSessionOf(home, path);
+  // git would run in a relative folder below the plugin's own process folder
+  const session = { type: 'session', version: 3, id: 's1', timestamp: '2026-11-25T11:58:00.000Z', cwd: 'work/demo' };
+  writeFileSync(file, `${JSON.stringify(session)}\n${costTurn(0.1)}`);
+
+  const [{ card }] = await cardsOf(home, [agent({ agent: 'omp', sessionId: 's1', path })]);
+
+  assert.equal(card.stats.costUsd, 0.1);
+  assert.equal(card.folder, path);
+});
+
+test('Folder of a session larger than the window read once', async () => {
+  const home = tempHome();
+  const path = workspace(home, 'demo');
+  const sub = join(path, 'sub');
+  const file = ompSessionOf(home, sub);
+  // the `session` entry, at the head of the file, is outside the window a refresh reads
+  const session = { type: 'session', version: 3, id: 's1', timestamp: '2026-11-25T11:58:00.000Z', cwd: sub };
+  writeFileSync(file, `${JSON.stringify(session)}\n${JSON.stringify({ type: 'custom', note: 'x'.repeat(TAIL_BYTES) })}\n${costTurn(0.1)}`);
+  const { exec, calls } = recordingRun();
+  const cards = createAgentCards({ run: exec, home });
+  const agents = [agent({ agent: 'omp', sessionId: 's1', path })];
+
+  const [card] = await cards.build(agents, NOW);
+  appendFileSync(file, costTurn(0.1));
+  const [later] = await cards.build(agents, NOW + 1);
+
+  assert.deepEqual([card.folder, later.folder], [sub, sub]);
+  assert.equal(later.stats.costUsd, 0.2);
+  assert.equal(calls.filter(({ command }) => command === 'head').length, 1);
 });
 
 test('Unreadable omp title read once per file change', async () => {

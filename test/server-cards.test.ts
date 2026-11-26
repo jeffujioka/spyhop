@@ -52,7 +52,7 @@ const refresh = () => worker!.request('spyhop.tree') as Promise<TreeAnswer>;
 // and how often `find` listed that folder in it.
 async function refreshWithListHeld(remoteHome: string, agents: object[], terminal: string, sessions: string) {
   const calls = jeffLists(remoteHome, agents, terminal, true);
-  const finds = () => calls.ssh().filter(([alias, ...args]) => alias === 'jeff' && args.at(-1)!.startsWith(`'find' '${sessions}' `)).length;
+  const finds = () => calls.ssh().filter(([alias, ...args]) => alias === 'jeff' && args.at(-1)!.startsWith(`'find' '-H' '${sessions}' `)).length;
   const answered = refresh();
   await calls.until(() => finds() > 0);
   calls.release(AGENT_LIST);

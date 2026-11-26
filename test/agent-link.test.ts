@@ -1,7 +1,9 @@
 // Which harness session a local Orca agent's card links to: the one Orca names by the agent's
-// sessionId, else the newest of the workspace folder, shared out by title among the agents of
-// one harness there; agents on one session share a card.
+// sessionId, whatever session folder of the harness holds it, else the newest of the workspace
+// folder, shared out by title among the agents of one harness there; agents on one session share
+// a card, whose folder is the one the session records.
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import { mkdirSync, utimesSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -16,13 +18,16 @@ import { fixtureText, tempHome } from './helpers/files.ts';
 const BASIC = { from: 'omp/basic.jsonl', id: '00000000-0000-7000-8000-000000000001', cost: '$0.06' };
 const COMPACTED = { from: 'omp/compacted.jsonl', id: '00000000-0000-7000-8000-0000000000c1', cost: '$0.05' };
 
-// Writes an omp session of the fixture into the sessions folder of `path`, with `title` in its
-// title line and modified `minutesAgo` before NOW.
+// Writes an omp session of the fixture into the sessions folder of `path`, which it records as
+// its folder, with `title` in its title line and modified `minutesAgo` before NOW.
 function ompSession(home: string, path: string, session: typeof BASIC, minutesAgo: number, title = 'redacted title') {
   const dir = join(home, '.omp/agent/sessions', ompSlug(path, home));
   const file = join(dir, `2026-11-02T10-00-00-000Z_${session.id}.jsonl`);
   mkdirSync(dir, { recursive: true });
-  writeFileSync(file, fixtureText(session.from).replace('"title":"redacted title"', `"title":${JSON.stringify(title)}`));
+  const text = fixtureText(session.from)
+    .replace('"title":"redacted title"', `"title":${JSON.stringify(title)}`)
+    .replace('"cwd":"/work/project"', `"cwd":${JSON.stringify(path)}`);
+  writeFileSync(file, text);
   const time = new Date(NOW - minutesAgo * 60_000);
   utimesSync(file, time, time);
 }
@@ -68,6 +73,26 @@ test('Orca names the session', async () => {
   const [{ model }] = await cardsOf(home, [agent({ agent: 'omp', sessionId: COMPACTED.id, path })]);
 
   assert.equal(costOf(model), COMPACTED.cost);
+});
+
+test("Session of a sub-folder found by Orca's session id", async () => {
+  const home = tempHome();
+  // the workspace folder is no git repository and has a newer session of its own
+  const projects = join(home, 'projects');
+  const boto = join(projects, 'boto');
+  mkdirSync(boto, { recursive: true });
+  execFileSync('git', ['init', '-q', '-b', 'feat/jaci'], { cwd: boto });
+  execFileSync('git', ['remote', 'add', 'origin', 'https://github.com/jeffujioka/jaci.git'], { cwd: boto });
+  ompSession(home, projects, BASIC, 1);
+  ompSession(home, boto, COMPACTED, 30);
+
+  const [{ model }] = await cardsOf(home, [agent({ agent: 'omp', sessionId: COMPACTED.id, path: projects })]);
+  const [identity] = model.groups;
+
+  assert.equal(costOf(model), COMPACTED.cost);
+  assert.equal(identity.path.value, '~/projects/boto');
+  assert.equal(identity.branch, 'feat/jaci');
+  assert.equal(identity.remote, 'github.com/jeffujioka/jaci');
 });
 
 test('No session id', async () => {
