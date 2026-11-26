@@ -19,8 +19,10 @@ import * as workerModule from '../src/worker.ts';
 import { costOf, costTurn, ompSessionOf } from './helpers/agent-cards.ts';
 import { useTempHome } from './helpers/env.ts';
 import { tempHome } from './helpers/files.ts';
+import { DEVBOX, DEVBOX_LISTS } from './helpers/orca-answers.ts';
 import { orcaHost, relayPosts, type HostWorkspace } from './helpers/orca-host.ts';
-import { answer, standIns } from './helpers/stand-ins.ts';
+import { cardFolders, isOpen, row } from './helpers/panel.ts';
+import { standIns } from './helpers/stand-ins.ts';
 
 let panel: TestPanel | undefined;
 let worker: TestWorker | undefined;
@@ -32,8 +34,6 @@ afterEach(async () => {
   mock.timers.reset();
 });
 
-// Orca's id of the SSH target `devbox`, as `orca host list` gives it on this Mac.
-const DEVBOX = 'ssh-1795031810693-d3v8ox';
 const MAIN: HostWorkspace = { project: 'api', name: 'main', agents: ['working'] };
 const DEPLOY: HostWorkspace = { project: 'infra', name: 'deploy', agents: ['working'], hostId: `ssh:${DEVBOX}` };
 
@@ -42,22 +42,12 @@ const DEPLOY: HostWorkspace = { project: 'infra', name: 'deploy', agents: ['work
 // Orca's host, the worker and the stand-ins' calls.
 async function start(workspaces: HostWorkspace[], held: string[] = []) {
   const home = useTempHome();
-  const calls = standIns({
-    homes: { devbox: tempHome() },
-    orca: {
-      'host list --json': answer({ hosts: [{ kind: 'ssh', name: 'devbox', id: DEVBOX, selector: `--host ssh:${DEVBOX}`, connected: true }] }),
-      'environment list --json': answer({ environments: [] }),
-    },
-    held,
-  });
+  const calls = standIns({ homes: { devbox: tempHome() }, orca: DEVBOX_LISTS, held });
   const host = orcaHost(home, { workspaces, focused: 'main' });
   mock.timers.enable({ apis: ['setTimeout'] });
   worker = await mountWorker(workerModule, { host });
   return { home, host, calls, posts: worker.posts };
 }
-
-const row = (view: TestPanel, name: string) => view.find({ type: 'Collapsible', label: name });
-const isOpen = (view: TestPanel, name: string) => view.valueOf(row(view, name)!);
 
 // The folders of the cards under the workspace row `workspace`, in the project row `project` of
 // the host row `host`, each of the three opened first when it is drawn closed.
@@ -65,10 +55,7 @@ async function cardsIn(view: TestPanel, host: string, project: string, workspace
   for (const name of [host, project, workspace]) if (!isOpen(view, name)) await view.toggle(row(view, name)!);
   const [hostRow, projectRow, workspaceRow] = [host, project, workspace].map((name) => row(view, name)!);
   assert.ok(projectRow.path.startsWith(`${hostRow.path}/`) && workspaceRow.path.startsWith(`${projectRow.path}/`));
-  return view
-    .findAll({ type: 'KeyValue', label: 'IDENTITY' })
-    .filter((el) => el.path.startsWith(`${workspaceRow.path}/`))
-    .map((el) => String((el.props.items as { label: string; value: unknown }[]).find((item) => item.label === 'Path')?.value).split('/').pop());
+  return cardFolders(view, workspaceRow);
 }
 
 // The cost of each card the panel draws.

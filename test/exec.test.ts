@@ -5,11 +5,10 @@
 // runs the command here; every other program is real.
 import assert from 'node:assert/strict';
 import { chmodSync, lstatSync, mkdirSync, readdirSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
-import { watch } from 'node:fs/promises';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { run } from '../src/exec.ts';
-import { tempHome } from './helpers/files.ts';
+import { seenIn, tempHome } from './helpers/files.ts';
 import { standIns } from './helpers/stand-ins.ts';
 
 // A program that runs until the test releases it: it leaves a file named after itself in its
@@ -29,14 +28,8 @@ function twelve(alias: string, home: string) {
 // the time to start too.
 async function atOnce(home: string, count: number) {
   const folder = join(home, 'running');
-  const changes = watch(folder, { signal: AbortSignal.timeout(5000) });
-  try {
-    while (readdirSync(folder).length < count) await changes.next();
-  } catch {
-    // the 5 s passed: the count below tells
-  } finally {
-    await changes.return();
-  }
+  // when the 5 s pass, the count below tells
+  await seenIn(folder, () => readdirSync(folder).length >= count).catch(() => {});
   await run('true', [], { on: 'elsewhere' });
   return readdirSync(folder).length;
 }

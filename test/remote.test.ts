@@ -16,6 +16,7 @@ import * as workerModule from '../src/worker.ts';
 import { NOW, agent, costOf, ompSessionOf as ompSession } from './helpers/agent-cards.ts';
 import { useTempHome } from './helpers/env.ts';
 import { tempHome } from './helpers/files.ts';
+import { DEVBOX, DEVBOX_HOST, JEFF_ENV, JEFF_SERVER_ENVIRONMENTS, JEFF_TARGET, LOCAL_HOST, environmentListOf, hostListOf } from './helpers/orca-answers.ts';
 import { answer, standIns } from './helpers/stand-ins.ts';
 
 let worker: TestWorker | undefined;
@@ -24,29 +25,14 @@ afterEach(async () => {
   worker = undefined;
 });
 
-// Orca's ids, as `orca host list` and `orca environment list` give them on this Mac.
-const DEVBOX = 'ssh-1795031810693-d3v8ox';
-const JEFF_TARGET = 'ssh-1795031810693-tsad3q';
-const JEFF_ENV = 'dc9a64c1-6450-46a1-a62c-9b03d06b187a';
-
-const hostList = answer({
-  hosts: [
-    { kind: 'local', name: 'this machine', id: 'local', selector: '--host local' },
-    { kind: 'ssh', name: 'devbox', id: DEVBOX, selector: `--host ssh:${DEVBOX}`, connected: true },
-    { kind: 'ssh', name: 'jeff', id: JEFF_TARGET, selector: `--host ssh:${JEFF_TARGET}`, connected: true },
-    { kind: 'environment', name: 'jeff-server', id: JEFF_ENV },
-  ],
-});
-const environmentList = answer({
-  environments: [
-    {
-      id: JEFF_ENV,
-      name: 'jeff-server',
-      connectionDependency: 'ssh-tunnel',
-      orcadDeployment: { sshTargetId: JEFF_TARGET, sshTargetGeneration: 8, localPort: 56082, remotePort: 6768 },
-    },
-  ],
-});
+// `orca host list` with the SSH targets `devbox` and `jeff`, and the paired server
+// `jeff-server`.
+const hostList = hostListOf(
+  LOCAL_HOST,
+  DEVBOX_HOST,
+  { kind: 'ssh', name: 'jeff', id: JEFF_TARGET, selector: `--host ssh:${JEFF_TARGET}`, connected: true },
+  { kind: 'environment', name: 'jeff-server', id: JEFF_ENV },
+);
 
 // Whether one program with its arguments only reads.
 function readsOnly([program, ...args]: string[]) {
@@ -137,7 +123,7 @@ test('Agent on an SSH workspace', async () => {
   // `devbox` does not reuse connections itself, as `ssh -G jeff` prints on this Mac
   const calls = standIns({
     homes: { devbox: remoteHome },
-    orca: { 'host list --json': hostList, 'environment list --json': answer({ environments: [] }) },
+    orca: { 'host list --json': hostList, 'environment list --json': environmentListOf() },
     controlmaster: { devbox: 'false' },
   });
 
@@ -187,7 +173,7 @@ function pairedServer(orca: Record<string, string> = {}) {
     homes: { jeff: remoteHome },
     orca: {
       'host list --json': hostList,
-      'environment list --json': environmentList,
+      'environment list --json': JEFF_SERVER_ENVIRONMENTS,
       'agent list --environment jeff-server --json': agents,
       'terminal list --environment jeff-server --json': answer({ terminals: [], totalCount: 0, truncated: false }),
       ...orca,
@@ -279,7 +265,7 @@ test('Unreachable Orca host', async () => {
   ompSession(home, localFolder);
   const calls = standIns({
     homes: {},
-    orca: { 'host list --json': hostList, 'environment list --json': answer({ environments: [] }) },
+    orca: { 'host list --json': hostList, 'environment list --json': environmentListOf() },
   });
 
   const tree = await treeOf([

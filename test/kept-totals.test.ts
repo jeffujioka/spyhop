@@ -17,8 +17,9 @@ import { claudeAssistant, claudeUsage } from './core/helpers/entries.ts';
 import { NOW, costOf, costTurn, ompSessionOf as ompSession, tokensOf } from './helpers/agent-cards.ts';
 import { useTempHome } from './helpers/env.ts';
 import { tempHome } from './helpers/files.ts';
+import { DEVBOX, DEVBOX_HOST, LOCAL_HOST, environmentListOf, hostListOf } from './helpers/orca-answers.ts';
 import { orcaHost, type HostWorkspace } from './helpers/orca-host.ts';
-import { answer, standIns } from './helpers/stand-ins.ts';
+import { standIns } from './helpers/stand-ins.ts';
 
 type Storage = NonNullable<MockHostOptions['storage']>;
 
@@ -27,15 +28,6 @@ afterEach(async () => {
   await worker?.deactivate();
   worker = undefined;
   mock.timers.reset();
-});
-
-// Orca's id of the SSH target `devbox`, as `orca host list` gives one on this Mac.
-const DEVBOX = 'ssh-1795031810693-d3v8ox';
-const hostList = answer({
-  hosts: [
-    { kind: 'local', name: 'this machine', id: 'local', selector: '--host local' },
-    { kind: 'ssh', name: 'devbox', id: DEVBOX, selector: `--host ssh:${DEVBOX}`, connected: true },
-  ],
 });
 
 // Lines no figure reads, longer together than the window a refresh reads from a file's end.
@@ -51,7 +43,10 @@ function devboxAgent() {
   const workspace: HostWorkspace = { project: 'infra', name: 'main', agents: ['working'], hostId: `ssh:${DEVBOX}` };
   const file = ompSession(remoteHome, join(remoteHome, 'work/infra-main'));
   appendFileSync(file, PADDING);
-  const calls = standIns({ homes: { devbox: remoteHome }, orca: { 'host list --json': hostList, 'environment list --json': answer({ environments: [] }) } });
+  const calls = standIns({
+    homes: { devbox: remoteHome },
+    orca: { 'host list --json': hostListOf(LOCAL_HOST, DEVBOX_HOST), 'environment list --json': environmentListOf() },
+  });
   // the command lines `ssh devbox` has run so far
   const lines = () => calls.ssh().filter(([alias]) => alias === 'devbox').map((args) => args.at(-1)!);
   return { file, lines, start: (storage?: Storage, capabilities?: string[]) => start(remoteHome, workspace, storage, capabilities) };
@@ -134,7 +129,7 @@ test('Totals written at most every 30 seconds', async () => {
 
 test('Claude Code totals are kept whole', async () => {
   const home = useTempHome();
-  standIns({ homes: {}, orca: { 'host list --json': answer({ hosts: [] }), 'environment list --json': answer({ environments: [] }) } });
+  standIns({ homes: {}, orca: { 'host list --json': hostListOf(), 'environment list --json': environmentListOf() } });
   const workspace: HostWorkspace = { project: 'web', name: 'main', agents: ['working'], harness: 'claude' };
   const dir = join(home, '.claude/projects', sessionDirSlug(join(home, 'work/web-main')));
   mkdirSync(dir, { recursive: true });

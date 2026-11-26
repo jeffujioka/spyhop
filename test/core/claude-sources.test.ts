@@ -5,11 +5,11 @@ import { TAIL_BYTES } from '../../src/core/refresh.js';
 import { createClaudeSessions, sessionDirSlug } from '../../src/core/providers/claude-sources.js';
 import { NA, readStats } from '../../src/core/providers/index.js';
 import { run, type Run } from '../../src/exec.ts';
-import { fixtureText, tempHome } from '../helpers/files.ts';
+import { tempHome } from '../helpers/files.ts';
+import { CLAUDE_BASIC as BASIC } from './helpers/entries.ts';
 import { expect } from './helpers/expect.ts';
 import { recordingRun } from './helpers/recording-run.ts';
 
-const BASIC = fixtureText('claude/basic.jsonl');
 const NOW = Date.parse('2026-09-07T20:22:00.000Z');
 const CWD = '/Users/me/work/app.v1_2';
 

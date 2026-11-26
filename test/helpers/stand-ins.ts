@@ -7,10 +7,9 @@
 // `ssh` every command on an alias the test names.
 // `standIns` sets PATH and ORCA_CLI_COMMAND for the test (test/helpers/env.ts).
 import { chmodSync, readFileSync, writeFileSync } from 'node:fs';
-import { watch } from 'node:fs/promises';
 import { join } from 'node:path';
 import { setEnv } from './env.ts';
-import { tempHome } from './files.ts';
+import { seenIn, tempHome } from './files.ts';
 
 // `{ ok, result }`, as every `orca … --json` answers.
 export const answer = (result: unknown) => JSON.stringify({ id: 'local', ok: true, result });
@@ -99,13 +98,6 @@ export function standIns({
     release: (key: string) => writeFileSync(releaseOf(key), ''),
     // resolves once `seen()` holds, asked again at each change of the stand-ins' files (a call
     // logged); rejects when it does not within 5 s
-    async until(seen: () => boolean) {
-      const changes = watch(bin, { signal: AbortSignal.timeout(5000) });
-      try {
-        while (!seen()) await changes.next();
-      } finally {
-        await changes.return();
-      }
-    },
+    until: (seen: () => boolean) => seenIn(bin, seen),
   };
 }

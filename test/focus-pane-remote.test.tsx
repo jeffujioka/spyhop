@@ -12,7 +12,9 @@ import type { TreeAnswer } from '../src/protocol.ts';
 import * as workerModule from '../src/worker.ts';
 import { useTempHome } from './helpers/env.ts';
 import { tempHome } from './helpers/files.ts';
+import { JEFF_AGENT_LIST, JEFF_LISTS, JEFF_TERMINAL_LIST } from './helpers/orca-answers.ts';
 import { orcaHost, type HostWorkspace } from './helpers/orca-host.ts';
+import { serverAgent } from './helpers/server-agent.ts';
 import { answer, standIns } from './helpers/stand-ins.ts';
 
 let panel: TestPanel | undefined;
@@ -25,24 +27,12 @@ afterEach(async () => {
   mock.timers.reset();
 });
 
-// Orca's id of the paired server `jeff`'s environment, as `orca environment list` gives it.
-const JEFF_ENV = 'dc9a64c1-6450-46a1-a62c-9b03d06b187a';
 const SWITCH = 'terminal switch --environment jeff --terminal term-9 --json';
 
-// An omp Orca agent of the server, in its own workspace `name`, in the pane `paneKey`.
-const serverAgent = (name: string, paneKey: string) => ({
-  orcaSessionId: `session-${name}`,
-  kind: 'terminal',
-  agent: 'omp',
-  state: 'working',
-  worktreeId: `repo-spyhop::/home/jeff/work/spyhop-${name}`,
-  workspace: name,
-  repo: 'spyhop',
-  hostId: 'local',
-  paneKey,
-  title: null,
-  updatedAt: 0,
-});
+// The server's omp Orca agents: the one of its workspace `main`, in the pane of `term-9`, and
+// the one of its workspace `lost`, in a pane no listed terminal is in.
+const MAIN = serverAgent('/home/jeff/work/spyhop-main', 'main', 'tab1:leaf2');
+const LOST = serverAgent('/home/jeff/work/spyhop-lost', 'lost', 'tab7:leaf7');
 
 // The server's terminal `term-9`, in the tab `tab1` and its leaf `leaf2`.
 const terminals = answer({
@@ -60,10 +50,9 @@ async function openPanel(agents: object[], workspaces: HostWorkspace[] = [], orc
   const calls = standIns({
     homes: { jeff: tempHome() },
     orca: {
-      'host list --json': answer({ hosts: [{ kind: 'local', name: 'this machine', id: 'local', selector: '--host local' }] }),
-      'environment list --json': answer({ environments: [{ id: JEFF_ENV, name: 'jeff', connectionDependency: 'ssh-tunnel' }] }),
-      'agent list --environment jeff --json': answer({ agents }),
-      'terminal list --environment jeff --json': terminals,
+      ...JEFF_LISTS,
+      [JEFF_AGENT_LIST]: answer({ agents }),
+      [JEFF_TERMINAL_LIST]: terminals,
       ...orca,
     },
   });
@@ -85,7 +74,7 @@ const focusButtons = () => panel!.findAll({ type: 'Button', text: 'Focus pane' }
 const switched = (navigated: boolean) => answer({ focus: { handle: 'term-9', tabId: 'tab1', navigated } });
 
 test('Focus pane on a paired Orca server', async () => {
-  const { calls, host } = await openPanel([serverAgent('main', 'tab1:leaf2')], [], { [SWITCH]: switched(true) });
+  const { calls, host } = await openPanel([MAIN], [], { [SWITCH]: switched(true) });
   const [button] = focusButtons();
   assert.ok(button, JSON.stringify(panel!.tree()));
   const [ssh, orca] = [calls.ssh().length, calls.orca().length];
@@ -104,7 +93,7 @@ test('Card without a pane', async () => {
   // a local agent in a chat, an agent of the server whose pane no listed terminal is in, and,
   // to show a matched pane still draws its button, one whose pane is `term-9`'s
   await openPanel(
-    [serverAgent('lost', 'tab7:leaf7'), serverAgent('main', 'tab1:leaf2')],
+    [LOST, MAIN],
     [{ project: 'api', name: 'chat', agents: ['working'], terminals: [null] }],
   );
 
@@ -125,7 +114,7 @@ test('Card without a pane', async () => {
 
 test('Paired server cannot switch', async () => {
   // the stand-in answers no `terminal switch`: it fails as the CLI does
-  const { calls } = await openPanel([serverAgent('main', 'tab1:leaf2')]);
+  const { calls } = await openPanel([MAIN]);
   const [button] = focusButtons();
   assert.ok(button, JSON.stringify(panel!.tree()));
   const before = JSON.stringify(panel!.tree());
@@ -143,7 +132,7 @@ test('Paired server cannot switch', async () => {
 });
 
 test('Paired server no desktop here shows', async () => {
-  const { calls } = await openPanel([serverAgent('main', 'tab1:leaf2')], [], { [SWITCH]: switched(false) });
+  const { calls } = await openPanel([MAIN], [], { [SWITCH]: switched(false) });
   const [button] = focusButtons();
   assert.ok(button, JSON.stringify(panel!.tree()));
   const before = JSON.stringify(panel!.tree());
@@ -160,8 +149,8 @@ test('Paired server no desktop here shows', async () => {
 });
 
 test('Truncated terminal list of a paired server is logged', async () => {
-  await openPanel([serverAgent('main', 'tab1:leaf2')], [], {
-    'terminal list --environment jeff --json': answer({ ...JSON.parse(terminals).result, totalCount: 201, truncated: true }),
+  await openPanel([MAIN], [], {
+    [JEFF_TERMINAL_LIST]: answer({ ...JSON.parse(terminals).result, totalCount: 201, truncated: true }),
   });
 
   // the listed terminals still give their panes
@@ -172,7 +161,7 @@ test('Truncated terminal list of a paired server is logged', async () => {
 });
 
 test('Paired server switch that answers no focus', async () => {
-  await openPanel([serverAgent('main', 'tab1:leaf2')], [], { [SWITCH]: answer({}) });
+  await openPanel([MAIN], [], { [SWITCH]: answer({}) });
 
   assert.deepEqual(await worker!.request('spyhop.focus', { environment: 'jeff', terminal: 'term-9' }), { focused: false });
   const logged = worker!.logs.filter((line) => line.includes('term-9'));
@@ -180,7 +169,7 @@ test('Paired server switch that answers no focus', async () => {
 });
 
 test('Focus press the worker cannot answer changes nothing', async () => {
-  await openPanel([serverAgent('main', 'tab1:leaf2')], [], { [SWITCH]: switched(true) });
+  await openPanel([MAIN], [], { [SWITCH]: switched(true) });
   const [button] = focusButtons();
   assert.ok(button, JSON.stringify(panel!.tree()));
   const before = JSON.stringify(panel!.tree());

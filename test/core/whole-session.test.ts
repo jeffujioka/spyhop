@@ -6,13 +6,11 @@ import { ompProvider } from '../../src/core/providers/omp.js';
 import { createClaudeSessions } from '../../src/core/providers/claude-sources.js';
 import { createOmpSessions } from '../../src/core/providers/omp-sources.js';
 import { SCAN_CHUNK_BYTES, TAIL_BYTES } from '../../src/core/refresh.js';
-import { claudeAssistant, claudeBoundary, claudeUsage, sessionFile } from './helpers/entries.ts';
+import { NOW, OMP_PATH, claudeAssistant, claudeBoundary, claudeUsage, sessionFile } from './helpers/entries.ts';
 import { expect } from './helpers/expect.ts';
 import { EXEC_CAP, localExec } from './helpers/local-exec.ts';
 
-const NOW = Date.parse('2026-11-02T12:00:00.000Z');
 const T0 = NOW - 24 * 60 * 60_000;
-const OMP_PATH = '/home/u/.omp/agent/sessions/--proj--/big.jsonl';
 const CLAUDE_PATH = '/home/u/.claude/projects/-proj/big.jsonl';
 
 const stamp = (minute) => new Date(T0 + minute * 60_000).toISOString();

@@ -9,8 +9,10 @@ import * as panelModule from '../src/panel.tsx';
 import * as workerModule from '../src/worker.ts';
 import { useTempHome } from './helpers/env.ts';
 import { tempHome } from './helpers/files.ts';
+import { DEVBOX, DEVBOX_LISTS } from './helpers/orca-answers.ts';
 import { orcaHost, type HostWorkspace } from './helpers/orca-host.ts';
-import { answer, standIns } from './helpers/stand-ins.ts';
+import { isOpen, row } from './helpers/panel.ts';
+import { standIns } from './helpers/stand-ins.ts';
 
 let panel: TestPanel | undefined;
 let worker: TestWorker | undefined;
@@ -19,21 +21,12 @@ afterEach(async () => {
   await worker?.deactivate();
 });
 
-// Orca's id of the SSH target `devbox`, as `orca host list` gives it on this Mac.
-const DEVBOX = 'ssh-1795031810693-d3v8ox';
-
 // Opens the panel, with its worker, on Orca's hosts with `workspaces`, `focused` focused.
 // Returns the panel and `moveFocus(name)`, which focuses the workspace `name` as Orca does and
 // waits for the panel to redraw.
 async function open(workspaces: HostWorkspace[], focused: string) {
   const home = useTempHome();
-  standIns({
-    homes: { devbox: tempHome() },
-    orca: {
-      'host list --json': answer({ hosts: [{ kind: 'ssh', name: 'devbox', id: DEVBOX, selector: `--host ssh:${DEVBOX}`, connected: true }] }),
-      'environment list --json': answer({ environments: [] }),
-    },
-  });
+  standIns({ homes: { devbox: tempHome() }, orca: DEVBOX_LISTS });
   const host = orcaHost(home, { workspaces, focused });
   worker = await mountWorker(workerModule, { host });
   panel = await mount(panelModule, { host });
@@ -46,9 +39,6 @@ async function open(workspaces: HostWorkspace[], focused: string) {
   }
   return { view, host, moveFocus };
 }
-
-const row = (view: TestPanel, name: string) => view.find({ type: 'Collapsible', label: name })!;
-const isOpen = (view: TestPanel, name: string) => view.valueOf(row(view, name));
 
 test('Focus change expands the new workspace', async () => {
   const { view, moveFocus } = await open(
@@ -65,7 +55,7 @@ test('Focus change expands the new workspace', async () => {
   await moveFocus('deploy');
 
   for (const name of ['devbox', 'infra', 'deploy']) assert.equal(isOpen(view, name), true, name);
-  const cards = view.findAll({ type: 'Card' }).filter((el) => el.path.startsWith(`${row(view, 'deploy').path}/`));
+  const cards = view.findAll({ type: 'Card' }).filter((el) => el.path.startsWith(`${row(view, 'deploy')!.path}/`));
   assert.equal(cards.length, 1);
 });
 
@@ -183,9 +173,9 @@ test('Rows the developer opened or closed stay', async () => {
     ],
     'fix-login',
   );
-  await view.toggle(row(view, 'fix-login'));
-  await view.toggle(row(view, 'fix-login'));
-  await view.toggle(row(view, 'release'));
+  await view.toggle(row(view, 'fix-login')!);
+  await view.toggle(row(view, 'fix-login')!);
+  await view.toggle(row(view, 'release')!);
   for (const name of ['fix-login', 'release']) assert.equal(isOpen(view, name), true, name);
 
   await moveFocus('main');

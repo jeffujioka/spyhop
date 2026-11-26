@@ -10,8 +10,9 @@ import * as panelModule from '../src/panel.tsx';
 import * as workerModule from '../src/worker.ts';
 import { useTempHome } from './helpers/env.ts';
 import { tempHome } from './helpers/files.ts';
+import { DEVBOX, DEVBOX_LISTS } from './helpers/orca-answers.ts';
 import { orcaHost, type HostWorkspace } from './helpers/orca-host.ts';
-import { answer, standIns } from './helpers/stand-ins.ts';
+import { standIns } from './helpers/stand-ins.ts';
 
 let panel: TestPanel | undefined;
 let worker: TestWorker | undefined;
@@ -21,21 +22,12 @@ afterEach(async () => {
   mock.timers.reset();
 });
 
-// Orca's id of the SSH target `devbox`, as `orca host list` gives it on this Mac.
-const DEVBOX = 'ssh-1795031810693-d3v8ox';
-
 // Opens the panel, with its worker, on Orca's hosts with the one workspace `workspace`, focused,
 // presses the Focus pane button of its one card, and returns the terminals Orca was asked to
 // focus and the ssh and orca CLI calls the press made.
 async function pressFocusPane(workspace: HostWorkspace) {
   const home = useTempHome();
-  const calls = standIns({
-    homes: { devbox: tempHome() },
-    orca: {
-      'host list --json': answer({ hosts: [{ kind: 'ssh', name: 'devbox', id: DEVBOX, selector: `--host ssh:${DEVBOX}`, connected: true }] }),
-      'environment list --json': answer({ environments: [] }),
-    },
-  });
+  const calls = standIns({ homes: { devbox: tempHome() }, orca: DEVBOX_LISTS });
   const host = orcaHost(home, { workspaces: [workspace], focused: workspace.name });
   mock.timers.enable({ apis: ['setTimeout'] });
   worker = await mountWorker(workerModule, { host });

@@ -7,6 +7,7 @@ import * as panelModule from '../src/panel.tsx';
 import * as workerModule from '../src/worker.ts';
 import { useTempHome } from './helpers/env.ts';
 import { orcaHost, type HostWorkspace } from './helpers/orca-host.ts';
+import { row } from './helpers/panel.ts';
 import { standIns } from './helpers/stand-ins.ts';
 
 let panel: TestPanel | undefined;
@@ -28,7 +29,6 @@ async function open(workspaces: HostWorkspace[], focused?: string) {
   return panel;
 }
 
-const row = (view: TestPanel, name: string) => view.find({ type: 'Collapsible', label: name });
 // Whether the row `name` is drawn under the row `parent`.
 const under = (view: TestPanel, name: string, parent: string) =>
   row(view, name)?.path.startsWith(`${row(view, parent)?.path}/`) ?? false;

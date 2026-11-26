@@ -14,32 +14,15 @@ import * as workerModule from '../src/worker.ts';
 import { costOf, costTurn, ompSessionOf as ompSession } from './helpers/agent-cards.ts';
 import { useTempHome } from './helpers/env.ts';
 import { tempHome } from './helpers/files.ts';
+import { JEFF_AGENT_LIST as AGENT_LIST, JEFF_LISTS, JEFF_TERMINAL_LIST } from './helpers/orca-answers.ts';
 import { orcaHost } from './helpers/orca-host.ts';
+import { serverAgent } from './helpers/server-agent.ts';
 import { answer, standIns } from './helpers/stand-ins.ts';
 
 let worker: TestWorker | undefined;
 afterEach(async () => {
   await worker?.deactivate();
   worker = undefined;
-});
-
-const AGENT_LIST = 'agent list --environment jeff --json';
-
-// An omp Orca agent of the server, in its workspace `name` of its project `spyhop`, whose folder
-// is `folder`, in the pane `paneKey`.
-const serverAgent = (folder: string, name: string, paneKey: string, fields: { state?: string; title?: string } = {}) => ({
-  orcaSessionId: `session-${name}`,
-  kind: 'terminal',
-  agent: 'omp',
-  state: 'working',
-  worktreeId: `repo-spyhop::${folder}`,
-  workspace: name,
-  repo: 'spyhop',
-  hostId: 'local',
-  paneKey,
-  title: null,
-  updatedAt: 0,
-  ...fields,
 });
 
 // The stand-ins of one refresh: the paired server `jeff`, whose home folder is `remoteHome`,
@@ -49,10 +32,9 @@ function jeffLists(remoteHome: string, agents: object[], terminal: string, held 
   return standIns({
     homes: { jeff: remoteHome },
     orca: {
-      'host list --json': answer({ hosts: [{ kind: 'local', name: 'this machine', id: 'local', selector: '--host local' }] }),
-      'environment list --json': answer({ environments: [{ id: 'dc9a64c1-6450-46a1-a62c-9b03d06b187a', name: 'jeff', connectionDependency: 'ssh-tunnel' }] }),
+      ...JEFF_LISTS,
       [AGENT_LIST]: answer({ agents }),
-      'terminal list --environment jeff --json': answer({
+      [JEFF_TERMINAL_LIST]: answer({
         terminals: [{ handle: terminal, ptyId: 'pty-1', orphaned: false, tabId: 'tab1', leafId: 'leaf2', title: 'omp', connected: true }],
         totalCount: 1,
         truncated: false,

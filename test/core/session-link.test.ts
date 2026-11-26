@@ -2,10 +2,10 @@
 // the Orca agents spyhop links.
 import { describe, test } from 'node:test';
 import { collapseBySession, linkAgents, linkSession, shareSessions } from '../../src/core/session-link.js';
+import { MINUTE as MIN } from './helpers/entries.ts';
 import { expect } from './helpers/expect.ts';
 
 const NOW = Date.parse('2026-05-01T12:00:00Z');
-const MIN = 60_000;
 const file = (path, minutesAgo, title) => ({ path, mtimeMs: NOW - minutesAgo * MIN, ...(title === undefined ? {} : { title }) });
 
 describe('Orca agent to session link', () => {

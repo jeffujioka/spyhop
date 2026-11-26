@@ -2,12 +2,9 @@ import { describe, test } from 'node:test';
 import { NA, readStats } from '../../src/core/providers/index.js';
 import { ompProvider } from '../../src/core/providers/omp.js';
 import { REFRESH_INTERVAL_MS, SCAN_CHUNK_BYTES, TAIL_BYTES, createSessionReader, decodeScans, encodeScans } from '../../src/core/refresh.js';
-import { sessionFile } from './helpers/entries.ts';
+import { NOW, OMP_PATH as PATH, sessionFile } from './helpers/entries.ts';
 import { expect } from './helpers/expect.ts';
 import { localExec } from './helpers/local-exec.ts';
-
-const NOW = Date.parse('2026-11-02T12:00:00.000Z');
-const PATH = '/home/u/.omp/agent/sessions/--proj--/big.jsonl';
 
 const message = (role, minute, extra = {}) =>
   JSON.stringify({

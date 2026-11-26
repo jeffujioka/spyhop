@@ -1,10 +1,9 @@
 import { describe, test } from 'node:test';
 import { NA, readStats } from '../../src/core/providers/index.js';
 import { fixtureText } from '../helpers/files.ts';
-import { claudeAssistant as assistant, claudeBoundary, claudeUsage as usage } from './helpers/entries.ts';
+import { CLAUDE_BASIC as BASIC, claudeAssistant as assistant, claudeBoundary, claudeUsage as usage } from './helpers/entries.ts';
 import { expect } from './helpers/expect.ts';
 
-const BASIC = fixtureText('claude/basic.jsonl');
 const LAST_REPLY = Date.parse('2026-09-07T20:21:34.167Z'); // last assistant line of basic.jsonl
 const boundary = (trigger) => claudeBoundary('2026-09-07T20:19:00.000Z', trigger);
 

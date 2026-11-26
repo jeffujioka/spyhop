@@ -1,5 +1,15 @@
 // Session lines and files the core tests build: omp and Claude Code entries as their harnesses
-// log them, with fake figures, and a session file as the session reader takes it.
+// log them, with fake figures, and a session file as the session reader takes it; and the
+// times, the path and the fixture text several of them share.
+import { fixtureText } from '../../helpers/files.ts';
+
+export const MINUTE = 60_000;
+// When the tests of synthetic sessions read them.
+export const NOW = Date.parse('2026-11-02T12:00:00.000Z');
+// The path of a synthetic omp session file.
+export const OMP_PATH = '/home/u/.omp/agent/sessions/--proj--/big.jsonl';
+// The Claude Code session fixture claude/basic.jsonl.
+export const CLAUDE_BASIC = fixtureText('claude/basic.jsonl');
 
 // One omp message entry of `role` at the ISO `timestamp`; an assistant's has provider, model and
 // stop reason, `extra` (message fields such as model or completedAt) is merged in as given, and
