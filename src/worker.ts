@@ -3,9 +3,10 @@
 // on SSH hosts, the agents in each; for each paired Orca server `orca environment list` lists it
 // lists that server's agents with the `orca` CLI (src/hosts.ts), as Orca's `workspace.list` lists
 // no paired server's workspace. It builds their cards from the harnesses' session files, another
-// host's read over `ssh` (src/agent-cards.ts), each paired server's apart from the others' and
-// started on the agents it listed at the previous refresh, while its lists load, and groups
-// them into the tree (src/tree.ts). The CLI runs on each request, so only while the panel is
+// host's read over `ssh` (src/agent-cards.ts), each Orca host's apart from the others', a paired
+// server's started on the agents it listed at the previous refresh, while its lists load. It
+// posts each host's row to the panel as soon as that host's cards are built, and answers with
+// the tree of them all (src/tree.ts). The CLI runs on each request, so only while the panel is
 // open, and for the palette command `spyhop.show`, which shows the panel. A card's Focus pane
 // button asks it
 // to focus the card's pane (`spyhop.focus`) in this computer's Orca window: an agent on this
@@ -20,7 +21,7 @@ import { createTtlCache } from './core/ttl-cache.js';
 import { run } from './exec.ts';
 import { orca as cli, type HostLists, listHosts, readServerAgents, type RemoteHost, remoteHosts, type ServerAgent } from './hosts.ts';
 import type { CardView, Pane, TreeAnswer } from './protocol.ts';
-import { buildTree, type TreeAgent } from './tree.ts';
+import { buildTree, type HostRow, type TreeAgent } from './tree.ts';
 import { worktreeId } from './worktree-id.ts';
 
 // Orca's id of this computer's host; a workspace that records no host is on this computer.
@@ -69,7 +70,7 @@ export default function activate(orca: OrcaWorkerApi): void {
     await cli(run, ['plugin', 'open', self.pluginKey, '--panel', 'spyhop']);
   });
 
-  orca.panels.handle('spyhop.tree', async (): Promise<TreeAnswer> => {
+  orca.panels.handle('spyhop.tree', async (input): Promise<TreeAnswer> => {
     const [{ workspaces }, context, listed] = await Promise.all([
       orca.host.call('workspace.list'),
       orca.host.call('workspace.readContext'),
@@ -85,63 +86,72 @@ export default function activate(orca: OrcaWorkerApi): void {
     const remote = remoteHosts(listed, [...new Set(asked.map(hostOf).filter((hostId) => hostId !== LOCAL))]);
     // agent id -> its pane, for an agent Orca names a terminal of
     const panes = new Map<string, Pane>();
-    // the agents of the asked workspaces and their cards, which wait for no paired server's list
-    async function workspaceCards() {
-      const lists = await Promise.all(
-        asked.map((workspace) =>
-          orca.host.call('agents.list', { workspaceId: workspace.id }).catch(() => ({ agents: [] })),
-        ),
-      );
-      const agents: (OrcaAgent & TreeAgent)[] = asked.flatMap((workspace, i) => {
-        const hostId = hostOf(workspace);
-        return lists[i].agents.map((agent, n) => {
-          const id = `${workspace.id}\0${agent.terminalId ?? n}`;
-          if (agent.terminalId) panes.set(id, { terminalId: agent.terminalId });
-          return {
-            id,
-            agent: agent.agent,
-            state: agent.state,
-            title: agent.title,
-            sessionId: agent.sessionId,
-            path: workspace.path,
-            machine: remote.get(hostId)?.alias ?? null,
-            hostId,
-            repo: workspace.project ?? workspace.name,
-            workspace: workspace.name,
-            worktreeId: worktreeOf(workspace),
-            workspaceId: workspace.id,
-          };
-        });
+    // the panel finds the focused workspace's row by it (the rows' `workspaceIds`)
+    const focused = context?.workspaceId ?? null;
+    // each asked workspace's agents, in the order of `asked`
+    const listing = asked.map(async (workspace) => {
+      const hostId = hostOf(workspace);
+      const { agents } = await orca.host.call('agents.list', { workspaceId: workspace.id }).catch(() => ({ agents: [] }));
+      return agents.map((agent, n): OrcaAgent & TreeAgent => {
+        const id = `${workspace.id}\0${agent.terminalId ?? n}`;
+        if (agent.terminalId) panes.set(id, { terminalId: agent.terminalId });
+        return {
+          id,
+          agent: agent.agent,
+          state: agent.state,
+          title: agent.title,
+          sessionId: agent.sessionId,
+          path: workspace.path,
+          machine: remote.get(hostId)?.alias ?? null,
+          hostId,
+          repo: workspace.project ?? workspace.name,
+          workspace: workspace.name,
+          worktreeId: worktreeOf(workspace),
+          workspaceId: workspace.id,
+        };
       });
+    });
+    // the agents of the asked workspaces on the Orca host `hostId` and their cards, which wait
+    // for no other host's lists or session reads
+    async function workspaceCards(hostId: string) {
+      const agents = (await Promise.all(listing.filter((_, i) => hostOf(asked[i]) === hostId))).flat();
       return { agents, cards: await cards.build(agents, Date.now()) };
     }
-    const [others, servers] = await Promise.all([
-      workspaceCards(),
-      Promise.all([...remote].filter(([hostId]) => hostId.startsWith('runtime:')).map(([hostId, host]) => serverCards(hostId, host))),
-    ]);
-    for (const { agents } of servers) for (const agent of agents) if (agent.pane) panes.set(agent.id, agent.pane);
-    const tree = buildTree(
-      [...others.agents, ...servers.flatMap(({ agents }) => agents)],
-      [...others.cards, ...servers.flatMap(({ cards }) => cards)],
-    );
-    return {
-      hosts: tree.map((host) => ({
-        ...host,
-        // as Orca names the host: `local` for this computer
-        name: remote.get(host.id)?.name ?? host.name,
-        projects: host.projects.map((project) => ({
-          ...project,
-          workspaces: project.workspaces.map((workspace) => ({
-            ...workspace,
-            // card-model.js is untyped JS: CardView names the shape it returns. A card's id is
-            // that of the first of the agents that share it (src/agent-cards.ts).
-            cards: workspace.cards.map((card) => ({ ...(cardModel(card, { home }) as Omit<CardView, 'pane'>), pane: panes.get(card.id) ?? null })),
-          })),
+    // A host row of the tree as the panel draws it, in a post and in the answer.
+    const rowOf = (host: HostRow<{ id: string }>): HostRow<CardView> => ({
+      ...host,
+      // as Orca names the host: `local` for this computer
+      name: remote.get(host.id)?.name ?? host.name,
+      projects: host.projects.map((project) => ({
+        ...project,
+        workspaces: project.workspaces.map((workspace) => ({
+          ...workspace,
+          // card-model.js is untyped JS: CardView names the shape it returns. A card's id is
+          // that of the first of the agents that share it (src/agent-cards.ts).
+          cards: workspace.cards.map((card) => ({ ...(cardModel(card, { home }) as Omit<CardView, 'pane'>), pane: panes.get(card.id) ?? null })),
         })),
       })),
-      // the panel finds the focused workspace's row by it (the rows' `workspaceIds`)
-      focused: context?.workspaceId ?? null,
-    };
+    });
+    // One Orca host's agents and cards, once built: its row is posted to the panel, when the
+    // panel numbered the request. A host with no agent has no row.
+    async function posted<Built extends { agents: (TreeAgent & { pane?: Pane | null })[]; cards: Parameters<typeof buildTree>[1] }>(building: Promise<Built>) {
+      const built = await building;
+      for (const agent of built.agents) if (agent.pane) panes.set(agent.id, agent.pane);
+      if (input) {
+        for (const host of buildTree(built.agents, built.cards)) orca.panels.post('spyhop.host', { request: input.request, host: rowOf(host), focused });
+      }
+      return built;
+    }
+    const [others, servers] = await Promise.all([
+      Promise.all([...new Set(asked.map(hostOf))].map((hostId) => posted(workspaceCards(hostId)))),
+      Promise.all([...remote].filter(([hostId]) => hostId.startsWith('runtime:')).map(([hostId, host]) => posted(serverCards(hostId, host)))),
+    ]);
+    // the agents in the order Orca lists them, which is the order of the rows
+    const tree = buildTree(
+      [...(await Promise.all(listing)).flat(), ...servers.flatMap(({ agents }) => agents)],
+      [...others, ...servers].flatMap(({ cards }) => cards),
+    );
+    return { hosts: tree.map(rowOf), focused };
   });
 
   orca.panels.handle('spyhop.focus', async (pane: Pane) => {

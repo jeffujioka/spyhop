@@ -2,8 +2,11 @@
 // panel: its Orca workspaces, each with the folder Orca reports under a temporary home, the
 // Orca agents in each, and the focused one, which `focus` moves. It focuses any terminal it is
 // asked to (`terminal.focus`); `callsOf('terminal.focus')` lists those asks. `holdLists` holds
-// back its `workspace.list` answers, so the worker answers no tree, until the release it returns.
-import { hostError, mockHost } from 'orca/testing';
+// back its `workspace.list` answers, so the worker answers no tree, until the release it returns;
+// `remove` takes a workspace off its lists. `relayPosts` hands a mounted panel what the worker
+// posted, which Orca does and the test kit does not.
+import { setImmediate } from 'node:timers/promises';
+import { hostError, mockHost, type TestPanel, type TestWorker } from 'orca/testing';
 import { workspace as folder } from './agent-cards.ts';
 
 type State = 'working' | 'blocked' | 'waiting' | 'done';
@@ -61,5 +64,24 @@ export function orcaHost(home: string, { workspaces, focused }: { workspaces: Ho
     lists = promise;
     return resolve;
   }
-  return Object.assign(host, { focus, holdLists });
+  // Orca no longer lists the workspace `name`, nor its agents.
+  function remove(name: string) {
+    rows.splice(rows.findIndex((found) => found.row.name === name), 1);
+  }
+  return Object.assign(host, { focus, holdLists, remove });
+}
+
+// Hands `panel` each of the worker's `posts` (`worker.posts`), in order, once there are `count`
+// of them, and returns once the panel has drawn what it made of them; rejects when the worker
+// has not posted that many within 5 s. It waits for no answer of the worker, as the panel's own
+// `post` does, so it also returns while a request of the panel is unanswered.
+export async function relayPosts(posts: TestWorker['posts'], panel: TestPanel, count: number) {
+  const end = Date.now() + 5000;
+  while (posts.length < count) {
+    if (Date.now() > end) throw new Error(`the worker posted ${posts.length} times, not ${count}`);
+    await setImmediate();
+  }
+  for (const { event, payload } of posts) void panel.post(event as never, payload as never);
+  // the panel's draw runs in the task the first `post` queued, before this one
+  await setImmediate();
 }

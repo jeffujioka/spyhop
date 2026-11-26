@@ -87,6 +87,11 @@ While the panel is open it asks for the tree every 2 seconds, and at once when f
 another workspace. While it is closed, hidden or unmounted it asks for nothing: a refresh that
 was running when it closed runs to its end, and no other starts.
 
+During a refresh each host's rows appear as soon as that host's cards are built, without waiting
+for another host: this computer's are not held up by a slow SSH host or paired server. When the
+refresh ends the whole tree replaces what is drawn, so the rows of a host that is gone
+disappear then.
+
 ## Focus pane
 
 A card whose agent has a pane shows a **Focus pane** button; a card whose agent has none (an
