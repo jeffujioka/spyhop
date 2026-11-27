@@ -9,28 +9,8 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 import { contextChart, costChart, tokensChart } from '../../src/live/charts.ts';
 import type { SessionView } from '../../src/protocol.ts';
-import { claudeSession, ompAutocompacts, ompSession, ompWindow, sessionOf, type ClaudeCall, type Compaction, type OmpCall } from '../helpers/live.ts';
+import { at, claudeSession, ompView, sessionOf, type ClaudeCall, type Compaction } from '../helpers/live.ts';
 import { attr, figure, parts, text, textOutsideFigures } from '../helpers/markup.ts';
-
-// Epoch ms of `hhmm` on the day of the tests' clock (test/helpers/agent-cards.ts), in UTC, the
-// time zone the tests run in.
-const at = (hhmm: string) => Date.parse(`2026-11-25T${hhmm}:00.000Z`);
-
-// The session the worker answers for one working agent of the workspace `api`/`main`, linked to
-// an omp session of `calls` and `compactions`, on a window of 1,000,000 tokens when `window`,
-// with omp's default autocompaction when `autocompacts`; `now`: the clock's time.
-async function ompView({ calls, compactions, window = true, autocompacts = false, now }: { calls: OmpCall[]; compactions?: Compaction[]; window?: boolean; autocompacts?: boolean; now?: number }) {
-  const { answer } = await sessionOf([{ project: 'api', name: 'main', agents: ['working'], title: 'π - Draw the charts' }], {
-    now,
-    prepare: (home) => {
-      if (window) ompWindow(home, 1_000_000);
-      if (autocompacts) ompAutocompacts(home);
-      // in the folder Orca reports for the workspace `api`/`main` (test/helpers/orca-host.ts)
-      ompSession(home, join(home, 'work/api-main', 'charts'), { title: 'Draw the charts', calls, compactions });
-    },
-  });
-  return answer.session!;
-}
 
 // The session the worker answers for one working Claude Code agent of the workspace `web`/`main`,
 // linked to a session of `calls` and `compactions`.

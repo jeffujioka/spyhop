@@ -12,7 +12,7 @@ import { formatAge, formatCost, formatCostPerHour, formatCount, formatCountdown,
 import { NA } from '../core/providers/index.js';
 import { atAttention, STATES } from '../fleet.ts';
 import type { AttentionRow, BurnCard, CardView, FleetAnswer, HostGroup } from '../protocol.ts';
-import { burnChart, contextBar, sparkLine } from './charts.ts';
+import { BURN_TITLE, burnChart, contextBar, sparkLine } from './charts.ts';
 import { esc, num } from './html.ts';
 import { levelOf } from './levels.ts';
 
@@ -35,7 +35,7 @@ function burnCard({ perHour, total, tokensPerMin, cacheHitRate, running, leftOut
       ? ''
       : `<div class="muted">the rate leaves out ${num('leftOut', String(leftOut))} session${leftOut === 1 ? '' : 's'} of Claude Code, which logs no cost per model call</div>`;
   return (
-    `<section data-part="burn" class="chart"><div class="row"><b class="grow">Burn rate</b><span class="muted">all sessions ${num('total', formatCost(total))}</span></div>` +
+    `<section data-part="burn" class="chart"><div class="row"><b class="grow">${BURN_TITLE}</b><span class="muted">all sessions ${num('total', formatCost(total))}</span></div>` +
     `<div class="row headline">${num('perHour', formatCostPerHour(perHour), 'hero')} <span class="muted">per hour, last 10 minutes</span></div>${burnChart(layers, endMs)}` +
     `<div class="row key muted"><span>${num('tokensPerMin', orNa(tokensPerMin, formatTokens))} tokens/min</span><span>cache ${num('cacheHitRate', formatPercent(cacheHitRate))}</span>` +
     `<span>${num('running', formatCount(running))} sub-agent${running === 1 ? '' : 's'} running</span></div>${left}</section>`

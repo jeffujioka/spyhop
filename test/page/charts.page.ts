@@ -8,61 +8,21 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import type { Page } from 'playwright-core';
-import type { Point, SessionView } from '../../src/protocol.ts';
+import { MINUTE_MS } from '../../src/core/series.js';
+import type { SessionView } from '../../src/protocol.ts';
 import { answersOf, card, FIX } from './helpers/answers.ts';
+import { at, burnLayersTo, call, crosshairAt, hoverTime, sessionWith, shownOnce } from './helpers/charts.ts';
 import { openPanel } from './helpers/page.ts';
 
-const MINUTE = 60_000;
-
-// The epoch ms of the time of day `clock` ("12:05") on one day, in local time, as the page writes
-// its times.
-const at = (clock: string) => {
-  const [hours, minutes] = clock.split(':').map(Number);
-  return new Date(2026, 10, 27, hours, minutes).getTime();
-};
-
-// The burn rate of the last hour to 12:48 of the layers ORCA, BOTO, FACT and others: at 12:05
-// 4.00, 4.80, 3.00 and 0.50 USD per hour, and at every other minute their newest rates, 2.00,
-// 1.00, 0.50 and 0.25.
+// The burn rate of the last hour to 12:48.
 const BURN_END = at('12:48');
-const burnLayers = (
-  [
-    ['ORCA', 4, 2],
-    ['BOTO', 4.8, 1],
-    ['FACT', 3, 0.5],
-    ['others', 0.5, 0.25],
-  ] as const
-).map(([name, then, newest]) => {
-  const values = Array.from({ length: 60 }, () => newest);
-  values[60 - 1 - (BURN_END - at('12:05')) / MINUTE] = then;
-  return { name, values };
-});
+const burnLayers = burnLayersTo(BURN_END);
 
 // A session title of 40 characters, longer than a line of the burn rate box holds at 300 px.
 const LONG = 'Refactor the session reader for opencode';
 
 // The fleet screen of one card, with the burn rate chart of `layers` above.
 const fleetWithBurn = (layers = burnLayers) => openPanel(answersOf(() => ({ cards: [card(FIX)], burn: { layers, endMs: BURN_END } })));
-
-// The session screen of the card FIX, whose session has the charts `charts`, drawn.
-async function sessionWith(charts: Partial<SessionView>, chart: string) {
-  const { page } = await openPanel(answersOf(() => ({ cards: [card(FIX)], sessions: { [FIX]: charts } })));
-  await page.locator('[data-part="card"]', { hasText: FIX }).click();
-  await page.locator(`svg[data-chart="${chart}"]`).waitFor();
-  return page;
-}
-
-// A model call of the tokens chart at `t`, with its tokens.
-const call = (t: number, read: number, write: number, uncached: number, output: number): Point => ({ t, n: 1, read, write, uncached, output, cost: null, context: null });
-
-// Rests the pointer over the chart `chart`, halfway down, at the x it draws the point of `t` at.
-async function hoverTime(page: Page, chart: string, t: number) {
-  const svg = page.locator(`svg[data-chart="${chart}"]`);
-  await svg.scrollIntoViewIfNeeded();
-  const x = Number(await svg.locator(`[data-cross][data-t="${t}"]`).getAttribute('data-x'));
-  const box = (await svg.boundingBox())!;
-  await page.mouse.move(box.x + (x / 360) * box.width, box.y + box.height / 2);
-}
 
 // Rests the pointer over the middle of the element `selector` of the chart `chart`.
 async function hoverOver(page: Page, chart: string, selector: string, nth: number) {
@@ -71,54 +31,6 @@ async function hoverOver(page: Page, chart: string, selector: string, nth: numbe
   const box = (await element.boundingBox())!;
   await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
 }
-
-// What a chart shows of its crosshair and box: the time of each visible crosshair, the visible
-// dots, and each visible box's lines and the half of the plot it is in, `top` and `bottom` its
-// edges' distances from the plot's top and `plot` the plot's height, in px.
-type Shown = { crosshairs: number[]; dots: number; boxes: { lines: (string | null)[]; half: string; top: number; bottom: number; plot: number }[] };
-
-// What the chart `chart` shows of its crosshair and box.
-function shown(page: Page, chart: string): Promise<Shown> {
-  return page.locator(`svg[data-chart="${chart}"]`).evaluate((svg) => {
-    const plot = svg.parentElement!;
-    const area = plot.getBoundingClientRect();
-    const middle = area.left + area.width / 2;
-    // shown when neither it nor what holds it is `display: none`; Chrome's checkVisibility()
-    // reads an SVG element in a hidden group as visible
-    const visible = (element: Element) => {
-      for (let at: Element | null = element; at; at = at.parentElement) if (getComputedStyle(at).display === 'none') return false;
-      return true;
-    };
-    return {
-      crosshairs: [...svg.querySelectorAll('[data-cross]')].filter(visible).map((cross) => Number(cross.getAttribute('data-t'))),
-      dots: [...svg.querySelectorAll('[data-dot]')].filter(visible).length,
-      boxes: [...plot.querySelectorAll('[data-box]')].filter(visible).map((box) => {
-        const { left, right, top, bottom } = box.getBoundingClientRect();
-        return {
-          lines: [...box.children].map((line) => line.textContent),
-          half: right <= middle ? 'left' : left >= middle ? 'right' : 'both',
-          top: top - area.top,
-          bottom: bottom - area.top,
-          plot: area.height,
-        };
-      }),
-    };
-  });
-}
-
-// What the chart `chart` shows once `done` holds of it, or after 10 s, as the page draws it.
-async function shownOnce(page: Page, chart: string, done: (now: Shown) => boolean) {
-  const until = Date.now() + 10_000;
-  let now = await shown(page, chart);
-  while (!done(now) && Date.now() < until) {
-    await page.waitForTimeout(50);
-    now = await shown(page, chart);
-  }
-  return now;
-}
-
-// What the chart `chart` shows once it shows a crosshair at `t`.
-const crosshairAt = (page: Page, chart: string, t: number) => shownOnce(page, chart, ({ crosshairs }) => crosshairs.includes(t));
 
 // The widths of the panel the boxes are checked at: the sidebar's, and a wider one.
 const WIDTHS = [300, 420];
@@ -184,7 +96,7 @@ test('Pointer leaves the chart', async () => {
   const counts = (await page.locator('[data-part="counts"]').boundingBox())!;
   await page.mouse.move(counts.x + 2, counts.y + counts.height / 2);
 
-  assert.deepEqual(await shownOnce(page, 'burn', ({ crosshairs, boxes }) => crosshairs.length + boxes.length === 0), { crosshairs: [], dots: 0, boxes: [] });
+  assert.deepEqual(await shownOnce(page, 'burn', ({ crosshairs, boxes }) => crosshairs.length + boxes.length === 0), { crosshairs: [], xs: [], dots: 0, boxes: [] });
 });
 
 test('Box of the context chart', async () => {
@@ -239,6 +151,15 @@ test('Context box of many compactions', async () => {
     );
     assert.ok(boxes[0].bottom <= boxes[0].plot, `at ${width} px the box ends ${boxes[0].bottom} px down a plot ${boxes[0].plot} px high`);
   }
+
+  // three of them: the box gives the two newest and one more
+  const three = await sessionWith({ context: { ...context, compactions: 3, marks: context.marks.slice(1) } }, 'context');
+  await hoverTime(three, 'context', at('12:30'));
+  const { boxes } = await crosshairAt(three, 'context', at('12:30'));
+  assert.deepEqual(
+    boxes.map(({ lines }) => lines.at(-1)),
+    ['+1 more compaction'],
+  );
 });
 
 test('Box of one model call', async () => {
@@ -282,7 +203,7 @@ test('Box of the cost chart', async () => {
 
 test('Box of grouped model calls', async () => {
   // 400 calls a minute apart from 10:00, in the session chart's 120 bars of room: 100 bars of 4
-  const points = Array.from({ length: 400 }, (_, i) => call(at('10:00') + i * MINUTE, 1000, 0, 0, 10));
+  const points = Array.from({ length: 400 }, (_, i) => call(at('10:00') + i * MINUTE_MS, 1000, 0, 0, 10));
   const page = await sessionWith({ tokens: { points, hitRate: 'n/a', cold: null } }, 'tokens');
 
   await hoverOver(page, 'tokens', '[data-bar]', 1);

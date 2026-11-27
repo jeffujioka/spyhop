@@ -5,13 +5,12 @@
 // changing what `fleet` returns. Each fleet answer's cards have been in their state as many
 // minutes as the request's number, so that a test sees which answer the page drew last: the
 // answer to the request 3 reads `3m` on each card.
+import { MINUTE_MS } from '../../../src/core/series.js';
 import type { AttentionRow, BurnCard, CardView, FleetAnswer, SessionAnswer, SessionView } from '../../../src/protocol.ts';
 import type { Answers } from './orca.ts';
 
 export const FIX = 'Fix the login bug';
 export const DOCS = 'Write the docs';
-
-const MINUTE = 60_000;
 
 // The card of the session titled `title`, its id, of an omp agent working in this computer's
 // folder `spyhop`; `fields` change any of it.
@@ -19,7 +18,7 @@ export function card(title: string, fields: Partial<CardView> = {}): CardView {
   return {
     id: title,
     state: 'working',
-    stateSinceMs: MINUTE,
+    stateSinceMs: MINUTE_MS,
     title,
     folder: 'spyhop',
     branch: 'main',
@@ -38,7 +37,7 @@ export function card(title: string, fields: Partial<CardView> = {}): CardView {
 }
 
 // The attention list's row of the blocked agent of `of`, blocked for a minute.
-export const blockedRow = (of: CardView): AttentionRow => ({ kind: 'state', card: of.id, title: of.title, state: 'blocked', sinceMs: MINUTE });
+export const blockedRow = (of: CardView): AttentionRow => ({ kind: 'state', card: of.id, title: of.title, state: 'blocked', sinceMs: MINUTE_MS });
 
 // The fleet a test draws: its cards, the rows of its attention list, what it gives of the burn
 // rate card, and what it gives of the session of each card, by the card's id.
@@ -53,9 +52,9 @@ function fleetAnswer(request: number, { cards, attention = [], burn }: Fleet): F
   }
   return {
     request,
-    groups: [{ id: 'local', name: 'This computer', count: cards.length, cards: cards.map((drawn) => ({ ...drawn, stateSinceMs: request * MINUTE })) }],
+    groups: [{ id: 'local', name: 'This computer', count: cards.length, cards: cards.map((drawn) => ({ ...drawn, stateSinceMs: request * MINUTE_MS })) }],
     counts,
-    burn: { perHour: 'n/a', total: 'n/a', tokensPerMin: 'n/a', cacheHitRate: 'n/a', running: 'n/a', leftOut: 0, layers: 'n/a', endMs: request * MINUTE, ...burn },
+    burn: { perHour: 'n/a', total: 'n/a', tokensPerMin: 'n/a', cacheHitRate: 'n/a', running: 'n/a', leftOut: 0, layers: 'n/a', endMs: request * MINUTE_MS, ...burn },
     attention,
   };
 }

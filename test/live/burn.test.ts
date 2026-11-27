@@ -4,54 +4,15 @@
 // real worker's answer over omp, Claude Code and opencode session files under a temporary home
 // (test/helpers/live.ts), and read through the markup's conventions (test/helpers/markup.ts).
 import assert from 'node:assert/strict';
-import { chmodSync } from 'node:fs';
 import { test } from 'node:test';
 import { MINUTE } from '../core/helpers/entries.ts';
 import { NOW, opencodeCalls, workspace } from '../helpers/agent-cards.ts';
-import { claudeSession, claudeSubAgent, fleetOf, folderOf, ompSession, ompSubAgent, type OmpCall, spent } from '../helpers/live.ts';
+import { burnOf, claudeSession, claudeSubAgent, spent } from '../helpers/live.ts';
 import { attr, figure, parts, text } from '../helpers/markup.ts';
 import type { HostWorkspace } from '../helpers/orca-host.ts';
 
 // This computer's workspace `web`/`main`, with one working Claude Code agent.
 const CLAUDE: HostWorkspace = { project: 'web', name: 'main', agents: ['working'], harness: 'claude' };
-
-// An omp session titled `title`: the model calls of its own and of each of its sub-agents.
-type Session = { title: string; calls: OmpCall[]; subAgents?: ({ name: string; calls: OmpCall[]; running?: boolean })[] };
-
-// This computer's workspace `<title>`/`main`, with one working omp agent of the session `title`.
-const ompWorkspace = (title: string): HostWorkspace => ({ project: title, name: 'main', agents: ['working'], title: `π - ${title}` });
-
-// Writes the omp sessions `sessions` under `home`, each in its own workspace; the transcripts of
-// their sub-agents, in their order.
-function writeOmp(home: string, sessions: Session[]) {
-  return sessions.flatMap(({ title, calls, subAgents = [] }) => {
-    const path = folderOf(home, ompWorkspace(title));
-    ompSession(home, path, { title, calls });
-    return subAgents.map(({ name, ...sub }) => ompSubAgent(home, path, name, sub));
-  });
-}
-
-// The fleet of the omp sessions `sessions` and of the workspaces `others`, whose files `prepare`
-// writes; `unread`: the indexes of the sub-agent transcripts (Claude Code's first, then omp's)
-// that the read-only programs cannot read, so are not read yet. The answer, the fleet screen and
-// its burn rate card.
-async function burnOf(sessions: Session[], { others = [], prepare, unread = [] }: { others?: HostWorkspace[]; prepare?: (home: string) => string[]; unread?: number[] } = {}) {
-  const locked: string[] = [];
-  try {
-    const { answer, html } = await fleetOf([...sessions.map(({ title }) => ompWorkspace(title)), ...others], {
-      prepare: (home) => {
-        const transcripts = [...(prepare?.(home) ?? []), ...writeOmp(home, sessions)];
-        for (const at of unread) {
-          locked.push(transcripts[at]);
-          chmodSync(transcripts[at], 0o000);
-        }
-      },
-    });
-    return { answer, html, burn: parts(html, 'data-part', 'burn')[0] };
-  } finally {
-    for (const file of locked) chmodSync(file, 0o644);
-  }
-}
 
 // The card titled `title` of the fleet screen `html`.
 const cardOf = (html: string, title: string) => parts(html, 'data-part', 'card').find((card) => text(card).startsWith(title))!;

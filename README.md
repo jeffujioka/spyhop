@@ -146,7 +146,16 @@ call's time, or for a bar of several calls how many and their span (`4 calls bet
 it, not cached and output; the cost chart's the time, the session's own cost, its sub-agents'
 and their total. A value that cannot be read reads n/a. A box stays within its chart from the
 panel's narrowest, 300 px: the burn rate box cuts a name over 12 characters short with `…`, the
-key keeping it whole. A refresh keeps the line and the box on the point of the same time.
+key keeping it whole.
+
+Each of the four charts is one stop of the Tab key, named by its title. A chart that takes the
+keyboard's focus shows its line and box on its newest point; Left and Right move them one point,
+Home and End to the first and the last point, and Escape hides them until the next of those
+keys, which moves from the point they were on. They go when the focus leaves the chart.
+
+A refresh keeps the line and the box, of a hovered or a focused chart, on the point of the same
+time, or on the first point after it when that time is no longer a point, with the values the
+refresh gives it; a focused chart keeps the focus.
 
 ## Harnesses
 
@@ -300,7 +309,7 @@ listed) and runs `orca plugin open <key> --panel spyhop`.
   panel and `orca plugin shot --scenario` refuses one, so the panel has no check scenarios: the
   session screen's look is checked by eye. Orca asks for the dev plugin's approval again after
   every change to a file of the folder, and the check prints the command that gives it.
-- Page tests: `npm run test:page` runs the `test/page/*.page.ts` tests with Node's test runner
+- Page tests: `npm run test:page` runs the `test/page/**/*.page.ts` tests with Node's test runner
   (`npm test` does not): they compile the panel's page with the project's TypeScript, with no
   bundler, load it in headless Chrome, the Google Chrome installed in `/Applications` (Playwright
   downloads no browser), with a stand-in for Orca that answers the page's requests, and drive it

@@ -7,17 +7,15 @@
 // needs to be drawn, by the minutes the answer's cards read, rather than for a time.
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import type { Locator, Page } from 'playwright-core';
+import type { Page } from 'playwright-core';
 import { answersOf, blockedRow, card, DOCS, FIX, type Fleet } from './helpers/answers.ts';
-import { openPanel } from './helpers/page.ts';
+import { isFocused, openPanel } from './helpers/page.ts';
 
 // Waits until the page has drawn the answer to the fleet request `request`.
 const drawn = (page: Page, request: number) =>
   page.locator('[data-part="card"] [data-figure="since"]', { hasText: new RegExp(`^${request}m$`) }).first().waitFor();
 
 const cardOf = (page: Page, title: string) => page.locator('[data-part="card"]', { hasText: title });
-
-const isFocused = (control: Locator) => control.evaluate((element) => element === document.activeElement);
 
 // Hides or shows the page as Orca does when it collapses or opens the panel: headless Chrome
 // keeps every page visible, so the page's document reads `visibilityState` from here and hears

@@ -13,7 +13,7 @@ import { tmpdir } from 'node:os';
 import { join, sep } from 'node:path';
 import { after, afterEach } from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { type Browser, chromium, type Page } from 'playwright-core';
+import { type Browser, chromium, type Locator, type Page } from 'playwright-core';
 import { type Answers, type Asked, standInOrca } from './orca.ts';
 
 const CHROME = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
@@ -64,3 +64,6 @@ export async function openPanel(answers: Answers): Promise<{ page: Page; request
   await page.goto(`${PAGE_ORIGIN}/`);
   return { page, requests };
 }
+
+// Whether `control` has the page's focus.
+export const isFocused = (control: Locator) => control.evaluate((element) => element === document.activeElement);

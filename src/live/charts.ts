@@ -8,7 +8,8 @@
 // attributes. Each of the four charts of the burn rate, context, tokens and cost has a round
 // scale (`scaleOf`), its faint lines in the SVG and their values laid over it in its plot, and
 // times of day under it (`clockMarks`, `timesRow`), and a crosshair and a box of values at each
-// of its points, hidden until the page shows one (`hovers`). A session chart groups neighbouring
+// of its points, hidden until the page shows one (`hovers`); its plot is one stop of the Tab key,
+// named by its title (`plot`). A session chart groups neighbouring
 // model calls to the room it has (`groupPoints`), and is not drawn without a point.
 // Pure: no DOM.
 
@@ -106,8 +107,10 @@ function scaleOf(height: number, top: number, format: (v: number, step: number) 
 // reads $0.00 or the same as another: $0.002, $0.004.
 const usdLabel = (v: number, step: number) => `$${v.toFixed(Math.max(2, -Math.floor(Math.log10(step))))}`;
 
-// A chart's plot: its SVG `svg`, with `over` laid over it: its scale's labels and its boxes.
-const plot = (svg: string, over: string) => `<div data-part="plot" class="plot">${svg}${over}</div>`;
+// A chart's plot, named `name`, the chart's title: its SVG `svg`, with `over` laid over it: its
+// scale's labels and its boxes. It is one stop of the Tab key, whose crosshair the page
+// (src/panel.ts) moves by the keyboard while it has the focus.
+const plot = (name: string, svg: string, over: string) => `<div data-part="plot" class="plot" tabindex="0" role="group" aria-label="${esc(name)}">${svg}${over}</div>`;
 
 // A line of a box: its label ('' for a value alone), its value and, for a layer, the class of
 // the layer's colour.
@@ -254,17 +257,18 @@ export function contextChart(context: Context, room = ROOM): string {
         rows: [
           ['', `${shares ? `${formatPercent(v)} · ` : ''}${formatCount(grouped[i].v)} tokens`],
           ...compacted.slice(-BOX_COMPACTIONS).map(({ t: when, before, after }): Row => ['', `compacted ${formatClock(when)} ${formatCount(before)} → ${formatCount(after)}`]),
-          ...(compacted.length > BOX_COMPACTIONS ? [['', `+${compacted.length - BOX_COMPACTIONS} more compactions`] as Row] : []),
+          ...(compacted.length > BOX_COMPACTIONS ? [['', `+${compacted.length - BOX_COMPACTIONS} more compaction${compacted.length - BOX_COMPACTIONS === 1 ? '' : 's'}`] as Row] : []),
         ],
       };
     }),
   );
   const refKeys = shares ? '<div class="row key muted"><span><i class="lvl-hot"></i><span class="num">75%</span></span><span><i class="lvl-critical"></i><span class="num">90%</span></span></div>' : '';
+  const title = 'Context';
   return card(
-    'Context',
+    title,
     '',
     `<div class="row headline">${contextHeadline(context)}</div>` +
-      plot(`${svgOf('context', CONTEXT_HEIGHT, shares ? '' : ' class="plain"')}${scale.lines}${refs}${lines}${line}${hover.crosses}</svg>`, scale.labels + hover.boxes) +
+      plot(title, `${svgOf('context', CONTEXT_HEIGHT, shares ? '' : ' class="plain"')}${scale.lines}${refs}${lines}${line}${hover.crosses}</svg>`, scale.labels + hover.boxes) +
       `${clockMarks(times, x)}${refKeys}${notes ? `<div class="row marks muted">${notes}</div>` : ''}`,
   );
 }
@@ -282,13 +286,13 @@ function contextHeadline({ window, latest, peak, compactions, tokensLeft }: Cont
   );
 }
 
-// The kinds of tokens of a model call, by their class, and their names, in the order the tokens
-// chart stacks them, the output last.
+// The kinds of tokens of a model call, by their field of the call, whose class is `k-` and the
+// field, and their names, in the order the tokens chart stacks them, the output last.
 const TOKEN_KINDS = [
-  ['k-read', 'read from cache'],
-  ['k-write', 'written to cache'],
-  ['k-uncached', 'not cached'],
-  ['k-output', 'output'],
+  ['read', 'read from cache'],
+  ['write', 'written to cache'],
+  ['uncached', 'not cached'],
+  ['output', 'output'],
 ] as const;
 
 // The tokens of each model call, in at most `room` bars, in their order: the prompt tokens read
@@ -310,52 +314,48 @@ export function tokensChart(tokens: Tokens, room = ROOM): string {
   const middle = (i: number) => at(barX(i) + width / 2);
   const outputScale = valueScale(TOKENS_HEIGHT, Math.max(...points.map(({ output }) => output)));
   const heads = points.map(({ t, n }, i) => (n > 1 ? `${n} calls ${i === 0 ? 'up to' : `between ${formatClock(points[i - 1].t)} and`} ${formatClock(t)}` : formatClock(t)));
+  // each kind of the tokens of the bar `i`, in the order of TOKEN_KINDS: its value, the y of its
+  // dot and its rect, the prompt kinds stacked in the bar and the output, on its own scale, none
+  const kinds = points.map((point, i) => {
+    let below = 0;
+    return TOKEN_KINDS.map(([field]) => {
+      const value = point[field];
+      if (field === 'output') return { value, top: outputScale(value), rect: '' };
+      const top = promptScale(below + value);
+      const rect = `<rect class="k-${field}" x="${barX(i)}" y="${top}" width="${width}" height="${at(promptScale(below) - top)}"/>`;
+      below += value;
+      return { value, top, rect };
+    });
+  });
   const bars = points
-    .map(({ n, read, write, uncached, output }, i) => {
-      let below = 0;
-      const rects = (
-        [
-          ['k-read', read],
-          ['k-write', write],
-          ['k-uncached', uncached],
-        ] as const
-      )
-        .map(([kind, value]) => {
-          const top = promptScale(below + value);
-          const rect = `<rect class="${kind}" x="${barX(i)}" y="${top}" width="${width}" height="${at(promptScale(below) - top)}"/>`;
-          below += value;
-          return rect;
-        })
-        .join('');
+    .map(({ n }, i) => {
       const span = n > 1 ? ` data-span="${heads[i]}"` : '';
-      return `<g data-bar data-calls="${n}"${span} data-read="${read}" data-write="${write}" data-uncached="${uncached}" data-output="${output}">${rects}</g>`;
+      const values = TOKEN_KINDS.map(([field], k) => ` data-${field}="${kinds[i][k].value}"`).join('');
+      return `<g data-bar data-calls="${n}"${span}${values}>${kinds[i].map(({ rect }) => rect).join('')}</g>`;
     })
     .join('');
   const hover = hovers(
     TOKENS_HEIGHT,
-    points.map(({ t, read, write, uncached, output }, i) => {
-      const values = [read, write, uncached, output];
-      const tops = [promptScale(read), promptScale(read + write), promptScale(read + write + uncached), outputScale(output)];
-      return {
-        t,
-        x: middle(i),
-        dots: TOKEN_KINDS.map(([kind], k) => ({ y: tops[k], kind })),
-        head: heads[i],
-        rows: TOKEN_KINDS.map(([kind, name], k): Row => [name, formatCount(values[k]), kind]),
-      };
-    }),
+    points.map(({ t }, i) => ({
+      t,
+      x: middle(i),
+      dots: TOKEN_KINDS.map(([field], k) => ({ y: kinds[i][k].top, kind: `k-${field}` })),
+      head: heads[i],
+      rows: TOKEN_KINDS.map(([field, name], k): Row => [name, formatCount(kinds[i][k].value), `k-${field}`]),
+    })),
   );
   const output = `<polyline data-output class="k-output" points="${points.map(({ output: value }, i) => `${at((i + 0.5) * slot)} ${outputScale(value)}`).join(' ')}"/>`;
-  const keys = TOKEN_KINDS.map(([kind, name]) => `<span><i class="${kind}"></i>${name}</span>`).join('');
+  const keys = TOKEN_KINDS.map(([field, name]) => `<span><i class="k-${field}"></i>${name}</span>`).join('');
   const { cold } = tokens;
   const note = cold
     ? `<div data-part="cold-note" class="muted"><span class="num">${cold.count}</span> cold start${cold.count === 1 ? '' : 's'} · <span class="num">${formatTokens(cold.tokens)}</span> written again · <span class="num">${formatCost(cold.cost)}</span></div>`
     : '';
+  const title = 'Tokens per model call';
   return card(
-    'Tokens per model call',
+    title,
     `<span class="muted">cache hit ${num('hitRate', formatPercent(tokens.hitRate))}</span>`,
     // the faint lines over the bars, so that a bar does not hide them
-    plot(`${svgOf('tokens', TOKENS_HEIGHT)}${bars}${scaleLines}${output}${hover.crosses}</svg>`, scaleLabels + hover.boxes) +
+    plot(title, `${svgOf('tokens', TOKENS_HEIGHT)}${bars}${scaleLines}${output}${hover.crosses}</svg>`, scaleLabels + hover.boxes) +
       // the first bar and every n-th one after it, at most five, each with the time of its last call
       timesRow(points.flatMap(({ t }, i) => (i % Math.ceil(points.length / 5) === 0 ? [{ t, x: middle(i) }] : []))) +
       `<div class="row key muted">${keys}</div>${note}`,
@@ -415,8 +415,12 @@ export function costChart(cost: Cost, room = ROOM): string {
   );
   const last = costAt(cost, times.at(-1)!);
   const keys = layers.map((name) => `<span><i class="k-${name}"></i>${name === 'own' ? 'own turns' : 'sub-agents'} <span class="num">${formatCost(last[name])}</span></span>`).join('');
-  return card('Cost', '', `${plot(`${svgOf('cost', COST_HEIGHT)}${scale.lines}${drawn}${hover.crosses}</svg>`, scale.labels + hover.boxes)}${clockMarks(times, x)}<div class="row key muted">${keys}</div>`);
+  const title = 'Cost';
+  return card(title, '', `${plot(title, `${svgOf('cost', COST_HEIGHT)}${scale.lines}${drawn}${hover.crosses}</svg>`, scale.labels + hover.boxes)}${clockMarks(times, x)}<div class="row key muted">${keys}</div>`);
 }
+
+// The title of the burn rate chart, which the fleet screen's burn rate card writes over it.
+export const BURN_TITLE = 'Burn rate';
 
 // The burn rate of each minute of `layers`, oldest first, the newest at `endMs`, stacked: each
 // layer an area over those before it, a named session's in the colour of its place and the
@@ -460,7 +464,7 @@ export function burnChart(layers: BurnCard['layers'], endMs: number): string {
     .map(({ name, values }, k) => `<span><i class="${kinds[k]}"></i>${esc(name)} ${num('layerPerHour', formatCostPerHour(values.at(-1)!))}</span>`)
     .join('');
   // the faint lines over the areas, so that an area does not hide them
-  return `${plot(`${svgOf('burn', BURN_HEIGHT)}${drawn.join('')}${scale.lines}${hover.crosses}</svg>`, scale.labels + hover.boxes)}${clockMarks(times, x)}<div class="row key muted">${keys}</div>`;
+  return `${plot(BURN_TITLE, `${svgOf('burn', BURN_HEIGHT)}${drawn.join('')}${scale.lines}${hover.crosses}</svg>`, scale.labels + hover.boxes)}${clockMarks(times, x)}<div class="row key muted">${keys}</div>`;
 }
 
 // The bars of the sub-agents `agents`, in their order, each on its own line of one time axis that

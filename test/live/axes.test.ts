@@ -5,38 +5,13 @@
 // session files under a temporary home (test/helpers/live.ts), and read through the markup's
 // conventions (test/helpers/markup.ts).
 import assert from 'node:assert/strict';
-import { join } from 'node:path';
 import { test } from 'node:test';
+import { formatCostPerHour } from '../../src/core/format.js';
 import { contextChart, costChart, tokensChart } from '../../src/live/charts.ts';
 import { MINUTE } from '../core/helpers/entries.ts';
 import { NOW } from '../helpers/agent-cards.ts';
-import { fleetOf, ompSession, ompWindow, sessionOf, spent, type OmpCall } from '../helpers/live.ts';
+import { at, burnOf, ompView, spent } from '../helpers/live.ts';
 import { attr, parts, text } from '../helpers/markup.ts';
-
-// Epoch ms of `hhmm` on the day of the tests' clock (test/helpers/agent-cards.ts), in UTC, the
-// time zone the tests run in.
-const at = (hhmm: string) => Date.parse(`2026-11-25T${hhmm}:00.000Z`);
-
-// The burn rate chart of the fleet screen at `now` of one omp session of `calls`, and the answer.
-async function burnChartOf(calls: OmpCall[], now = NOW) {
-  const { answer, html } = await fleetOf([{ project: 'a', name: 'main', agents: ['working'], title: 'π - a' }], {
-    now,
-    prepare: (home) => ompSession(home, join(home, 'work/a-main'), { title: 'a', calls }),
-  });
-  return { answer, burn: parts(html, 'data-part', 'burn')[0] };
-}
-
-// The session the worker answers for one working omp agent of `calls`, on a window of 1,000,000
-// tokens.
-async function ompView(calls: OmpCall[]) {
-  const { answer } = await sessionOf([{ project: 'api', name: 'main', agents: ['working'], title: 'π - Axes' }], {
-    prepare: (home) => {
-      ompWindow(home, 1_000_000);
-      ompSession(home, join(home, 'work/api-main', 'axes'), { title: 'Axes', calls });
-    },
-  });
-  return answer.session!;
-}
 
 // The values of a chart's faint lines, the texts of its labels, which sit in its plot, laid over
 // it, and the texts of its times with each time's epoch ms and its place from the left, a percent.
@@ -53,8 +28,13 @@ function axesOf(chart: string) {
 
 test('Round scale of the burn rate chart', async () => {
   // 7.30 USD per hour over the last 10 minutes
-  const { burn } = await burnChartOf([spent(7.3 / 6, NOW - 5 * MINUTE)]);
+  const { answer, burn } = await burnOf([{ title: 'a', calls: [spent(7.3 / 6, NOW - 5 * MINUTE)] }]);
 
+  const { layers } = answer.burn;
+  assert.notEqual(layers, 'n/a');
+  if (layers === 'n/a') return;
+  const highest = Math.max(...layers[0].values.map((_, i) => layers.reduce((sum, { values }) => sum + values[i], 0)));
+  assert.equal(formatCostPerHour(highest), '$7.30/h');
   const { lines, labels } = axesOf(burn);
   assert.deepEqual(lines, [0, 5, 10]);
   assert.deepEqual(labels, [
@@ -65,7 +45,7 @@ test('Round scale of the burn rate chart', async () => {
 
 test('Context chart from 0% to 100%', async () => {
   const contexts = [200_000, 730_000, 500_000];
-  const session = await ompView(contexts.map((context, i) => ({ at: at(`10:0${i}`), uncached: context, output: 10, context })));
+  const session = await ompView({ calls: contexts.map((context, i) => ({ at: at(`10:0${i}`), uncached: context, output: 10, context })) });
 
   const chart = contextChart(session.context!);
   const { lines, labels } = axesOf(chart);
@@ -79,10 +59,12 @@ test('Context chart from 0% to 100%', async () => {
 });
 
 test('Scale of the prompt tokens', async () => {
-  const session = await ompView([
-    { at: at('10:00'), read: 100_000, write: 50_000, uncached: 30_000, output: 900 },
-    { at: at('10:01'), read: 20_000, uncached: 1000, output: 300 },
-  ]);
+  const session = await ompView({
+    calls: [
+      { at: at('10:00'), read: 100_000, write: 50_000, uncached: 30_000, output: 900 },
+      { at: at('10:01'), read: 20_000, uncached: 1000, output: 300 },
+    ],
+  });
 
   const { lines, labels } = axesOf(tokensChart(session.tokens!));
   assert.deepEqual(lines, [0, 100_000, 200_000]);
@@ -95,7 +77,7 @@ test('Scale of the prompt tokens', async () => {
 test('Times at round marks', async () => {
   // the clock reads 12:48: the chart spans the minutes 11:49 to 12:48
   const now = at('12:48') + 30_000;
-  const { answer, burn } = await burnChartOf([spent(1, now - 5 * MINUTE)], now);
+  const { answer, burn } = await burnOf([{ title: 'a', calls: [spent(1, now - 5 * MINUTE)] }], { now });
 
   // the worker's answer gives the newest minute's time
   assert.equal(answer.burn.endMs, at('12:48'));
@@ -115,7 +97,7 @@ test('Times at round marks', async () => {
 
 test('Times under the tokens chart', async () => {
   const clock = ['10:00', '10:01', '10:03', '10:10', '10:11', '10:30', '10:31', '10:32', '10:50'];
-  const session = await ompView(clock.map((hhmm) => ({ at: at(hhmm), uncached: 1000, output: 10 })));
+  const session = await ompView({ calls: clock.map((hhmm) => ({ at: at(hhmm), uncached: 1000, output: 10 })) });
 
   const chart = tokensChart(session.tokens!);
   const { times } = axesOf(chart);
@@ -134,7 +116,7 @@ test('Times under the tokens chart', async () => {
 
 test('Time marks of a span under one minute', async () => {
   // no whole minute in the span: its first and last times, which read alike, written once
-  const session = await ompView([10, 50].map((seconds) => ({ at: at('10:00') + seconds * 1000, uncached: 1000, output: 10, context: 1000, cost: 0.1 })));
+  const session = await ompView({ calls: [10, 50].map((seconds) => ({ at: at('10:00') + seconds * 1000, uncached: 1000, output: 10, context: 1000, cost: 0.1 })) });
 
   assert.deepEqual(
     axesOf(contextChart(session.context!)).times.map(({ text }) => text),
@@ -148,10 +130,12 @@ test('Time marks of a span under one minute', async () => {
 
 test('Cost labels under a cent', async () => {
   // $0.004 spent in all: a step of $0.002
-  const session = await ompView([
-    { at: at('10:00'), uncached: 1000, output: 10, cost: 0.001 },
-    { at: at('10:01'), uncached: 1000, output: 10, cost: 0.003 },
-  ]);
+  const session = await ompView({
+    calls: [
+      { at: at('10:00'), uncached: 1000, output: 10, cost: 0.001 },
+      { at: at('10:01'), uncached: 1000, output: 10, cost: 0.003 },
+    ],
+  });
 
   const { lines, labels } = axesOf(costChart(session.cost!));
   assert.deepEqual(lines, [0, 0.002, 0.004]);
