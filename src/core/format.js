@@ -43,6 +43,35 @@ export function formatAge(ms) {
   return formatDuration(ms);
 }
 
+// A time of day as the live panel writes it: local "15:33". Takes epoch ms.
+export function formatClock(ms) {
+  const date = new Date(ms);
+  return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
+}
+
+const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+// A time as the live panel writes it within the week: local "Wed 15:33". Takes epoch ms or 'n/a'.
+export function formatDay(ms) {
+  return ms === NA ? NA : `${DAYS[new Date(ms).getDay()]} ${formatClock(ms)}`;
+}
+
+// A time as the live panel writes it with its date: local "Wed 25 Nov, 15:33". Takes epoch ms or
+// 'n/a'.
+export function formatDate(ms) {
+  if (ms === NA) return NA;
+  const date = new Date(ms);
+  return `${DAYS[date.getDay()]} ${date.getDate()} ${MONTHS[date.getMonth()]}, ${formatClock(ms)}`;
+}
+
+// A short wait as the live panel writes it, to a tenth of a second: "2.9s"; from a minute on as a
+// duration is. Takes a number or 'n/a'.
+export function formatSeconds(ms) {
+  if (ms === NA) return NA;
+  return ms < 60_000 ? `${(Math.max(0, ms) / 1000).toFixed(1)}s` : formatDuration(ms);
+}
+
 // A count with its thousands marked: 1206 is "1,206". Takes a number or 'n/a'.
 export function formatCount(n) {
   return n === NA ? NA : Math.round(n).toLocaleString('en-US');

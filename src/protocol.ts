@@ -47,12 +47,54 @@ export type FleetAnswer = {
 // One Orca host's group, posted during a fleet request as soon as that host's cards are built.
 export type GroupPost = { request: number; group: HostGroup };
 
+// One point of a session's series of model calls (src/core/series.js): `n` neighbouring calls as
+// one, dated by the last of them, with the prompt tokens they read from the cache, wrote to it
+// and sent uncached, their output tokens, their cost (null: one of them logged none) and the
+// context after the last that logged one (null: none did).
+export type Point = { t: number; n: number; read: number; write: number; uncached: number; output: number; cost: number | null; context: number | null };
+
+// One card's session as the session screen draws it (src/session-detail.ts). `linked`: whether
+// the card links to a session; `path`: its folder for reading. `figures`: the figures row;
+// `context`, `tokens`, `cost` and `tools`: the series and tallies of the whole session file,
+// null when it was not read whole or the card links to none (`tools` too when the session made
+// no tool call); `models`: the session's models by what the harness logs of them; `session`:
+// the Session section, `host` the Orca host's name when it is not this computer. Sub-agents
+// are not read yet: `subAgents` is null and `figures.subShare` 0.
+export type SessionView = {
+  card: CardView;
+  linked: boolean;
+  path: string;
+  figures: { cost: Num; subShare: Num; tokens: Num; cacheShare: Num; calls: Num; failedTools: Num; durationMs: Num; startMs: Num };
+  context: {
+    window: Num;
+    latest: Num;
+    peak: Num;
+    tokensLeft: Num;
+    compactions: number;
+    points: { t: number; v: number }[];
+    marks: { t: number; before: Num; after: Num }[];
+  } | null;
+  tokens: { points: Point[]; hitRate: Num; cold: { count: number; tokens: number; cost: Num } | null } | null;
+  cost: { harness: string; total: Num; perHour: Num; own: { t: number; v: number }[] | 'n/a'; sub: { t: number; v: number }[] | 'n/a' } | null;
+  subAgents: null;
+  tools: { calls: number; failed: number; byTool: { name: string; calls: number; failed: number }[] } | null;
+  models: { by: 'cost' | 'tokens'; rows: { model: string; main: boolean; subAgents: number; value: Num }[] };
+  session: { startedMs: Num; thinking: string; latencyMs: Num; premium: Num; branch: string | null; remote: string | null; host: string | null };
+};
+
+// The session of the card a session request asks for, or null when Orca no longer lists its
+// agent.
+export type SessionAnswer = { request: number; session: SessionView | null };
+
 declare module 'orca' {
   interface PluginRequests {
     /** The fleet of the Orca agents' cards on every Orca host, built once per request.
      *  `request`: the panel's number of the request, which the groups posted during it carry
      *  (`spyhop.group`). */
     'spyhop.fleet': { input: { request: number }; output: FleetAnswer };
+    /** The session of one card, built as the fleet is, which posts nothing. `request`: the
+     *  panel's number of the request; `card`: the card's id. */
+    'spyhop.session': { input: { request: number; card: string }; output: SessionAnswer };
     /** Focuses the pane in this computer's Orca window; `focused` false when it could not, the
      *  reason in the worker's log. */
     'spyhop.focus': { input: Pane; output: { focused: boolean } };

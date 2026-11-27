@@ -93,11 +93,23 @@
 //   latencyMs          number   last turn: assistant reply minus the user message that began it
 //   thinkingLevel      string   thinking level of the session
 //   premiumRequests    number   sum of usage.premiumRequests
+//   calls              number   the session's own model calls (a response written as several
+//                               blocks is one), from the whole file only
+//   firstMessageMs     number   time of the first message, from the whole file only
 //
 // The result of readStats also carries `harness`, the name asked for, which is never n/a, and
-// `detail`: `{ recent }`, the contexts of the session's last SPARK_CALLS model calls, oldest
-// first; null unless the provider read the whole session (a tail window alone gives none), and
-// for a harness without a provider.
+// `detail`, the series of the whole session (src/core/series.js); null unless the provider read
+// the whole session (a tail window alone gives none), and for a harness without a provider:
+//   recent    the contexts of the session's last SPARK_CALLS model calls, oldest first
+//   points    its model calls in at most SERIES_POINTS points (`Point`, src/core/series.js)
+//   marks     its compactions: `{ t, before, after }`, the context tokens before and after,
+//             null where not logged
+//   cold      its cold starts, calls after the first that read nothing from the prompt cache:
+//             `{ count, tokens, cost }`, the tokens they wrote to it again and the cost of those
+//             writes, null where not logged
+//   tools     its own tool calls by tool: `{ calls, failed }`
+//   models    its own model calls by model: `{ cost, tokens }`, the cost null where not logged
+// (opencode gives `recent` alone.)
 
 import { ompProvider } from './omp.js';
 import { createOmpSessions } from './omp-sources.js';
@@ -128,6 +140,8 @@ export const STAT_FIELDS = [
   'latencyMs',
   'thinkingLevel',
   'premiumRequests',
+  'calls',
+  'firstMessageMs',
 ];
 
 const providers = new Map();

@@ -108,3 +108,76 @@ describe('claude session: model, tokens, cache and duration', () => {
     expect(readStats('claude-code', `${prompt}\n${placeholder}\n`, LAST_REPLY).latencyMs).toBe(NA);
   });
 });
+
+describe('claude session: the series of the whole session', () => {
+  const whole = (lines: string[]) => readStats('claude-code', { text: lines.join('\n'), sources: { wholeFile: true } }, LAST_REPLY);
+
+  test('a response of several blocks is one point', () => {
+    const stats = whole([
+      JSON.stringify({ type: 'user', timestamp: '2026-11-02T11:00:00.000Z', message: { role: 'user', content: 'hi' } }),
+      assistant('2026-11-02T11:00:10.000Z', 'r1', usage(10, 5, 100, 20)),
+      // the three content blocks of the response r2; the last one logs the response's final output
+      assistant('2026-11-02T11:01:01.000Z', 'r2', usage(30, 7, 400, 50)),
+      assistant('2026-11-02T11:01:02.000Z', 'r2', usage(30, 7, 400, 50)),
+      assistant('2026-11-02T11:01:03.000Z', 'r2', usage(30, 9, 400, 50)),
+    ]);
+
+    expect(stats.detail.points).toEqual([
+      { t: Date.parse('2026-11-02T11:00:10.000Z'), n: 1, read: 100, write: 20, uncached: 10, output: 5, cost: null, context: 130 },
+      { t: Date.parse('2026-11-02T11:01:03.000Z'), n: 1, read: 400, write: 50, uncached: 30, output: 9, cost: null, context: 480 },
+    ]);
+    // the points hold the tokens the totals count
+    expect(stats.totalTokens).toBe(135 + 489);
+    expect(stats.calls).toBe(2);
+    expect(stats.firstMessageMs).toBe(Date.parse('2026-11-02T11:00:00.000Z'));
+  });
+
+  test('compact boundaries keep their tokens before and after', () => {
+    const compacted = (timestamp: string, metadata: object) => JSON.stringify({ type: 'system', subtype: 'compact_boundary', timestamp, compactMetadata: metadata });
+
+    const stats = whole([
+      compacted('2026-11-02T11:00:00.000Z', { trigger: 'manual', preTokens: 181_586, postTokens: 27_805 }),
+      compacted('2026-11-02T11:30:00.000Z', { trigger: 'auto', preTokens: 170_000 }),
+    ]);
+
+    expect(stats.detail.marks).toEqual([
+      { t: Date.parse('2026-11-02T11:00:00.000Z'), before: 181_586, after: 27_805 },
+      // a boundary that logged no tokens after reads n/a for them
+      { t: Date.parse('2026-11-02T11:30:00.000Z'), before: 170_000, after: null },
+    ]);
+  });
+
+  test('tool uses by tool, failures from is_error', () => {
+    const uses = (timestamp: string, id: string, tools: string[]) =>
+      assistant(timestamp, id, usage(1, 1, 1, 1), 'claude-opus-4-6', tools.map((tool) => ({ type: 'tool_use', id: tool, name: 'Bash', input: {} })));
+    const results = (timestamp: string, answers: [string, boolean | null][]) =>
+      JSON.stringify({
+        type: 'user',
+        timestamp,
+        message: { role: 'user', content: answers.map(([id, failed]) => ({ type: 'tool_result', tool_use_id: id, is_error: failed, content: '' })) },
+      });
+
+    const stats = whole([
+      uses('2026-11-02T11:00:00.000Z', 'r1', ['t1', 't2']),
+      results('2026-11-02T11:00:05.000Z', [['t1', null], ['t2', true]]),
+      uses('2026-11-02T11:00:10.000Z', 'r2', ['t3']),
+      results('2026-11-02T11:00:15.000Z', [['t3', false]]),
+    ]);
+
+    expect(stats.detail.tools).toEqual({ Bash: { calls: 3, failed: 1 } });
+  });
+
+  test('tokens by model, no cost', () => {
+    const stats = whole([
+      assistant('2026-11-02T11:00:00.000Z', 'r1', usage(10, 5, 0, 1000), 'claude-opus-4-6'),
+      assistant('2026-11-02T11:01:00.000Z', 'r2', usage(10, 5, 1000, 0), 'claude-opus-4-6'),
+      assistant('2026-11-02T11:02:00.000Z', 'r3', usage(10, 5, 0, 200_000), 'haiku'),
+      assistant('2026-11-02T11:03:00.000Z', 'r4', usage(10, 5, 200_000, 0), 'haiku'),
+      assistant('2026-11-02T11:04:00.000Z', 'r5', usage(10, 5, 0, 300_000), 'haiku'),
+    ]);
+
+    expect(stats.detail.models).toEqual({ 'claude-opus-4-6': { cost: null, tokens: 2030 }, haiku: { cost: null, tokens: 700_045 } });
+    // the cold starts are counted, but Claude Code logs no cost of their writes
+    expect(stats.detail.cold).toEqual({ count: 2, tokens: 500_000, cost: null });
+  });
+});

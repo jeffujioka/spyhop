@@ -27,6 +27,12 @@ follows a change of theme without being loaded again. It opens on the fleet scre
   30 model calls. From 75% of the window, a chip tells the tokens left before compaction.
 - **A done agent's session on one folded line**: its title, folder, context and cost.
 
+Pressing a card or a folded line, by a click or by Enter or Space once it has the keyboard's
+focus, opens that session's screen at once, with its header from the card, and its back control
+shows the fleet screen again. When Orca no longer lists the agent of the open session screen, the
+next refresh shows the fleet screen. A screen that opens starts at its top; a refresh keeps the
+place it is scrolled to.
+
 The folder is the one the linked session records as its own, which can be a sub-folder of the
 Orca workspace folder, and the branch is that folder's: for omp the folder of the session's
 `session` entry, for Claude Code the folder the session started in (the first `cwd` in its
@@ -35,6 +41,37 @@ harness, or whose session tells no folder shows the workspace folder and its bra
 
 A figure the session does not give reads `n/a`; the plugin never estimates one. A context with
 no known window shows its tokens, with no percent and no bar.
+
+## Session screen
+
+A session's screen has a header with the back control, the agent's state, the title, the
+harness, model, folder and how long the agent has been in its state, and a Focus button when
+the agent has a pane (see Focus pane). Under it:
+
+- **Four figures**: the cost, with the share its sub-agents spent; the tokens, with the share
+  read from the prompt cache; the model calls, with the tool calls that failed; and how long
+  the session has run, with the day it started.
+- **Three charts** over the whole session, each with at most as many points as it has room for
+  (neighbouring model calls summed):
+  - the context after each model call, as a percent of the window coloured by level, with its
+    peak, its compactions and the tokens left before the harness compacts on its own, or in
+    tokens when the window is not known;
+  - the tokens of each model call: read from the cache, written to it, not cached, and the
+    output, with the session's cache hit rate and a note of its cold starts. A cold start is a
+    model call after the first that read nothing from the prompt cache, so it wrote the prompt
+    to the cache again; the note gives how many, the tokens written again and their cost;
+  - the cost over time, of the session's own model calls and of its sub-agents, with the total
+    as the harness logged it.
+- **Tools**: the six tools called most, the rest summed as `others`, each with its failures.
+- **Models**: the cost by model, or the tokens for a harness that logs no cost per call
+  (Claude Code), each with what used it: the main agent, the sub-agents.
+- **Session**: when it started, the thinking level, the time to the last reply, the premium
+  requests, and the branch, remote and Orca host where there is one.
+
+A model call is a call that logged usage. An omp call that logged none, or a usage of all zeros
+(one omp aborted, or that failed before the model answered), is not counted: not in the model
+calls, the charts or the cold starts. A part with nothing to show, such as the charts of a
+session without a model call, is not drawn.
 
 ## Harnesses
 
@@ -91,11 +128,13 @@ fails, or `/tmp/spyhop-<uid>` is a symlink or another user's folder, the plugin 
 
 ## Refresh
 
-While the panel is open it asks the worker for the fleet every 2 seconds: each request starts 2
-seconds after the previous one started, or as soon as that one is answered when it took longer,
-and never while another is unanswered. While it is closed or hidden it asks for nothing: a
-refresh that was running when it closed runs to its end, and no other starts. A refresh that
-fails leaves the screen as it was, and the next one draws it again.
+While the panel is open it asks the worker for what its screen shows, the fleet or the open
+session, every 2 seconds: each request starts 2 seconds after the previous one started, or as
+soon as that one is answered when it took longer, and never while another is unanswered. While
+it is closed or hidden it asks for nothing: a refresh that was running when it closed runs to its
+end, and no other starts. A refresh that fails leaves the screen as it was, and the next one
+draws it again. Opening a session's screen, or going back to the fleet, asks at once, or as soon
+as the request out is answered.
 
 During a refresh each host's group appears as soon as that host's cards are built, without
 waiting for another host: this computer's are not held up by a slow SSH host or paired server.
@@ -108,8 +147,12 @@ refresh is never drawn.
 Session totals only, in the plugin's own storage on this computer (`storage:own`); the panel's
 page keeps nothing of its own, and shows only what the worker answers. For each
 session file larger than the 256 KiB a refresh reads from its end, the totals the session reader
-counted over the file, the context sizes of its last 30 model calls, and the position they
-cover, by harness, machine and path. No session text is stored, and nothing is written on any
+counted over the file, the context sizes of its last 30 model calls, the tokens, cost and context
+of all its model calls in at most 120 points (neighbouring calls summed once there are more), its
+compactions with their tokens before and after, its cold starts, its tool calls and failures by
+tool name, the ids of its tool calls not answered yet (with their tool's name, so that a later
+answer counts its failure), its cost and tokens by model name, and the position they cover, by
+harness, machine and path. No session text is stored, and nothing is written on any
 other host. They are there so that a file scanned once is not scanned again from its start after
 Orca restarts: the reader goes on from the kept position, and scans the file again when it is
 not the one that was scanned. They are written at most once every 30 seconds, and only when a
@@ -118,14 +161,15 @@ of spyhop that keeps more of a session, which discards what an earlier version k
 
 ## Focus pane
 
-The Live panel has no Focus pane button yet. The worker focuses an agent's pane in this
-computer's Orca window when the panel asks it to, showing its workspace, as clicking the pane
-does; a card that agents share focuses the first of them in Orca's order. For an agent on this
+The session screen of an Orca agent that has a pane shows a Focus button; an agent in a chat with
+no terminal, or a server agent whose pane no listed terminal holds, has none. Pressing it focuses
+the agent's pane in this computer's Orca window, showing its workspace, as clicking the pane
+does; a session that agents share focuses the first of them in Orca's order. For an agent on this
 computer or an SSH workspace it asks Orca through `terminal.focus`; for one on a paired Orca
 server it runs `orca terminal switch --environment <name> --terminal <handle>`, the handle
 `orca terminal list` gave for the pane. Neither writes anything on any host or runs anything
-over ssh. A focus that fails writes the reason to the plugin's log (`orca plugin logs`). Orca's
-desktop app only.
+over ssh. A focus that fails changes nothing in the panel and writes the reason to the plugin's
+log (`orca plugin logs`). Orca's desktop app only.
 
 ## Command and key
 

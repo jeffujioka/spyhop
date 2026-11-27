@@ -66,4 +66,58 @@ svg { display: block; }
 .chips { margin-top: 8px; gap: 5px; }
 [data-chip] { font-size: 10.5px; padding: 1px 8px; border: 1px solid var(--orca-border); border-radius: 999px; }
 [data-chip="warning"] { color: var(--lvl); border-color: var(--lvl); }
+.chart, .box, .cost-card, .figures {
+  margin-top: 8px; padding: 10px 12px; min-width: 0; background: var(--orca-card); color: var(--orca-card-foreground);
+  border: 1px solid var(--orca-border); border-radius: var(--orca-radius);
+}
+.headline { align-items: baseline; margin: 4px 0 2px; }
+.hero { font-size: 22px; font-weight: 650; }
+.headline .muted, .axis, .marks, .key, [data-part="cold-note"] { font-size: 11px; }
+[data-chart="context"], [data-chart="tokens"] { height: 120px; margin-top: 4px; }
+[data-chart="cost"] { height: 100px; margin-top: 4px; }
+[data-chart] path, [data-chart] line, [data-chart] polyline { fill: none; vector-effect: non-scaling-stroke; stroke-linecap: round; }
+[data-chart="context"] path { stroke: var(--lvl); stroke-width: 2; }
+[data-chart="context"].plain path { stroke: var(--spy-s1); }
+[data-ref] { stroke-width: 1; stroke-dasharray: 3 3; }
+[data-ref="0.75"] { stroke: var(--spy-hot); }
+[data-ref="0.9"] { stroke: var(--spy-critical); }
+[data-mark] { stroke: var(--orca-muted-foreground); stroke-width: 1; stroke-dasharray: 2 2; }
+/* the kinds of tokens, and the costs of a session's own model calls and of its sub-agents */
+.k-read { --k: var(--spy-s4); }
+.k-write { --k: var(--spy-s3); }
+.k-uncached { --k: var(--spy-s1); }
+.k-output { --k: var(--spy-s2); }
+[data-layer="own"], .k-own { --k: var(--spy-s1); }
+[data-layer="sub"], .k-sub { --k: var(--spy-s2); }
+[data-bar] rect { fill: var(--k); }
+polyline[data-output], [data-layer] path { stroke: var(--k); stroke-width: 1.5; }
+[data-layer] path[data-v] { stroke-width: 4; }
+.key { gap: 4px 10px; margin-top: 4px; }
+.key i { display: inline-block; width: 8px; height: 8px; margin-right: 4px; border-radius: 2px; background: var(--k); }
+.key i[class*="lvl-"] { background: var(--lvl); }
+.marks { gap: 2px 10px; margin-top: 2px; }
+[data-part="cold-note"] { margin-top: 6px; }
+/* the session screen */
+button {
+  font: inherit; color: inherit; background: none; border: 1px solid var(--orca-border);
+  border-radius: var(--orca-radius); padding: 2px 10px; cursor: pointer;
+}
+button:hover { background: var(--orca-accent); color: var(--orca-accent-foreground); }
+.back { border: none; padding: 0 4px; font-size: 18px; line-height: 1; color: var(--orca-muted-foreground); }
+.focus { font-size: 11.5px; }
+.figures { display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 10px; }
+.figure { min-width: 0; font-size: 10.5px; }
+.figure > .num { display: block; margin: 2px 0; font-size: 17px; font-weight: 650; }
+/* The cost card holds the cost chart's card and the total: the chart's own box gives way to the
+   cost card's, and the total goes under the chart's title, before its chart. */
+.cost-card { display: flex; flex-direction: column; }
+.cost-card > .chart { display: contents; }
+.cost-card > .chart > * { order: 2; }
+.cost-card > .chart > :first-child { order: 0; }
+.cost-card > .headline { order: 1; }
+.cost-card > .headline > .num { font-size: 22px; font-weight: 650; }
+.box .head { margin-bottom: 4px; }
+.box .head .muted { font-size: 11px; }
+.box .item { font-size: 12px; padding: 2px 0; }
+.failed { color: var(--spy-critical); font-size: 11px; }
 `;

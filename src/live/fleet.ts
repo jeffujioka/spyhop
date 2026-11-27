@@ -1,13 +1,14 @@
 // The fleet screen of the live panel, as markup: the header, with the number of agents in each
 // Orca state once the whole fleet is answered, then each Orca host's group of sessions, a card per
-// session whose agent is not done and a folded line per done one. Groups only: no Orca project
-// or workspace row. Pure: an answer in, a markup string out (src/panel.ts draws it).
+// session whose agent is not done and a folded line per done one, each of which opens its
+// session's screen when pressed. Groups only: no Orca project or workspace row. Pure: an answer
+// in, a markup string out (src/panel.ts draws it).
 
 import { formatAge, formatCost, formatPercent, formatTokens, orNa } from '../core/format.js';
 import { STATES } from '../fleet.ts';
 import type { CardView, FleetAnswer, HostGroup } from '../protocol.ts';
 import { contextBar, sparkLine } from './charts.ts';
-import { esc } from './html.ts';
+import { esc, num } from './html.ts';
 import { levelOf } from './levels.ts';
 
 // The groups drawn so far, and the whole answer once it is in; the counts come only from it.
@@ -16,8 +17,6 @@ export type FleetView = { groups: HostGroup[]; whole: FleetAnswer | null };
 // From this percent of the window, as the card writes it (rounded, as its level is taken), a
 // card whose tokens left before autocompaction are known warns of them in a chip.
 const WARNING_CHIP_AT = 75;
-
-const num = (name: string, value: string) => `<span class="num" data-figure="${name}">${esc(value)}</span>`;
 
 function counts({ counts }: FleetAnswer) {
   const known = STATES.filter((state) => counts[state] !== undefined);
@@ -32,7 +31,7 @@ function context({ context: { tokens, window, percent, compactAt, spark } }: Car
   const head =
     window === 'n/a'
       ? `<span class="muted">Context</span> ${used}`
-      : `<span class="muted">Context</span> <span class="num${typeof percent === 'number' ? ` lvl-${levelOf(percent)}` : ''}" data-figure="percent">${formatPercent(percent)}</span> ${used} / ${num('window', formatTokens(window))}`;
+      : `<span class="muted">Context</span> ${num('percent', formatPercent(percent), typeof percent === 'number' ? `lvl-${levelOf(percent)}` : '')} ${used} / ${num('window', formatTokens(window))}`;
   const bar = typeof percent === 'number' ? contextBar(percent, compactAt) : '';
   return `<div class="context"><div class="row">${head}</div>${bar}${sparkLine(spark)}</div>`;
 }
@@ -42,10 +41,16 @@ function chips({ context: { percent }, tokensLeft }: CardView) {
   return `<div class="row chips"><span data-chip="warning" class="lvl-${levelOf(percent)}"><span class="num">${formatTokens(tokensLeft)}</span> left</span></div>`;
 }
 
+// The attributes that make a card or a folded line the control that opens the session screen of
+// `view`: a block cannot go inside a <button>, so it is a button by its role, which the keyboard
+// reaches (`tabindex`) and presses (src/panel.ts). Its `data-press` value is encoded, since the
+// id holds a NUL, `::` and slashes.
+const opens = (view: CardView) => `role="button" tabindex="0" data-press="${esc(`open:${encodeURIComponent(view.id)}`)}"`;
+
 function card(view: CardView) {
   const where = [view.folder, view.branch, view.harness, view.model].filter((part) => part !== null).map(esc).join(' · ');
   return (
-    `<article data-part="card" data-state="${esc(view.state)}">` +
+    `<article data-part="card" data-state="${esc(view.state)}" ${opens(view)}>` +
     `<div class="row"><i class="dot"></i><b class="title grow">${esc(view.title)}</b>${num('cost', formatCost(view.cost))}</div>` +
     `<div class="row meta"><span class="grow">${where}</span><span>${esc(view.state)} · ${num('since', formatAge(view.stateSinceMs))}</span></div>` +
     `${context(view)}${chips(view)}</article>`
@@ -58,7 +63,7 @@ function folded(view: CardView) {
   const { tokens, window, percent } = view.context;
   const used = window === 'n/a' ? num('tokens', orNa(tokens, formatTokens)) : num('percent', formatPercent(percent));
   return (
-    `<div data-part="folded" data-state="${esc(view.state)}" class="row"><i class="dot"></i>` +
+    `<div data-part="folded" data-state="${esc(view.state)}" ${opens(view)} class="row"><i class="dot"></i>` +
     `<span class="title grow">${esc(view.title)}</span><span class="muted">${esc(view.folder)}</span>` +
     `${used}${num('cost', formatCost(view.cost))}</div>`
   );

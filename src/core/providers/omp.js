@@ -23,8 +23,8 @@
 // `detailOf(state)` gives the series of the whole file (src/core/series.js), from the same state.
 
 import { add, parseEntries, tally } from './jsonl.js';
-import { burnRate, cacheRate, isNumber } from './shared.js';
-import { detailOf, pushRecent } from '../series.js';
+import { burnRate, cacheRate, isNumber, tokenCount, wholeSession } from './shared.js';
+import { addCall, addCost, detailOf, entryOf, newSeries, pushRecent, toolAnswered, toolCalled } from '../series.js';
 
 // A fresh accumulator. Sums are `tally`s: undefined until an entry carries the value.
 function emptyState() {
@@ -49,6 +49,17 @@ function emptyState() {
     compactions: 0,
     // the context of the session's last model calls, oldest first (see `pushRecent`)
     recent: [],
+    // the session's own model calls: how many, their bounded series (src/core/series.js), the
+    // compactions with their tokens before and after, the cold starts (with the cost of their
+    // cache writes), the tool calls by tool with the ids of those not answered yet, and the
+    // cost and tokens by model
+    calls: 0,
+    series: newSeries(),
+    marks: [],
+    cold: { count: 0, tokens: 0, cost: 0 },
+    tools: {},
+    pending: new Map(),
+    models: {},
     // the `session` entry is the second line of a file, so a state that holds it starts at
     // the top of the file
     fromStart: false,
@@ -83,11 +94,51 @@ function fold(state, entries) {
           s.cacheReads += 1;
           if (usage.cacheRead > 0) s.cacheHits += 1;
         }
-        const prompt = e.message.contextSnapshot?.promptTokens;
-        if (isNumber(prompt)) pushRecent(s.recent, prompt);
+        // A call omp aborted, or that failed before the model answered, logs a usage of all
+        // zeros (or none): it sent and wrote nothing, so it is no model call of the series, of
+        // the cold starts or of the spark line. One that logged usage counts, whatever its
+        // stop reason.
+        const kinds = [usage?.input, usage?.cacheRead, usage?.cacheWrite, usage?.output];
+        if (kinds.some((tokens) => tokenCount(tokens) > 0)) {
+          const prompt = e.message.contextSnapshot?.promptTokens;
+          if (isNumber(prompt)) pushRecent(s.recent, prompt);
+          const call = {
+            t: time,
+            read: tokenCount(usage.cacheRead),
+            write: tokenCount(usage.cacheWrite),
+            uncached: tokenCount(usage.input),
+            output: tokenCount(usage.output),
+            cost: isNumber(usage.cost?.total) ? usage.cost.total : null,
+            context: isNumber(prompt) ? prompt : null,
+          };
+          addCall(s.series, call);
+          // a cold start: a call after the first that read nothing from the prompt cache, so it
+          // wrote the prompt to the cache again
+          if (s.calls > 0 && usage.cacheRead === 0) {
+            s.cold.count += 1;
+            s.cold.tokens += call.write;
+            s.cold.cost = addCost(s.cold.cost, isNumber(usage.cost?.cacheWrite) ? usage.cost.cacheWrite : null);
+          }
+          s.calls += 1;
+          if (typeof e.message.model === 'string') {
+            const byModel = entryOf(s.models, e.message.model, () => ({ cost: 0, tokens: 0 }));
+            byModel.cost = addCost(byModel.cost, call.cost);
+            byModel.tokens += tokenCount(usage.totalTokens);
+          }
+        }
+        for (const part of Array.isArray(e.message.content) ? e.message.content : []) {
+          if (part?.type === 'toolCall') toolCalled(s, part.id, part.name);
+        }
+      } else if (e.message.role === 'toolResult') {
+        toolAnswered(s, e.message.toolCallId, e.message.isError === true);
       }
     } else if (e.type === 'compaction') {
       s.compactions += 1;
+      s.marks.push({
+        t: Date.parse(e.timestamp),
+        before: isNumber(e.tokensBefore) ? e.tokensBefore : null,
+        after: isNumber(e.tokensAfter) ? e.tokensAfter : null,
+      });
     } else if (e.type === 'thinking_level_change' && typeof e.thinkingLevel === 'string') {
       // the latest change stands
       s.thinkingLevel = e.thinkingLevel;
@@ -277,7 +328,7 @@ export const ompProvider = {
     return Object.assign(
       {},
       ...(total ? TOTALS.map((figure) => figure(total)) : []),
-      ...(total ? [autocompactions(total, whole)] : []),
+      ...(total ? [autocompactions(total, whole), wholeSession(total, whole)] : []),
       ...LATEST.map((figure) => figure(tail, now)),
       { detail: total && whole ? detailOf(total) : null },
     );

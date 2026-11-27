@@ -5,6 +5,17 @@
 
 export const isNumber = (value) => typeof value === 'number' && Number.isFinite(value);
 
+// A token count of one model call for its series; a count the call did not log adds nothing.
+export const tokenCount = (value) => (isNumber(value) ? value : 0);
+
+// The session's own model calls and the time of its first message (`calls` and `firstMessage`
+// of a fold's state). Both need the whole file: a tail window holds only some of the calls and
+// not the first message, so unless the state is the whole file's they read n/a.
+export function wholeSession({ calls, firstMessage }, whole) {
+  if (!whole) return {};
+  return isNumber(firstMessage) ? { calls, firstMessageMs: firstMessage } : { calls };
+}
+
 // Hit rate is over the session's token counts (herdr-session-stats decision D6); it needs all
 // three counts to be logged and a non-zero total. The counts are `tally`s
 // (src/core/providers/jsonl.js).

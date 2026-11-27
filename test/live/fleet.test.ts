@@ -9,12 +9,9 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 import { formatAge, formatCount } from '../../src/core/format.js';
 import { STYLE } from '../../src/live/style.ts';
-import { NOW } from '../helpers/agent-cards.ts';
+import { NOW, workspace } from '../helpers/agent-cards.ts';
 import { claudeCalls, fleetOf, ompAutocompacts, ompCalls, ompWindow } from '../helpers/live.ts';
 import { figure, parts, text } from '../helpers/markup.ts';
-
-// The folder Orca reports for the workspace `name` of the project `project` (test/helpers/orca-host.ts).
-const folderOf = (home: string, project: string, name: string) => join(home, 'work', `${project}-${name}`);
 
 // `count` contexts rising to `last`, the context after the last call.
 const rising = (count: number, last: number) => Array.from({ length: count }, (_, i) => Math.round((last * (i + 1)) / count));
@@ -27,7 +24,7 @@ async function workingSessions(sessions: { title: string; folder: string; contex
     prepare: (home) => {
       ompWindow(home, 1_000_000);
       if (autocompacts) ompAutocompacts(home);
-      for (const { title, folder, contexts, cost } of sessions) ompCalls(home, join(folderOf(home, 'api', 'main'), folder), { title, contexts, cost });
+      for (const { title, folder, contexts, cost } of sessions) ompCalls(home, join(workspace(home, 'api-main'), folder), { title, contexts, cost });
     },
   });
 }
@@ -51,8 +48,8 @@ test('No project or workspace rows', async () => {
     ],
     {
       prepare: (home) => {
-        ompCalls(home, join(folderOf(home, 'api', 'main'), 'docs'), { title: 'Write the docs', contexts: [] });
-        ompCalls(home, join(folderOf(home, 'api', 'fix-login'), 'login'), { title: 'Fix the login bug', contexts: [] });
+        ompCalls(home, join(workspace(home, 'api-main'), 'docs'), { title: 'Write the docs', contexts: [] });
+        ompCalls(home, join(workspace(home, 'api-fix-login'), 'login'), { title: 'Fix the login bug', contexts: [] });
       },
     },
   );
@@ -72,7 +69,7 @@ test('Done agent as one line', async () => {
     prepare: (home) => {
       ompWindow(home, 1_000_000);
       ompAutocompacts(home);
-      ompCalls(home, join(folderOf(home, 'api', 'main'), 'chapo'), { title: 'Review the tunnel', contexts: rising(20, 340_000), cost: 9.25 });
+      ompCalls(home, join(workspace(home, 'api-main'), 'chapo'), { title: 'Review the tunnel', contexts: rising(20, 340_000), cost: 9.25 });
     },
   });
 
@@ -82,13 +79,15 @@ test('Done agent as one line', async () => {
   assert.equal(text(folded[0]), 'Review the tunnel chapo 34% $9.25');
   assert.equal(figure(folded[0], 'cost'), '$9.25');
   for (const attr of ['data-chart', 'data-chip']) assert.deepEqual(parts(folded[0], attr), []);
+  // a control the keyboard reaches and presses, as a <button> is
+  assert.match(folded[0], /^<div [^>]*role="button" tabindex="0"[^>]*data-press="open:/);
   for (const part of ['bar', 'burn']) assert.deepEqual(parts(folded[0], 'data-part', part), []);
 });
 
 test('Card of a working omp agent', async () => {
   const { html } = await fleetOf([{ project: 'api', name: 'main', agents: ['working'], title: 'π - Review the plan' }], {
     prepare: (home) => {
-      const boto = join(folderOf(home, 'api', 'main'), 'boto');
+      const boto = join(workspace(home, 'api-main'), 'boto');
       mkdirSync(boto, { recursive: true });
       execFileSync('git', ['init', '-q', '-b', 'feat/jaci'], { cwd: boto });
       ompCalls(home, boto, { title: 'Review the plan', contexts: [], cost: 16.05 });
@@ -97,6 +96,8 @@ test('Card of a working omp agent', async () => {
 
   const [card] = parts(html, 'data-part', 'card');
   assert.match(card, /^<[^>]* data-state="working"/);
+  // a control the keyboard reaches and presses, as a <button> is
+  assert.match(card, /^<article [^>]*role="button" tabindex="0"[^>]*data-press="open:/);
   assert.equal(figure(card, 'cost'), '$16.05');
   assert.match(text(card), /boto · feat\/jaci · omp · claude-opus-5\.5-1m working · /);
 });
@@ -110,7 +111,7 @@ test('Folder that is no git repository', async () => {
 
 test('Agent on this computer', async () => {
   const { html } = await fleetOf([{ project: 'api', name: 'main', agents: ['working'], title: 'π - Fix it', stateStartedAt: NOW - 180_000 }], {
-    prepare: (home) => ompCalls(home, join(folderOf(home, 'api', 'main'), 'boto'), { title: 'Fix it', contexts: [] }),
+    prepare: (home) => ompCalls(home, join(workspace(home, 'api-main'), 'boto'), { title: 'Fix it', contexts: [] }),
   });
 
   const [card] = parts(html, 'data-part', 'card');
@@ -173,7 +174,7 @@ test('Levels at their bounds', async () => {
 
 test('Card of a session without a window', async () => {
   const { html } = await fleetOf([{ project: 'web', name: 'main', agents: ['working'], harness: 'claude' }], {
-    prepare: (home) => claudeCalls(home, folderOf(home, 'web', 'main'), rising(12, 120_000)),
+    prepare: (home) => claudeCalls(home, workspace(home, 'web-main'), rising(12, 120_000)),
   });
 
   const [card] = parts(html, 'data-part', 'card');
@@ -218,7 +219,7 @@ test('ages and counts as the panel writes them', () => {
 // shows its tokens in place of the percent.
 test('a folded line without a window shows its tokens', async () => {
   const { html } = await fleetOf([{ project: 'web', name: 'main', agents: ['done'], harness: 'claude' }], {
-    prepare: (home) => claudeCalls(home, folderOf(home, 'web', 'main'), rising(12, 120_000)),
+    prepare: (home) => claudeCalls(home, workspace(home, 'web-main'), rising(12, 120_000)),
   });
 
   const [line] = parts(html, 'data-part', 'folded');

@@ -13,7 +13,7 @@ import { NA, createSessions, readStats } from './core/providers/index.js';
 import { collapseBySession, linkAgents } from './core/session-link.js';
 import { createTtlCache } from './core/ttl-cache.js';
 import type { Run } from './exec.ts';
-import type { Num } from './protocol.ts';
+import type { Num, Point } from './protocol.ts';
 
 // An agent as Orca reports it (`agents.list` of the worker host API, `orca agent list --json`),
 // with the path of its workspace folder; `id` is the one the caller names the agent by.
@@ -31,12 +31,26 @@ export type OrcaAgent = {
   stateSince?: number | null;
 };
 
+// The series and tallies a provider's fold keeps over a whole session file (src/core/series.js):
+// the bounded series of model calls, the compactions with their tokens before and after (null:
+// not logged), the cold starts, the tool calls by tool and the cost (null: not logged) and
+// tokens by model.
+export type SessionSeries = {
+  points: Point[];
+  marks: { t: number; before: number | null; after: number | null }[];
+  cold: { count: number; tokens: number; cost: number | null };
+  tools: Record<string, { calls: number; failed: number }>;
+  models: Record<string, { cost: number | null; tokens: number }>;
+};
+
 // The stats of a card's session, as `readStats` (src/core/providers/index.js) gives them: every
 // field of STAT_FIELDS, n/a where it cannot be read, and `detail`, null unless the session file
-// was read whole. The fields the panels' TypeScript reads are named.
+// was read whole: the contexts after its last model calls, and its series, but for a provider
+// that keeps none (opencode). The fields the panels' TypeScript reads are named.
 export type CardStats = {
   [field: string]: unknown;
   model: string;
+  durationMs: Num;
   costUsd: Num;
   totalTokens: Num;
   premiumRequests: Num;
@@ -45,16 +59,22 @@ export type CardStats = {
   contextPercent: Num;
   headroomTokens: Num;
   cacheHitRate: Num;
-  detail: { recent: number[] } | null;
+  latencyMs: Num;
+  thinkingLevel: string;
+  calls: Num;
+  firstMessageMs: Num;
+  detail: { recent: number[] } | ({ recent: number[] } & SessionSeries) | null;
 };
 
 // A card as `build` returns it. `agents`: the ids of the agents that share it, in the order of
-// the agents, the first being the card's own `id`. `folder`: the one its session records, else
-// its workspace's; `harness`: Orca's kind of the agent, `harnessName` the name a card gives it;
-// `status`: the agent's Orca state; `stateSince`: the agent's.
+// the agents, the first being the card's own `id`. `linked`: whether its agent links to a
+// session. `folder`: the one its session records, else its workspace's; `harness`: Orca's kind
+// of the agent, `harnessName` the name a card gives it; `status`: the agent's Orca state;
+// `stateSince`: the agent's.
 export type BuiltCard = {
   id: string;
   agents: string[];
+  linked: boolean;
   folder: string | null;
   branch: string | null;
   origin: string | null;
@@ -246,6 +266,7 @@ export function createAgentCards({ run, home, kept = [] }: { run: Run; home: str
           const card: BuiltCard = {
             id: agent.id,
             agents: [agent.id],
+            linked: Boolean(link),
             folder,
             branch: git.branch,
             origin: git.origin,

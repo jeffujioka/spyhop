@@ -53,8 +53,21 @@ export function figure(html: string, name: string): string | undefined {
   return found === undefined ? undefined : text(found);
 }
 
+// The value of the attribute `name` of the first start tag of `html`, '' for one without a value,
+// undefined when it has none.
+export function attr(html: string, name: string): string | undefined {
+  const start = /^\s*<[a-zA-Z][\w-]*([^>]*)>/.exec(html);
+  return start ? attributes(start[1].replace(/\/$/, '')).get(name) : undefined;
+}
+
 // The text `html` shows, as one line: every tag is a break between words, and each run of white
 // space one space.
 export function text(html: string): string {
   return decode(html.replace(/<[^>]*>/g, ' ')).replace(/\s+/g, ' ').trim();
+}
+
+// The text `html` shows outside its figures (the elements of the class `num`, which hold no
+// element of their own), as `text` gives it: what the panel sets in the text font.
+export function textOutsideFigures(html: string): string {
+  return text(html.replace(/<span class="num[ "][^>]*>[^<]*<\/span>/g, ' '));
 }

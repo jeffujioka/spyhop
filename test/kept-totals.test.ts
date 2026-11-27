@@ -15,12 +15,13 @@ import { createAgentCards } from '../src/agent-cards.ts';
 import { sessionDirSlug } from '../src/core/providers/claude-sources.js';
 import { decodeScans, KEPT_VERSION, TAIL_BYTES } from '../src/core/refresh.js';
 import { run } from '../src/exec.ts';
-import type { FleetAnswer } from '../src/protocol.ts';
+import type { FleetAnswer, SessionAnswer } from '../src/protocol.ts';
 import * as workerModule from '../src/worker.ts';
 import { claudeAssistant, claudeUsage } from './core/helpers/entries.ts';
 import { NOW, agent, costOf, costTurn, ompSessionOf as ompSession, tokensOf } from './helpers/agent-cards.ts';
 import { useTempHome } from './helpers/env.ts';
 import { tempHome } from './helpers/files.ts';
+import { ompCalls } from './helpers/live.ts';
 import { DEVBOX, DEVBOX_HOST, LOCAL_HOST, environmentListOf, hostListOf } from './helpers/orca-answers.ts';
 import { orcaHost, type HostWorkspace } from './helpers/orca-host.ts';
 import { standIns } from './helpers/stand-ins.ts';
@@ -38,9 +39,9 @@ afterEach(async () => {
 const PADDING = `${JSON.stringify({ type: 'custom', note: 'x'.repeat(2000) })}\n`.repeat(Math.ceil((TAIL_BYTES * 1.5) / 2000));
 
 // An omp Orca agent on the SSH target `devbox`, whose session file, larger than the window, has
-// logged 0.10 USD: the file, the `ssh` and `orca` stand-ins, and `start`, which mounts a new
-// worker on an Orca host that holds `storage` and grants `capabilities` (the manifest's when
-// not given).
+// logged 0.10 USD: the file, `devbox`'s home, the `ssh` and `orca` stand-ins, and `start`, which
+// mounts a new worker on an Orca host that holds `storage` and grants `capabilities` (the
+// manifest's when not given).
 function devboxAgent() {
   useTempHome();
   const remoteHome = tempHome();
@@ -53,7 +54,7 @@ function devboxAgent() {
   });
   // the command lines `ssh devbox` has run so far
   const lines = () => calls.ssh().filter(([alias]) => alias === 'devbox').map((args) => args.at(-1)!);
-  return { file, lines, start: (storage?: Storage, capabilities?: string[]) => start(remoteHome, workspace, storage, capabilities) };
+  return { file, remoteHome, lines, start: (storage?: Storage, capabilities?: string[]) => start(remoteHome, workspace, storage, capabilities) };
 }
 
 // Ends the worker of the test, if any, and mounts a new one on an Orca host with `workspace`
@@ -161,6 +162,23 @@ test('Claude Code totals are kept whole', async () => {
   // another content block of `r1`, which the kept responses hold: its tokens are counted once
   appendFileSync(file, block);
   assert.equal(tokensOf((await cards.build(agents, NOW))[0]), '100');
+});
+
+test('Series survive a restart of the worker', async () => {
+  const { file, remoteHome, lines, start } = devboxAgent();
+  // the agent's session, of 300 model calls, larger than the window
+  ompCalls(remoteHome, join(remoteHome, 'work/infra-main'), { title: 'Fix the login bug', contexts: Array.from({ length: 300 }, (_, i) => 1000 + i) });
+  appendFileSync(file, PADDING);
+  const first = await start();
+  const { id } = await refresh();
+  assert.equal(dds(lines()).length, 1);
+  const before = lines().length;
+
+  await start(first.data().storage as Storage);
+  const { session } = (await worker!.request('spyhop.session', { request: 2, card: id })) as SessionAnswer;
+
+  assert.deepEqual(dds(lines().slice(before)), []);
+  assert.equal(session!.tokens!.points.reduce((sum, point) => sum + point.n, 0), 300);
 });
 
 test('Stored value of another version or unreadable is ignored', async () => {

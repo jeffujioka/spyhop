@@ -17,8 +17,8 @@
 // gives the series of the whole file (src/core/series.js), from the same state.
 
 import { add, parseEntries, tally } from './jsonl.js';
-import { burnRate, cacheRate, isNumber } from './shared.js';
-import { detailOf, pushRecent } from '../series.js';
+import { burnRate, cacheRate, isNumber, tokenCount, wholeSession } from './shared.js';
+import { addCall, detailOf, entryOf, newSeries, pushRecent, retractLastCall, toolAnswered, toolCalled } from '../series.js';
 
 // A user entry that carries a tool's result continues a turn; any other (not meta) one starts it.
 const isPrompt = ({ message, isMeta }) =>
@@ -70,6 +70,19 @@ function emptyState() {
     // `message.id` of the newest one, whose later blocks replace its context instead of adding one
     recent: [],
     recentId: undefined,
+    // the session's own responses: how many, their bounded series (src/core/series.js), the
+    // compact boundaries with their tokens before and after, the cold starts, the tool uses by
+    // tool with the ids of those not answered yet, and the tokens by model. Claude Code logs no
+    // cost of a response, so no cost is kept. `last` is what the newest response added, to take
+    // it back when a later block of the response replaces it.
+    calls: 0,
+    series: newSeries(),
+    marks: [],
+    cold: { count: 0, tokens: 0, cost: null },
+    tools: {},
+    pending: new Map(),
+    models: {},
+    last: undefined,
   };
 }
 
@@ -90,6 +103,19 @@ function credit(state, parts, sign) {
   for (const [key, value] of Object.entries(parts)) add(state[key], value, sign);
 }
 
+// Counts the response `last` (`{ id, call, cold, model, tokens }`) in the calls, the series, the
+// cold starts and the tokens by model; `sign` -1 takes it back out, which only the newest one can.
+function count(state, last, sign) {
+  if (sign > 0) addCall(state.series, last.call);
+  else retractLastCall(state.series, last.call);
+  state.calls += sign;
+  if (last.cold) {
+    state.cold.count += sign;
+    state.cold.tokens += sign * last.call.write;
+  }
+  if (last.model !== null) entryOf(state.models, last.model, () => ({ cost: null, tokens: 0 })).tokens += sign * last.tokens;
+}
+
 // Adds `entries` (in file order, after those already in `state`) to `state`, which it changes
 // and returns; without a `state` it starts a new one.
 function fold(state, entries) {
@@ -105,26 +131,55 @@ function fold(state, entries) {
         // the turn so far: this reply minus the prompt before it (none: unknown)
         s.latencyMs = isNumber(s.began) ? time - s.began : undefined;
         const parts = contribution(message);
-        if (typeof message.id === 'string') {
-          const earlier = s.responses.get(message.id);
-          if (earlier) credit(s, earlier, -1);
-          s.responses.set(message.id, parts);
-        }
+        const id = typeof message.id === 'string' ? message.id : undefined;
+        const earlier = id === undefined ? undefined : s.responses.get(id);
+        if (earlier) credit(s, earlier, -1);
+        if (id !== undefined) s.responses.set(id, parts);
         credit(s, parts, 1);
         const prompt = promptTokens(message);
         if (prompt !== undefined) {
-          if (typeof message.id === 'string' && message.id === s.recentId) s.recent[s.recent.length - 1] = prompt;
+          if (id !== undefined && id === s.recentId) s.recent[s.recent.length - 1] = prompt;
           else pushRecent(s.recent, prompt);
-          s.recentId = message.id;
+          s.recentId = id;
+        }
+        // A later block of the newest response replaces it in the series, as in the tallies. A
+        // block of an older one, written again after other responses, cannot be taken out of a
+        // point merged since; its response is in the series already, so it adds nothing there.
+        const newest = id !== undefined && id === s.last?.id;
+        if (newest) count(s, s.last, -1);
+        if (newest || !earlier) {
+          const call = {
+            t: time,
+            read: tokenCount(cacheRead(message)),
+            write: tokenCount(cacheWrite(message)),
+            uncached: tokenCount(inputTokens(message)),
+            output: tokenCount(outputTokens(message)),
+            cost: null,
+            context: prompt ?? null,
+          };
+          // a cold start: a response after the first that read nothing from the prompt cache
+          const cold = s.calls > 0 && cacheRead(message) === 0;
+          const model = typeof message.model === 'string' ? message.model : null;
+          s.last = { id, call, cold, model, tokens: tokenCount(responseTokens(message)) };
+          count(s, s.last, 1);
+        }
+        for (const part of Array.isArray(message.content) ? message.content : []) {
+          if (part?.type === 'tool_use') toolCalled(s, part.id, part.name);
         }
         if (s.logged) s.logged.stale = true;
+      }
+      if (entry.type === 'user' && Array.isArray(message.content)) {
+        for (const part of message.content) {
+          if (part?.type === 'tool_result') toolAnswered(s, part.tool_use_id, part.is_error === true);
+        }
       }
     } else if (entry.type === 'cost-state') {
       s.logged = { usd: entry.totalCostUSD, stale: false };
     } else if (entry.type === 'system' && entry.subtype === 'compact_boundary') {
-      const trigger = entry.compactMetadata?.trigger;
+      const { trigger, preTokens, postTokens } = entry.compactMetadata ?? {};
       if (trigger === 'auto') s.compactions += 1;
       else if (trigger !== 'manual') s.unknownTrigger = true;
+      s.marks.push({ t: time, before: isNumber(preTokens) ? preTokens : null, after: isNumber(postTokens) ? postTokens : null });
     }
   }
   return s;
@@ -269,7 +324,7 @@ export const claudeProvider = {
     return Object.assign(
       {},
       ...(total ? TOTALS.map((figure) => figure(total)) : []),
-      ...(total ? [autocompactions(total, whole)] : []),
+      ...(total ? [autocompactions(total, whole), wholeSession(total, whole)] : []),
       ...LATEST.map((figure) => figure(tail, now)),
       { detail: total && whole ? detailOf(total) : null },
     );

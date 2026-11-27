@@ -7,16 +7,19 @@
 // the others', a paired server's started on the agents it listed at the previous refresh, while
 // its lists load. Each card carries the time its agent entered its Orca state, as Orca gives it.
 // `spyhop.fleet` posts each host's group to the panel (`spyhop.group`) as soon as that host's
-// cards are built, and answers with the groups of them all (src/fleet.ts). The session reader's
-// totals of each scanned session file are kept in the plugin's storage (capability
-// `storage:own`), and nothing else is: they are loaded when the worker starts, which the first
-// request waits for, and written at the end of a request when a scan changed, at most once every
-// 30 seconds, so a file scanned before is not scanned again from its start. The CLI runs on each
-// request, so only while the panel is open, and for the palette command `spyhop.show`, which
-// shows the panel. `spyhop.focus` focuses a card's pane in this computer's Orca window: an
-// agent on this computer or an SSH workspace by Orca's `terminal.focus`, one on a paired Orca
-// server by `orca terminal switch` to the server's terminal; neither runs anything over ssh. A
-// press that cannot focus answers `focused: false` and writes the reason to the worker's log.
+// cards are built, and answers with the groups of them all (src/fleet.ts), which carry no series
+// of the session screen. `spyhop.session` builds the cards the same way, posts nothing, and
+// answers with the session of the one card it asks for (src/session-detail.ts), or none when
+// Orca no longer lists its agent. The session reader's totals of each scanned session file are
+// kept in the plugin's storage (capability `storage:own`), and nothing else is: they are loaded
+// when the worker starts, which the first request waits for, and written at the end of a request
+// when a scan changed, at most once every 30 seconds, so a file scanned before is not scanned
+// again from its start. The CLI runs on each request, so only while the panel is open, and for
+// the palette command `spyhop.show`, which shows the panel. `spyhop.focus` focuses a card's pane
+// in this computer's Orca window: an agent on this computer or an SSH workspace by Orca's
+// `terminal.focus`, one on a paired Orca server by `orca terminal switch` to the server's
+// terminal; neither runs anything over ssh. A press that cannot focus answers `focused: false`
+// and writes the reason to the worker's log.
 import { homedir } from 'node:os';
 import type { OrcaWorkerApi } from 'orca/worker';
 import { type BuiltCard, createAgentCards, type OrcaAgent, sameButStates } from './agent-cards.ts';
@@ -26,7 +29,8 @@ import { createTtlCache } from './core/ttl-cache.js';
 import { run } from './exec.ts';
 import { type FleetAgent, groupCards, LOCAL, stateCounts } from './fleet.ts';
 import { orca as cli, type HostLists, listHosts, readServerAgents, type RemoteHost, remoteHosts, type ServerAgent } from './hosts.ts';
-import type { CardView, FleetAnswer, HostGroup, Pane } from './protocol.ts';
+import type { CardView, FleetAnswer, HostGroup, Pane, SessionAnswer } from './protocol.ts';
+import { sessionDetail } from './session-detail.ts';
 
 // How long Orca's lists of hosts and paired servers are kept: a server is paired seldom, its
 // agents change each refresh.
@@ -93,9 +97,9 @@ export default function activate(orca: OrcaWorkerApi): void {
   type HostBuilt = { agents: (FleetAgent & { pane?: Pane | null })[]; cards: BuiltCard[] };
 
   // The cards of every Orca agent, built once per request: the agents in the order Orca lists
-  // them, each card's view by its id and each remote host's name by its id. `post` is given each
-  // Orca host's group as soon as its cards are built; a host with no agent has no group. The kept
-  // scans are written at the end of it.
+  // them, the built cards, each card's view by its id and each remote host's name by its id.
+  // `post` is given each Orca host's group as soon as its cards are built; a host with no agent
+  // has no group. The kept scans are written at the end of it.
   async function build(post: ((group: HostGroup) => void) | null) {
     const cards = await starting;
     const [{ workspaces }, listed] = await Promise.all([
@@ -175,6 +179,7 @@ export default function activate(orca: OrcaWorkerApi): void {
       // in the order Orca lists them, which is the order of the groups
       agents: [...(await Promise.all(listing)).flat(), ...servers.flatMap(({ agents }) => agents)],
       views,
+      cards: [...others, ...servers].flatMap((built) => built.cards),
       names,
     };
   }
@@ -189,6 +194,15 @@ export default function activate(orca: OrcaWorkerApi): void {
       }
     });
     return { request, groups: groupCards(agents, [...views.values()], names), counts: stateCounts(agents) };
+  });
+
+  orca.panels.handle('spyhop.session', async ({ request, card: id }): Promise<SessionAnswer> => {
+    const { agents, cards, views, names } = await build(null);
+    const card = cards.find((built) => built.id === id);
+    if (!card) return { request, session: null };
+    const { hostId } = agents.find((agent) => agent.id === id)!;
+    const host = hostId === LOCAL ? null : (names.get(hostId) ?? hostId);
+    return { request, session: sessionDetail(card, { home, host, view: views.get(id)!, now: Date.now() }) };
   });
 
   orca.panels.handle('spyhop.focus', async (pane: Pane) => {
