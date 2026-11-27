@@ -6,10 +6,12 @@
   "description": "An Orca plugin that shows AI harness session stats for every Orca agent.",
   "scripts": {
     "test": "orca plugin test . --json",
-    "typecheck": "orca plugin types . --json && tsc -p ."
+    "typecheck": "orca plugin types . --json && tsc -p .",
+    "test:page": "node --test \"test/page/**/*.page.ts\""
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
+    "playwright-core": "^1.65.1",
     "typescript": "^5.9.0"
   }
 }

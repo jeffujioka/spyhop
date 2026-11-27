@@ -270,6 +270,12 @@ listed) and runs `orca plugin open <key> --panel spyhop`.
   panel and `orca plugin shot --scenario` refuses one, so the panel has no check scenarios: the
   session screen's look is checked by eye. Orca asks for the dev plugin's approval again after
   every change to a file of the folder, and the check prints the command that gives it.
+- Page tests: `npm run test:page` runs the `test/page/*.page.ts` tests with Node's test runner
+  (`npm test` does not): they compile the panel's page with the project's TypeScript, with no
+  bundler, load it in headless Chrome, the Google Chrome installed in `/Applications` (Playwright
+  downloads no browser), with a stand-in for Orca that answers the page's requests, and drive it
+  with the pointer and the keyboard. Without Chrome the run fails and names Google Chrome; it
+  never passes by skipping its tests.
 
 ## Known limits
 
