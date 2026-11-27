@@ -73,10 +73,19 @@ svg { display: block; }
 }
 .headline { align-items: baseline; margin: 4px 0 2px; }
 .hero { font-size: 22px; font-weight: 650; }
-.headline .muted, .axis, .marks, .key, [data-part="cold-note"] { font-size: 11px; }
-[data-chart="context"], [data-chart="tokens"] { height: 120px; margin-top: 4px; }
-[data-chart="cost"] { height: 100px; margin-top: 4px; }
-[data-chart="burn"] { height: 80px; margin-top: 4px; }
+.headline .muted, .axis, .times, .marks, .key, [data-part="cold-note"] { font-size: 11px; }
+/* A chart's plot holds its SVG and the values of its scale's lines, laid over it at its left,
+   each under its line; the times under it are each at the x of its point. */
+.plot { position: relative; margin-top: 4px; }
+.plot > [data-label] {
+  position: absolute; left: 3px; margin-top: 1px; font-size: 10px; line-height: 1;
+  color: var(--orca-muted-foreground); pointer-events: none;
+}
+.times { position: relative; height: 1.4em; margin-top: 2px; }
+.times > [data-time] { position: absolute; top: 0; width: max-content; }
+[data-chart="context"], [data-chart="tokens"] { height: 120px; }
+[data-chart="cost"] { height: 100px; }
+[data-chart="burn"] { height: 80px; }
 [data-chart] path, [data-chart] line, [data-chart] polyline { fill: none; vector-effect: non-scaling-stroke; stroke-linecap: round; }
 [data-chart="context"] path { stroke: var(--lvl); stroke-width: 2; }
 [data-chart="context"].plain path { stroke: var(--spy-s1); }
@@ -84,6 +93,7 @@ svg { display: block; }
 [data-ref="0.75"] { stroke: var(--spy-hot); }
 [data-ref="0.9"] { stroke: var(--spy-critical); }
 [data-mark] { stroke: var(--orca-muted-foreground); stroke-width: 1; stroke-dasharray: 2 2; }
+[data-scale] { stroke: var(--orca-muted-foreground); stroke-width: 1; opacity: .25; }
 /* the kinds of tokens, and the costs of a session's own model calls and of its sub-agents */
 .k-read { --k: var(--spy-s4); }
 .k-write { --k: var(--spy-s3); }

@@ -5,12 +5,14 @@
 // chart is an SVG as wide as its box (`width="100%"` over a `viewBox` 360 wide, stretched with
 // `preserveAspectRatio="none"`) with no text of its own: its headline, times, labels and notes are
 // HTML around it. Its colours come from the stylesheet (src/live/style.ts), by its classes and
-// attributes. A session chart groups neighbouring model calls to the room it has (`groupPoints`),
-// and is not drawn without a point.
+// attributes. Each of the four charts of the burn rate, context, tokens and cost has a round
+// scale (`scaleOf`), its faint lines in the SVG and their values laid over it in its plot, and
+// times of day under it (`clockMarks`, `timesRow`). A session chart groups neighbouring model
+// calls to the room it has (`groupPoints`), and is not drawn without a point.
 // Pure: no DOM.
 
 import { formatClock, formatCost, formatCostPerHour, formatPercent, formatTokens, orNa } from '../core/format.js';
-import { groupPoints } from '../core/series.js';
+import { groupPoints, MINUTE_MS } from '../core/series.js';
 import { BURN_NAMED } from '../fleet.ts';
 import type { BurnCard, Num, Point, SessionView, SubAgentView } from '../protocol.ts';
 import { esc, num } from './html.ts';
@@ -59,18 +61,83 @@ function groupValues(values: Value[], room: number): Value[] {
   return points.map(({ t, context }) => ({ t, v: context! }));
 }
 
-// The x of the time `t` on a session chart that spans `times` from the first to the last.
+// The x of the time `t` on a chart that spans `times` from the first to the last.
 function timeScale(times: number[]) {
   const first = Math.min(...times);
   const span = Math.max(...times) - first;
   return (t: number) => at(span === 0 ? WIDTH / 2 : PAD + ((t - first) / span) * (WIDTH - 2 * PAD));
 }
 
-// The y of the value `v` on a session chart `height` high, from 0 at the bottom to `top` at the
-// top.
+// The y of the value `v` on a chart `height` high, from 0 at the bottom to `top` at the top.
 const valueScale = (height: number, top: number) => (v: number) => at(height - PAD - (v / (top || 1)) * (height - 2 * PAD));
 
-// The times of the first and the last of `times`, under a session chart; one time once.
+// The round scale of a chart `height` high whose highest value is `top`, from 0 at the bottom to
+// two steps at the top, the step the smallest of 1, 2 or 5 × 10ⁿ whose double reaches `top` (of
+// 1 when `top` is 0): `y` the y of a value, `lines` the SVG's faint lines at 0, one and two
+// steps, and `labels` the values of those at one and two steps, as `format` writes them for the
+// step, each laid over the chart at its left, under its line.
+function scaleOf(height: number, top: number, format: (v: number, step: number) => string) {
+  const reach = top || 1;
+  const power = 10 ** Math.floor(Math.log10(reach / 2));
+  const step = [1, 2, 5, 10].map((m) => +(m * power).toPrecision(12)).find((candidate) => 2 * candidate >= reach)!;
+  const y = valueScale(height, 2 * step);
+  const values = [0, step, 2 * step];
+  return {
+    y,
+    lines: values.map((v) => `<line data-scale="${valueText(v)}" x1="0" x2="${WIDTH}" y1="${y(v)}" y2="${y(v)}"/>`).join(''),
+    labels: values
+      .slice(1)
+      .map((v) => `<span data-label="${valueText(v)}" class="num" style="top:${cssPercent(y(v) / height)}">${format(v, step)}</span>`)
+      .join(''),
+  };
+}
+
+// A cost in dollars as a label of a scale of the step `step`: to the cent, as `formatCost`
+// writes it, or to as many decimals as a step under a cent needs, so that no line under a cent
+// reads $0.00 or the same as another: $0.002, $0.004.
+const usdLabel = (v: number, step: number) => `$${v.toFixed(Math.max(2, -Math.floor(Math.log10(step))))}`;
+
+// A chart's plot: its SVG `svg`, with the labels `labels` laid over it.
+const plot = (svg: string, labels: string) => `<div data-part="plot" class="plot">${svg}${labels}</div>`;
+
+// The steps of the times under a chart, from the smallest, before whole days: 1, 2, 5, 10, 15 and
+// 30 minutes, then 1, 2, 3, 6 and 12 hours.
+const CLOCK_STEPS = [1, 2, 5, 10, 15, 30, 60, 120, 180, 360, 720].map((minutes) => minutes * MINUTE_MS);
+const DAY_MS = 24 * 60 * MINUTE_MS;
+
+// The times of day under a chart that spans `times`, at its x `x`: at most five, at round marks
+// of local time, the multiples of the smallest step (CLOCK_STEPS, then whole days) that keeps
+// them to five; the first and the last of `times` when the span holds no such mark, the last left
+// out when it reads as the first.
+function clockMarks(times: number[], x: (t: number) => number) {
+  const first = Math.min(...times);
+  const last = Math.max(...times);
+  // local time is the epoch's time less the time zone's offset
+  const offset = new Date(first).getTimezoneOffset() * MINUTE_MS;
+  let marks: number[] = [];
+  for (let i = 0; ; i += 1) {
+    const step = i < CLOCK_STEPS.length ? CLOCK_STEPS[i] : (i - CLOCK_STEPS.length + 1) * DAY_MS;
+    const start = Math.ceil((first - offset) / step) * step + offset;
+    if (start + 5 * step <= last) continue;
+    for (let t = start; t <= last; t += step) marks.push(t);
+    break;
+  }
+  if (marks.length === 0) marks = formatClock(last) === formatClock(first) ? [first] : [first, last];
+  return timesRow(marks.map((t) => ({ t, x: x(t) })));
+}
+
+// The times `marks` under a chart, each written at its x and kept within the chart: shifted left
+// by as much of its width as its x is of the chart's, so one at the left edge begins at its x and
+// one at the right edge ends at it.
+function timesRow(marks: { t: number; x: number }[]) {
+  const spans = marks.map(({ t, x }) => {
+    const left = cssPercent(x / WIDTH);
+    return `<span data-time="${t}" class="num" style="left:${left};transform:translateX(-${left})">${formatClock(t)}</span>`;
+  });
+  return `<div data-part="times" class="times muted">${spans.join('')}</div>`;
+}
+
+// The times of the first and the last of `times`, under the sub-agent bars; one time once.
 function axis(times: number[]) {
   const first = formatClock(Math.min(...times));
   const last = formatClock(Math.max(...times));
@@ -118,8 +185,10 @@ export function contextChart(context: Context, room = ROOM): string {
   const { window, latest, peak, marks } = context;
   const shares = typeof window === 'number';
   const points = groupValues(context.points, room).map(({ t, v }) => ({ t, v: shares ? v / window : v }));
-  const x = timeScale([...points.map(({ t }) => t), ...marks.map(({ t }) => t)]);
-  const y = valueScale(CONTEXT_HEIGHT, Math.max(shares ? 1 : 0, ...points.map(({ v }) => v)));
+  const times = [...points.map(({ t }) => t), ...marks.map(({ t }) => t)];
+  const x = timeScale(times);
+  const scale = scaleOf(CONTEXT_HEIGHT, Math.max(shares ? 1 : 0, ...points.map(({ v }) => v)), shares ? formatPercent : formatTokens);
+  const { y } = scale;
   const refs = shares ? [0.75, 0.9].map((share) => `<line data-ref="${share}" x1="0" x2="${WIDTH}" y1="${y(share)}" y2="${y(share)}"/>`).join('') : '';
   const lines = marks.map(({ t, before, after }) => `<line data-mark data-t="${t}" data-before="${before}" data-after="${after}" x1="${x(t)}" x2="${x(t)}" y1="0" y2="${CONTEXT_HEIGHT}"/>`).join('');
   // each point a segment from the point before it, in the colour of its level; the first a dot
@@ -132,8 +201,9 @@ export function contextChart(context: Context, room = ROOM): string {
   return card(
     'Context',
     '',
-    `<div class="row headline">${contextHeadline(context)}</div>${svgOf('context', CONTEXT_HEIGHT, shares ? '' : ' class="plain"')}${refs}${lines}${line}</svg>` +
-      `${axis(points.map(({ t }) => t))}${refKeys}${notes ? `<div class="row marks muted">${notes}</div>` : ''}`,
+    `<div class="row headline">${contextHeadline(context)}</div>` +
+      plot(`${svgOf('context', CONTEXT_HEIGHT, shares ? '' : ' class="plain"')}${scale.lines}${refs}${lines}${line}</svg>`, scale.labels) +
+      `${clockMarks(times, x)}${refKeys}${notes ? `<div class="row marks muted">${notes}</div>` : ''}`,
   );
 }
 
@@ -159,7 +229,9 @@ export function tokensChart(tokens: Tokens, room = ROOM): string {
   const points: Point[] = groupPoints(tokens.points, room);
   const slot = WIDTH / points.length;
   const width = at(slot * 0.7);
-  const promptScale = valueScale(TOKENS_HEIGHT, Math.max(...points.map(({ read, write, uncached }) => read + write + uncached)));
+  const { y: promptScale, lines: scaleLines, labels: scaleLabels } = scaleOf(TOKENS_HEIGHT, Math.max(...points.map(({ read, write, uncached }) => read + write + uncached)), formatTokens);
+  // the left of the bar `i`
+  const barX = (i: number) => at(i * slot + (slot - width) / 2);
   const outputScale = valueScale(TOKENS_HEIGHT, Math.max(...points.map(({ output }) => output)));
   const bars = points
     .map(({ read, write, uncached, output }, i) => {
@@ -173,7 +245,7 @@ export function tokensChart(tokens: Tokens, room = ROOM): string {
       )
         .map(([kind, value]) => {
           const top = promptScale(below + value);
-          const rect = `<rect class="${kind}" x="${at(i * slot + (slot - width) / 2)}" y="${top}" width="${width}" height="${at(promptScale(below) - top)}"/>`;
+          const rect = `<rect class="${kind}" x="${barX(i)}" y="${top}" width="${width}" height="${at(promptScale(below) - top)}"/>`;
           below += value;
           return rect;
         })
@@ -197,7 +269,11 @@ export function tokensChart(tokens: Tokens, room = ROOM): string {
   return card(
     'Tokens per model call',
     `<span class="muted">cache hit ${num('hitRate', formatPercent(tokens.hitRate))}</span>`,
-    `${svgOf('tokens', TOKENS_HEIGHT)}${bars}${output}</svg>${axis(points.map(({ t }) => t))}<div class="row key muted">${keys}</div>${note}`,
+    // the faint lines over the bars, so that a bar does not hide them
+    plot(`${svgOf('tokens', TOKENS_HEIGHT)}${bars}${scaleLines}${output}</svg>`, scaleLabels) +
+      // the first bar and every n-th one after it, at most five, each with the time of its last call
+      timesRow(points.flatMap(({ t }, i) => (i % Math.ceil(points.length / 5) === 0 ? [{ t, x: barX(i) + width / 2 }] : []))) +
+      `<div class="row key muted">${keys}</div>${note}`,
   );
 }
 
@@ -223,7 +299,8 @@ export function costChart(cost: Cost, room = ROOM): string {
   const times = groupValues(all, room).map(({ t }) => t);
   const spent = times.map((t) => costAt(cost, t));
   const x = timeScale(times);
-  const y = valueScale(COST_HEIGHT, Math.max(...layers.flatMap((name) => spent.map((then) => then[name] as number))));
+  const scale = scaleOf(COST_HEIGHT, Math.max(...layers.flatMap((name) => spent.map((then) => then[name] as number))), usdLabel);
+  const { y } = scale;
   const drawn = layers
     .map((name) => {
       const values = spent.map((then) => then[name] as number);
@@ -235,18 +312,21 @@ export function costChart(cost: Cost, room = ROOM): string {
     .join('');
   const last = costAt(cost, times.at(-1)!);
   const keys = layers.map((name) => `<span><i class="k-${name}"></i>${name === 'own' ? 'own turns' : 'sub-agents'} <span class="num">${formatCost(last[name])}</span></span>`).join('');
-  return card('Cost', '', `${svgOf('cost', COST_HEIGHT)}${drawn}</svg>${axis(times)}<div class="row key muted">${keys}</div>`);
+  return card('Cost', '', `${plot(`${svgOf('cost', COST_HEIGHT)}${scale.lines}${drawn}</svg>`, scale.labels)}${clockMarks(times, x)}<div class="row key muted">${keys}</div>`);
 }
 
-// The burn rate of each minute of `layers`, oldest first, stacked: each layer an area over those
-// before it, a named session's in the colour of its place and the others' in their own, under
-// a key of each layer's name and its newest rate. '' without a layer, or when they cannot be read.
-export function burnChart(layers: BurnCard['layers']): string {
+// The burn rate of each minute of `layers`, oldest first, the newest at `endMs`, stacked: each
+// layer an area over those before it, a named session's in the colour of its place and the
+// others' in their own, with the minutes' times under it, under a key of each layer's name and
+// its newest rate. '' without a layer, or when they cannot be read.
+export function burnChart(layers: BurnCard['layers'], endMs: number): string {
   if (layers === 'n/a' || layers.length === 0) return '';
   const count = layers[0].values.length;
+  const times = Array.from({ length: count }, (_, i) => endMs - (count - 1 - i) * MINUTE_MS);
+  const x = timeScale(times);
   const below = Array.from({ length: count }, () => 0);
-  const y = valueScale(BURN_HEIGHT, Math.max(...below.map((_, i) => layers.reduce((sum, { values }) => sum + values[i], 0))));
-  const edge = () => below.map((v, i) => `${at(count > 1 ? PAD + (i / (count - 1)) * (WIDTH - 2 * PAD) : WIDTH / 2)} ${y(v)}`);
+  const scale = scaleOf(BURN_HEIGHT, Math.max(...below.map((_, i) => layers.reduce((sum, { values }) => sum + values[i], 0))), (v, step) => `${usdLabel(v, step)}/h`);
+  const edge = () => below.map((v, i) => `${x(times[i])} ${scale.y(v)}`);
   const kinds = layers.map((_, k) => (k < BURN_NAMED ? `k-s${k + 1}` : 'k-others'));
   const drawn = layers.map(({ name, values }, k) => {
     const lower = edge().reverse();
@@ -256,7 +336,8 @@ export function burnChart(layers: BurnCard['layers']): string {
   const keys = layers
     .map(({ name, values }, k) => `<span><i class="${kinds[k]}"></i>${esc(name)} ${num('layerPerHour', formatCostPerHour(values.at(-1)!))}</span>`)
     .join('');
-  return `${svgOf('burn', BURN_HEIGHT)}${drawn.join('')}</svg><div class="row key muted">${keys}</div>`;
+  // the faint lines over the areas, so that an area does not hide them
+  return `${plot(`${svgOf('burn', BURN_HEIGHT)}${drawn.join('')}${scale.lines}</svg>`, scale.labels)}${clockMarks(times, x)}<div class="row key muted">${keys}</div>`;
 }
 
 // The bars of the sub-agents `agents`, in their order, each on its own line of one time axis that

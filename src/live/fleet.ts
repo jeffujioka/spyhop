@@ -29,14 +29,14 @@ function counts({ counts }: FleetAnswer) {
 // The burn rate card: the cost per hour of the last 10 minutes and the whole cost of the sessions
 // shown, the chart of the last hour, the tokens per minute, the cache hit rate and the sub-agents
 // that run, and how many sessions the rate leaves out, when it leaves out any.
-function burnCard({ perHour, total, tokensPerMin, cacheHitRate, running, leftOut, layers }: BurnCard) {
+function burnCard({ perHour, total, tokensPerMin, cacheHitRate, running, leftOut, layers, endMs }: BurnCard) {
   const left =
     leftOut === 0
       ? ''
       : `<div class="muted">the rate leaves out ${num('leftOut', String(leftOut))} session${leftOut === 1 ? '' : 's'} of Claude Code, which logs no cost per model call</div>`;
   return (
     `<section data-part="burn" class="chart"><div class="row"><b class="grow">Burn rate</b><span class="muted">all sessions ${num('total', formatCost(total))}</span></div>` +
-    `<div class="row headline">${num('perHour', formatCostPerHour(perHour), 'hero')} <span class="muted">per hour, last 10 minutes</span></div>${burnChart(layers)}` +
+    `<div class="row headline">${num('perHour', formatCostPerHour(perHour), 'hero')} <span class="muted">per hour, last 10 minutes</span></div>${burnChart(layers, endMs)}` +
     `<div class="row key muted"><span>${num('tokensPerMin', orNa(tokensPerMin, formatTokens))} tokens/min</span><span>cache ${num('cacheHitRate', formatPercent(cacheHitRate))}</span>` +
     `<span>${num('running', formatCount(running))} sub-agent${running === 1 ? '' : 's'} running</span></div>${left}</section>`
   );

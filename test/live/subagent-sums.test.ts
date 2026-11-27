@@ -134,7 +134,8 @@ test('Sub-agents still being read', async () => {
     assert.doesNotMatch(text(card), /\$2\.00/);
     // the session screen shows the session's own cost the same way
     assert.equal(figureText(html, 'Cost'), 'Cost $1.20 reading 2 of 3 sub-agents');
-    assert.doesNotMatch(text(html), /\$2\.00/);
+    // no figure reads it, though the cost chart's scale, to two steps of $1.00, is labelled $2.00
+    assert.doesNotMatch(text(html.replace(/<span data-label="[^"]*"[^>]*>[^<]*<\/span>/g, '')), /\$2\.00/);
   } finally {
     if (unread) chmodSync(unread, 0o644);
   }

@@ -25,7 +25,7 @@ export const SERIES_POINTS = 120;
 // last 10 and draws the last 60.
 export const MINUTES_KEPT = 70;
 
-const MINUTE_MS = 60_000;
+export const MINUTE_MS = 60_000;
 
 // The epoch minute of the time `t` (epoch ms): the `m` of its Minute.
 export const minuteOf = (t) => Math.floor(t / MINUTE_MS);

@@ -47,7 +47,8 @@ export type HostGroup = { id: string; name: string; count: number; cards: CardVi
 // last 10 minutes and `cacheHitRate` over the last 60; `running` the sub-agents that run now;
 // `leftOut` the linked sessions the rate cannot count (Claude Code's); `layers` the rate at each
 // of the last 60 minutes, oldest first, USD per hour, of the BURN_NAMED sessions of the highest
-// cost over them, by title, then of the others as one layer `others`. Each sum is n/a while a
+// cost over them, by title, then of the others as one layer `others`; `endMs` the time of the
+// newest of those minutes, the minute of now (epoch ms, its start). Each sum is n/a while a
 // session it counts has a sub-agent transcript not read yet.
 export type BurnCard = {
   perHour: Num;
@@ -57,6 +58,7 @@ export type BurnCard = {
   running: Num;
   leftOut: number;
   layers: { name: string; values: number[] }[] | 'n/a';
+  endMs: number;
 };
 
 // A row of the fleet's attention list (src/fleet.ts), which opens the screen of the card `card`,

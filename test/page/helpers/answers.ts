@@ -50,7 +50,7 @@ export function fleetAnswer(request: number, { cards, attention = [] }: Fleet): 
     request,
     groups: [{ id: 'local', name: 'This computer', count: cards.length, cards: cards.map((drawn) => ({ ...drawn, stateSinceMs: request * MINUTE })) }],
     counts,
-    burn: { perHour: 'n/a', total: 'n/a', tokensPerMin: 'n/a', cacheHitRate: 'n/a', running: 'n/a', leftOut: 0, layers: 'n/a' },
+    burn: { perHour: 'n/a', total: 'n/a', tokensPerMin: 'n/a', cacheHitRate: 'n/a', running: 'n/a', leftOut: 0, layers: 'n/a', endMs: request * MINUTE },
     attention,
   };
 }
