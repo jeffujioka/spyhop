@@ -66,10 +66,12 @@ export type ServerAgent = FleetAgent & { pane: Pane | null };
 // computer's. An agent's pane (`tabId:leafId`, its paneKey) is the server's terminal `orca
 // terminal list` lists in that tab and leaf; none when no listed terminal is, or the terminals
 // cannot be listed. The server lists at most 200 terminals by default; a list it cut short is
-// written to `log`, and the terminals past it give no pane. An agent's `stateSince` is its
-// `updatedAt`, which the server gives as epoch ms or as an ISO text: none when it gives neither.
-// An agent's folder is the path of its worktreeId; none when that is no absolute path, which no
-// folder is read at.
+// written to `log`, and the terminals past it give no pane and no title. An agent the server
+// lists without a title, as the paired server starfish-bs lists a live omp agent, takes the
+// title of its pane's terminal, which carries omp's session title: omp's link by title needs it
+// (src/core/session-link.js). An agent's `stateSince` is its `updatedAt`, which the server gives
+// as epoch ms or as an ISO text: none when it gives neither. An agent's folder is the path of its
+// worktreeId; none when that is no absolute path, which no folder is read at.
 export async function readServerAgents(
   run: Run,
   hostId: string,
@@ -78,22 +80,23 @@ export async function readServerAgents(
 ): Promise<ServerAgent[]> {
   const environment = ['--environment', host.name];
   try {
-    const [listed, handles] = await Promise.all([
+    const [listed, terminals] = await Promise.all([
       orca(run, ['agent', 'list', ...environment]).then(({ agents }) => (agents ?? []) as Listed[]),
       orca(run, ['terminal', 'list', ...environment])
         .then(({ terminals = [], truncated, totalCount }) => {
           if (truncated) log(`spyhop: ${host.name} listed ${terminals.length} of ${totalCount} terminals: agents in the others have no pane to focus`);
-          return new Map((terminals as Listed[]).map((terminal) => [`${terminal.tabId}:${terminal.leafId}`, terminal.handle as string]));
+          return new Map((terminals as Listed[]).map((terminal) => [`${terminal.tabId}:${terminal.leafId}`, terminal]));
         })
-        .catch(() => new Map<string, string>()),
+        .catch(() => new Map<string, Listed>()),
     ]);
     return listed.map((agent, n) => {
-      const handle = agent.paneKey && handles.get(agent.paneKey);
+      const terminal = agent.paneKey ? terminals.get(agent.paneKey) : undefined;
+      const handle = terminal?.handle as string | undefined;
       return {
         id: `${hostId}\0${agent.paneKey ?? n}`,
         agent: agent.agent ?? null,
         state: agent.state,
-        title: agent.title ?? null,
+        title: agent.title ?? terminal?.title ?? null,
         stateSince: stateSinceOf(agent.updatedAt),
         // `orcaSessionId` is Orca's id, not the harness's
         sessionId: null,

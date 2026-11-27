@@ -26,10 +26,11 @@ const SWITCH = 'terminal switch --environment jeff --terminal term-9 --json';
 const MAIN = serverAgent('/home/jeff/work/spyhop-main', 'main', 'tab1:leaf2');
 const LOST = serverAgent('/home/jeff/work/spyhop-lost', 'lost', 'tab7:leaf7');
 
-// The server's terminal `term-9`, in the tab `tab1` and its leaf `leaf2`.
+// The server's terminal `term-9`, in the tab `tab1` and its leaf `leaf2`, titled as omp titles the
+// pane of an untitled session: its mark and the folder's name, which the card's title drops.
 const TERMINALS = {
   terminals: [
-    { handle: 'term-9', ptyId: 'pty-9', orphaned: false, worktreeId: 'repo-spyhop::/home/jeff/work/spyhop-main', tabId: 'tab1', leafId: 'leaf2', title: 'omp', connected: true },
+    { handle: 'term-9', ptyId: 'pty-9', orphaned: false, worktreeId: 'repo-spyhop::/home/jeff/work/spyhop-main', tabId: 'tab1', leafId: 'leaf2', title: 'π - spyhop-main', connected: true },
   ],
   totalCount: 1,
   truncated: false,

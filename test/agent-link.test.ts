@@ -1,8 +1,10 @@
-// Which harness session a local Orca agent's card links to: the one Orca names by the agent's
+// Which harness session an Orca agent's card links to: the one Orca names by the agent's
 // sessionId, whatever session folder of the harness holds it; else, for omp, the session whose
 // title the agent's title contains, among those of the workspace folder and below it, and none
 // when no title matches; for Claude Code and opencode the newest of the workspace folder. Agents
-// on one session share a card, whose folder is the one the session records.
+// on one session share a card, whose folder is the one the session records. A paired server's
+// agent that Orca lists without a title takes its terminal's: the stand-ins of
+// test/helpers/stand-ins.ts play that server.
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { chmodSync, mkdirSync, utimesSync, writeFileSync } from 'node:fs';
@@ -13,8 +15,12 @@ import { sessionDirSlug as claudeSlug } from '../src/core/providers/claude-sourc
 import { NA, STAT_FIELDS } from '../src/core/providers/index.js';
 import { HEADS_PER_LISTING } from '../src/core/providers/omp-sources.js';
 import { run, type Run } from '../src/exec.ts';
+import { readServerAgents } from '../src/hosts.ts';
 import { NOW, agent, cardsOf, costOf, ompSessionDir, opencodeDatabase, refreshing, tokensOf, workspace } from './helpers/agent-cards.ts';
 import { fixtureText, tempHome } from './helpers/files.ts';
+import { JEFF_AGENT_LIST, JEFF_ENV, JEFF_TERMINAL_LIST } from './helpers/orca-answers.ts';
+import { serverAgent } from './helpers/server-agent.ts';
+import { answer, standIns } from './helpers/stand-ins.ts';
 
 // The ids of the omp fixtures' sessions (their `session` entries); omp names a session file
 // `<start time>_<id>.jsonl`. basic.jsonl logs $0.06, compacted.jsonl $0.05.
@@ -132,6 +138,33 @@ test('Session of a sub-folder found by title', async () => {
 
   assert.equal(costOf(view), COMPACTED.cost);
   assert.equal(formatHomePath(card.folder, home), '~/projects/boto');
+});
+
+test("Agent without a title takes its terminal's title", async () => {
+  const home = tempHome();
+  const remoteHome = tempHome();
+  const path = workspace(remoteHome, 'level5');
+  ompSession(remoteHome, path, BASIC, 1, 'Write the docs');
+  ompSession(remoteHome, path, COMPACTED, 30, 'SDK: Check pending level5 SDK refactor');
+  standIns({
+    homes: { jeff: remoteHome },
+    orca: {
+      [JEFF_AGENT_LIST]: answer({ agents: [serverAgent(path, 'main', 'tab1:leaf2')] }),
+      [JEFF_TERMINAL_LIST]: answer({
+        terminals: [
+          { handle: 'term-1', ptyId: 'pty-1', orphaned: false, tabId: 'tab1', leafId: 'leaf2', title: 'π - SDK: Check pending level5 SDK refactor - level5', connected: true },
+        ],
+        totalCount: 1,
+        truncated: false,
+      }),
+    },
+  });
+  const agents = await readServerAgents(run, `runtime:${JEFF_ENV}`, { name: 'jeff', alias: 'jeff' }, () => {});
+
+  const [{ view }] = await cardsOf(home, agents);
+
+  assert.equal(costOf(view), COMPACTED.cost);
+  assert.equal(view.title, 'SDK: Check pending level5 SDK refactor');
 });
 
 test('Session of a look-alike folder is not taken', async () => {

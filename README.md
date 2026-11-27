@@ -144,7 +144,8 @@ agent of any other harness gets a card whose figures all read `n/a`.
     the workspace folder is found too, while a session of a folder beside it whose name merely
     starts alike (`projects-old` beside `projects`) is not taken. An agent whose title contains
     no session's title links to none: every session figure on its card reads `n/a`, and it
-    never takes another session by its age.
+    never takes another session by its age. An agent a paired Orca server lists without a title
+    takes the title of the terminal of its pane, as that server lists it.
   - **Claude Code and opencode, the newest.** They write no title into their sessions, so the
     card links to the newest session of the workspace folder itself that no id names, never
     one of a sub-folder; agents left on one session share its card. A folder with no session
