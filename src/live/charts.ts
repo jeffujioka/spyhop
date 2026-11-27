@@ -7,11 +7,12 @@
 // HTML around it. Its colours come from the stylesheet (src/live/style.ts), by its classes and
 // attributes. Each of the four charts of the burn rate, context, tokens and cost has a round
 // scale (`scaleOf`), its faint lines in the SVG and their values laid over it in its plot, and
-// times of day under it (`clockMarks`, `timesRow`). A session chart groups neighbouring model
-// calls to the room it has (`groupPoints`), and is not drawn without a point.
+// times of day under it (`clockMarks`, `timesRow`), and a crosshair and a box of values at each
+// of its points, hidden until the page shows one (`hovers`). A session chart groups neighbouring
+// model calls to the room it has (`groupPoints`), and is not drawn without a point.
 // Pure: no DOM.
 
-import { formatClock, formatCost, formatCostPerHour, formatPercent, formatTokens, orNa } from '../core/format.js';
+import { formatClock, formatCost, formatCostPerHour, formatCount, formatPercent, formatTokens, orNa } from '../core/format.js';
 import { groupPoints, MINUTE_MS } from '../core/series.js';
 import { BURN_NAMED } from '../fleet.ts';
 import type { BurnCard, Num, Point, SessionView, SubAgentView } from '../protocol.ts';
@@ -30,6 +31,14 @@ const AGENT_HEIGHT = 10;
 const ROOM = 120;
 // Space kept inside a session chart's edges, so the dots of its first and last points show whole.
 const PAD = 4;
+// The compactions a box of the context chart gives at most, the newest, so that it stays within
+// the chart's height at the panel's narrowest; it says how many more there were.
+const BOX_COMPACTIONS = 2;
+// The characters, the ellipsis among them, a session's name keeps in a line of the burn rate
+// box, cut short there so the line stays one line at the panel's narrowest, 300 px, beside its
+// widest rate ($123.45/h): measured in headless Chrome, a title of words fits 12. The key under
+// the chart keeps the whole name.
+const BOX_NAME = 12;
 
 type Context = NonNullable<SessionView['context']>;
 type Tokens = NonNullable<SessionView['tokens']>;
@@ -97,8 +106,39 @@ function scaleOf(height: number, top: number, format: (v: number, step: number) 
 // reads $0.00 or the same as another: $0.002, $0.004.
 const usdLabel = (v: number, step: number) => `$${v.toFixed(Math.max(2, -Math.floor(Math.log10(step))))}`;
 
-// A chart's plot: its SVG `svg`, with the labels `labels` laid over it.
-const plot = (svg: string, labels: string) => `<div data-part="plot" class="plot">${svg}${labels}</div>`;
+// A chart's plot: its SVG `svg`, with `over` laid over it: its scale's labels and its boxes.
+const plot = (svg: string, over: string) => `<div data-part="plot" class="plot">${svg}${over}</div>`;
+
+// A line of a box: its label ('' for a value alone), its value and, for a layer, the class of
+// the layer's colour.
+type Row = [label: string, value: string, kind?: string];
+// A point of a chart as its crosshair and box show it: its time `t` and x, the y of each layer's
+// dot there, with the class of the layer's colour (none for a dot in the colour of its line), and
+// its box: its first line `head`, then `rows`.
+type Hover = { t: number; x: number; dots: { y: number; kind: string }[]; head: string; rows: Row[] };
+
+// The crosshairs and boxes of the points `points` of a chart `height` high, each hidden until
+// the page (src/panel.ts) shows the one of the point nearest the pointer: `crosses`, for the
+// SVG, a line across the chart at each point's x with its dots (`data-cross`, by the point's
+// time and x), and `boxes`, laid over the plot, the box of each (`data-box`, by the same time).
+function hovers(height: number, points: Hover[]) {
+  return {
+    crosses: points
+      .map(({ t, x, dots }) => {
+        const drawn = dots.map(({ y, kind }) => `<path data-dot${kind ? ` class="${kind}"` : ''} d="M${x} ${y} L${x} ${y}"/>`).join('');
+        return `<g data-cross data-t="${t}" data-x="${x}"><line x1="${x}" x2="${x}" y1="0" y2="${height}"/>${drawn}</g>`;
+      })
+      .join(''),
+    boxes: points
+      .map(({ t, head, rows }) => {
+        const lines = rows
+          .map(([label, value, kind]) => `<div>${kind ? `<i class="${kind}"></i>` : ''}${label ? `<span>${esc(label)}</span> ` : ''}<span class="num">${esc(value)}</span></div>`)
+          .join('');
+        return `<div data-box data-t="${t}"><div class="num">${esc(head)}</div>${lines}</div>`;
+      })
+      .join(''),
+  };
+}
 
 // The steps of the times under a chart, from the smallest, before whole days: 1, 2, 5, 10, 15 and
 // 30 minutes, then 1, 2, 3, 6 and 12 hours.
@@ -179,12 +219,15 @@ export function contextBar(percent: number, compactAt: Num): string {
 // latest percent, the peak, the compactions and the tokens left before the harness
 // compacts on its own. Without one (class `plain`), each point is the context in tokens, with no
 // percent and no level, under the latest tokens and the peak. Each compaction is marked at its
-// time, with its tokens before and after.
+// time, with its tokens before and after. A point's box gives its time, its percent with a
+// window, its tokens, and the compactions after the point before it and at or before it: the
+// newest BOX_COMPACTIONS, each with its tokens before and after, and how many more.
 export function contextChart(context: Context, room = ROOM): string {
   if (context.points.length === 0) return '';
   const { window, latest, peak, marks } = context;
   const shares = typeof window === 'number';
-  const points = groupValues(context.points, room).map(({ t, v }) => ({ t, v: shares ? v / window : v }));
+  const grouped = groupValues(context.points, room);
+  const points = grouped.map(({ t, v }) => ({ t, v: shares ? v / window : v }));
   const times = [...points.map(({ t }) => t), ...marks.map(({ t }) => t)];
   const x = timeScale(times);
   const scale = scaleOf(CONTEXT_HEIGHT, Math.max(shares ? 1 : 0, ...points.map(({ v }) => v)), shares ? formatPercent : formatTokens);
@@ -197,12 +240,31 @@ export function contextChart(context: Context, room = ROOM): string {
     .map(({ t, v }, i) => `<path data-t="${t}" data-v="${valueText(v)}"${shares ? ` class="lvl-${levelOf(v)}"` : ''} d="M${xy[i - 1] ?? xy[i]} L${xy[i]}"/>`)
     .join('');
   const notes = marks.map(({ t, before, after }) => `<span>compacted <span class="num">${formatClock(t)}</span> <span class="num">${orNa(before, formatTokens)} → ${orNa(after, formatTokens)}</span></span>`).join('');
+  // each line of a box's compactions a value alone, so that at the panel's narrowest it wraps at
+  // its spaces rather than cut its label short
+  const hover = hovers(
+    CONTEXT_HEIGHT,
+    points.map(({ t, v }, i) => {
+      const compacted = marks.filter((mark) => (i === 0 || mark.t > points[i - 1].t) && mark.t <= t);
+      return {
+        t,
+        x: x(t),
+        dots: [{ y: y(v), kind: shares ? `lvl-${levelOf(v)}` : '' }],
+        head: formatClock(t),
+        rows: [
+          ['', `${shares ? `${formatPercent(v)} · ` : ''}${formatCount(grouped[i].v)} tokens`],
+          ...compacted.slice(-BOX_COMPACTIONS).map(({ t: when, before, after }): Row => ['', `compacted ${formatClock(when)} ${formatCount(before)} → ${formatCount(after)}`]),
+          ...(compacted.length > BOX_COMPACTIONS ? [['', `+${compacted.length - BOX_COMPACTIONS} more compactions`] as Row] : []),
+        ],
+      };
+    }),
+  );
   const refKeys = shares ? '<div class="row key muted"><span><i class="lvl-hot"></i><span class="num">75%</span></span><span><i class="lvl-critical"></i><span class="num">90%</span></span></div>' : '';
   return card(
     'Context',
     '',
     `<div class="row headline">${contextHeadline(context)}</div>` +
-      plot(`${svgOf('context', CONTEXT_HEIGHT, shares ? '' : ' class="plain"')}${scale.lines}${refs}${lines}${line}</svg>`, scale.labels) +
+      plot(`${svgOf('context', CONTEXT_HEIGHT, shares ? '' : ' class="plain"')}${scale.lines}${refs}${lines}${line}${hover.crosses}</svg>`, scale.labels + hover.boxes) +
       `${clockMarks(times, x)}${refKeys}${notes ? `<div class="row marks muted">${notes}</div>` : ''}`,
   );
 }
@@ -220,10 +282,22 @@ function contextHeadline({ window, latest, peak, compactions, tokensLeft }: Cont
   );
 }
 
+// The kinds of tokens of a model call, by their class, and their names, in the order the tokens
+// chart stacks them, the output last.
+const TOKEN_KINDS = [
+  ['k-read', 'read from cache'],
+  ['k-write', 'written to cache'],
+  ['k-uncached', 'not cached'],
+  ['k-output', 'output'],
+] as const;
+
 // The tokens of each model call, in at most `room` bars, in their order: the prompt tokens read
 // from the cache, written to it and not cached, stacked, and the output tokens as a line on a
 // scale of their own; the session's cache hit rate beside the title, and under the chart a note
-// of the cold starts, none without one.
+// of the cold starts, none without one. Each bar carries how many calls it holds and, when that is
+// several, their span, from the last call of the bar before it to its own last call: `4 calls
+// between 12:01 and 12:09`, the first bar's `4 calls up to 12:09`. A bar's box begins with that
+// span, or the time of its one call, then gives each kind of its tokens.
 export function tokensChart(tokens: Tokens, room = ROOM): string {
   if (tokens.points.length === 0) return '';
   const points: Point[] = groupPoints(tokens.points, room);
@@ -232,9 +306,12 @@ export function tokensChart(tokens: Tokens, room = ROOM): string {
   const { y: promptScale, lines: scaleLines, labels: scaleLabels } = scaleOf(TOKENS_HEIGHT, Math.max(...points.map(({ read, write, uncached }) => read + write + uncached)), formatTokens);
   // the left of the bar `i`
   const barX = (i: number) => at(i * slot + (slot - width) / 2);
+  // the x of the middle of the bar `i`
+  const middle = (i: number) => at(barX(i) + width / 2);
   const outputScale = valueScale(TOKENS_HEIGHT, Math.max(...points.map(({ output }) => output)));
+  const heads = points.map(({ t, n }, i) => (n > 1 ? `${n} calls ${i === 0 ? 'up to' : `between ${formatClock(points[i - 1].t)} and`} ${formatClock(t)}` : formatClock(t)));
   const bars = points
-    .map(({ read, write, uncached, output }, i) => {
+    .map(({ n, read, write, uncached, output }, i) => {
       let below = 0;
       const rects = (
         [
@@ -250,18 +327,26 @@ export function tokensChart(tokens: Tokens, room = ROOM): string {
           return rect;
         })
         .join('');
-      return `<g data-bar data-read="${read}" data-write="${write}" data-uncached="${uncached}" data-output="${output}">${rects}</g>`;
+      const span = n > 1 ? ` data-span="${heads[i]}"` : '';
+      return `<g data-bar data-calls="${n}"${span} data-read="${read}" data-write="${write}" data-uncached="${uncached}" data-output="${output}">${rects}</g>`;
     })
     .join('');
+  const hover = hovers(
+    TOKENS_HEIGHT,
+    points.map(({ t, read, write, uncached, output }, i) => {
+      const values = [read, write, uncached, output];
+      const tops = [promptScale(read), promptScale(read + write), promptScale(read + write + uncached), outputScale(output)];
+      return {
+        t,
+        x: middle(i),
+        dots: TOKEN_KINDS.map(([kind], k) => ({ y: tops[k], kind })),
+        head: heads[i],
+        rows: TOKEN_KINDS.map(([kind, name], k): Row => [name, formatCount(values[k]), kind]),
+      };
+    }),
+  );
   const output = `<polyline data-output class="k-output" points="${points.map(({ output: value }, i) => `${at((i + 0.5) * slot)} ${outputScale(value)}`).join(' ')}"/>`;
-  const keys = [
-    ['k-read', 'read from cache'],
-    ['k-write', 'written to cache'],
-    ['k-uncached', 'not cached'],
-    ['k-output', 'output'],
-  ]
-    .map(([kind, name]) => `<span><i class="${kind}"></i>${name}</span>`)
-    .join('');
+  const keys = TOKEN_KINDS.map(([kind, name]) => `<span><i class="${kind}"></i>${name}</span>`).join('');
   const { cold } = tokens;
   const note = cold
     ? `<div data-part="cold-note" class="muted"><span class="num">${cold.count}</span> cold start${cold.count === 1 ? '' : 's'} · <span class="num">${formatTokens(cold.tokens)}</span> written again · <span class="num">${formatCost(cold.cost)}</span></div>`
@@ -270,9 +355,9 @@ export function tokensChart(tokens: Tokens, room = ROOM): string {
     'Tokens per model call',
     `<span class="muted">cache hit ${num('hitRate', formatPercent(tokens.hitRate))}</span>`,
     // the faint lines over the bars, so that a bar does not hide them
-    plot(`${svgOf('tokens', TOKENS_HEIGHT)}${bars}${scaleLines}${output}</svg>`, scaleLabels) +
+    plot(`${svgOf('tokens', TOKENS_HEIGHT)}${bars}${scaleLines}${output}${hover.crosses}</svg>`, scaleLabels + hover.boxes) +
       // the first bar and every n-th one after it, at most five, each with the time of its last call
-      timesRow(points.flatMap(({ t }, i) => (i % Math.ceil(points.length / 5) === 0 ? [{ t, x: barX(i) + width / 2 }] : []))) +
+      timesRow(points.flatMap(({ t }, i) => (i % Math.ceil(points.length / 5) === 0 ? [{ t, x: middle(i) }] : []))) +
       `<div class="row key muted">${keys}</div>${note}`,
   );
 }
@@ -288,7 +373,8 @@ export function costAt(cost: Cost, t: number): { own: Num; sub: Num } {
 // The cost of the session over time, in at most `room` points of time: a step line of what it
 // had spent on its own model calls and one of its sub-agents (`costAt`), each drawn only when
 // its series can be read and holds a point. The total, and where it comes from, are the session
-// screen's to write.
+// screen's to write. A point's box gives its time, what the session had spent then on its own
+// model calls and on its sub-agents, and their total.
 export function costChart(cost: Cost, room = ROOM): string {
   const layers = (['own', 'sub'] as const).filter((name) => {
     const series = cost[name];
@@ -310,15 +396,33 @@ export function costChart(cost: Cost, room = ROOM): string {
       return `<g data-layer="${name}" data-last="${valueText(values.at(-1)!)}"><path d="${steps}"/>${dots}</g>`;
     })
     .join('');
+  const hover = hovers(
+    COST_HEIGHT,
+    times.map((t, i) => {
+      const { own, sub } = spent[i];
+      return {
+        t,
+        x: x(t),
+        dots: layers.map((name) => ({ y: y(spent[i][name] as number), kind: `k-${name}` })),
+        head: formatClock(t),
+        rows: [
+          ['own', formatCost(own), 'k-own'],
+          ['sub-agents', formatCost(sub), 'k-sub'],
+          ['total', own === 'n/a' || sub === 'n/a' ? 'n/a' : formatCost(own + sub)],
+        ],
+      };
+    }),
+  );
   const last = costAt(cost, times.at(-1)!);
   const keys = layers.map((name) => `<span><i class="k-${name}"></i>${name === 'own' ? 'own turns' : 'sub-agents'} <span class="num">${formatCost(last[name])}</span></span>`).join('');
-  return card('Cost', '', `${plot(`${svgOf('cost', COST_HEIGHT)}${scale.lines}${drawn}</svg>`, scale.labels)}${clockMarks(times, x)}<div class="row key muted">${keys}</div>`);
+  return card('Cost', '', `${plot(`${svgOf('cost', COST_HEIGHT)}${scale.lines}${drawn}${hover.crosses}</svg>`, scale.labels + hover.boxes)}${clockMarks(times, x)}<div class="row key muted">${keys}</div>`);
 }
 
 // The burn rate of each minute of `layers`, oldest first, the newest at `endMs`, stacked: each
 // layer an area over those before it, a named session's in the colour of its place and the
 // others' in their own, with the minutes' times under it, under a key of each layer's name and
-// its newest rate. '' without a layer, or when they cannot be read.
+// its newest rate. A minute's box gives its time, the total rate and each layer's, a name longer
+// than BOX_NAME cut short with an ellipsis. '' without a layer, or when they cannot be read.
 export function burnChart(layers: BurnCard['layers'], endMs: number): string {
   if (layers === 'n/a' || layers.length === 0) return '';
   const count = layers[0].values.length;
@@ -333,11 +437,30 @@ export function burnChart(layers: BurnCard['layers'], endMs: number): string {
     values.forEach((v, i) => (below[i] += v));
     return `<g data-layer="${esc(name)}" data-last="${valueText(values.at(-1)!)}" class="${kinds[k]}"><path d="M${edge().join(' L')} L${lower.join(' L')} Z"/></g>`;
   });
+  const boxNames = layers.map(({ name }) => {
+    const chars = Array.from(name);
+    return chars.length > BOX_NAME ? `${chars.slice(0, BOX_NAME - 1).join('').trimEnd()}…` : name;
+  });
+  const hover = hovers(
+    BURN_HEIGHT,
+    times.map((t, i) => {
+      // each layer's dot on its top edge, over the layers before it
+      let total = 0;
+      const dots = layers.map(({ values }, k) => ({ y: scale.y((total += values[i])), kind: kinds[k] }));
+      return {
+        t,
+        x: x(t),
+        dots,
+        head: formatClock(t),
+        rows: [['total', formatCostPerHour(total)], ...layers.map(({ values }, k): Row => [boxNames[k], formatCostPerHour(values[i]), kinds[k]])],
+      };
+    }),
+  );
   const keys = layers
     .map(({ name, values }, k) => `<span><i class="${kinds[k]}"></i>${esc(name)} ${num('layerPerHour', formatCostPerHour(values.at(-1)!))}</span>`)
     .join('');
   // the faint lines over the areas, so that an area does not hide them
-  return `${plot(`${svgOf('burn', BURN_HEIGHT)}${drawn.join('')}${scale.lines}</svg>`, scale.labels)}${clockMarks(times, x)}<div class="row key muted">${keys}</div>`;
+  return `${plot(`${svgOf('burn', BURN_HEIGHT)}${drawn.join('')}${scale.lines}${hover.crosses}</svg>`, scale.labels + hover.boxes)}${clockMarks(times, x)}<div class="row key muted">${keys}</div>`;
 }
 
 // The bars of the sub-agents `agents`, in their order, each on its own line of one time axis that

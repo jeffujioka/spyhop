@@ -211,6 +211,17 @@ test('Tokens of grouped calls add up', async () => {
   );
 });
 
+test('Span of grouped calls from the bar before', async () => {
+  const calls = Array.from({ length: 400 }, (_, i) => ({ at: at('10:00') + i * 60_000, read: 1000, output: 10 }));
+  const session = await ompView({ calls });
+
+  const bars = parts(tokensChart(session.tokens!, 100), 'data-bar');
+  assert.equal(bars.length, 100);
+  assert.deepEqual(new Set(numbers(bars, 'data-calls')), new Set([4]));
+  assert.equal(attr(bars[0], 'data-span'), '4 calls up to 10:03');
+  assert.equal(attr(bars[1], 'data-span'), '4 calls between 10:03 and 10:07');
+});
+
 test('Context of grouped calls is their last value', async () => {
   const contexts = [100_000, 200_000, 300_000, 400_000];
   const session = await ompView({ calls: contexts.map((context, i) => ({ at: at(`10:0${i}`), uncached: context, output: 10, context })) });

@@ -1,10 +1,11 @@
 // The worker's answers the page tests give the stand-in for Orca (test/page/helpers/orca.ts), in
 // the shapes of the panel <-> worker contract (src/protocol.ts): the fleet of the cards a test
-// draws, in one group of this computer, and the session of each of its cards. A test changes its
-// fleet between two refreshes by changing what `fleet` returns. Each fleet answer's cards have
-// been in their state as many minutes as the request's number, so that a test sees which answer
-// the page drew last: the answer to the request 3 reads `3m` on each card.
-import type { AttentionRow, CardView, FleetAnswer, SessionAnswer, SessionView } from '../../../src/protocol.ts';
+// draws, in one group of this computer, with the burn rate card it gives, and the session of each
+// of its cards, with the charts it gives. A test changes its fleet between two refreshes by
+// changing what `fleet` returns. Each fleet answer's cards have been in their state as many
+// minutes as the request's number, so that a test sees which answer the page drew last: the
+// answer to the request 3 reads `3m` on each card.
+import type { AttentionRow, BurnCard, CardView, FleetAnswer, SessionAnswer, SessionView } from '../../../src/protocol.ts';
 import type { Answers } from './orca.ts';
 
 export const FIX = 'Fix the login bug';
@@ -39,24 +40,28 @@ export function card(title: string, fields: Partial<CardView> = {}): CardView {
 // The attention list's row of the blocked agent of `of`, blocked for a minute.
 export const blockedRow = (of: CardView): AttentionRow => ({ kind: 'state', card: of.id, title: of.title, state: 'blocked', sinceMs: MINUTE });
 
-// The fleet a test draws: its cards, and the rows of its attention list.
-export type Fleet = { cards: CardView[]; attention?: AttentionRow[] };
+// The fleet a test draws: its cards, the rows of its attention list, what it gives of the burn
+// rate card, and what it gives of the session of each card, by the card's id.
+export type Fleet = { cards: CardView[]; attention?: AttentionRow[]; burn?: Partial<BurnCard>; sessions?: Record<string, Partial<SessionView>> };
 
 // The answer to the fleet request `request`.
-export function fleetAnswer(request: number, { cards, attention = [] }: Fleet): FleetAnswer {
+function fleetAnswer(request: number, { cards, attention = [], burn }: Fleet): FleetAnswer {
   const counts: FleetAnswer['counts'] = {};
-  for (const { state } of cards) counts[state as keyof FleetAnswer['counts']] = (counts[state as keyof FleetAnswer['counts']] ?? 0) + 1;
+  for (const { state } of cards) {
+    const key = state as keyof FleetAnswer['counts'];
+    counts[key] = (counts[key] ?? 0) + 1;
+  }
   return {
     request,
     groups: [{ id: 'local', name: 'This computer', count: cards.length, cards: cards.map((drawn) => ({ ...drawn, stateSinceMs: request * MINUTE })) }],
     counts,
-    burn: { perHour: 'n/a', total: 'n/a', tokensPerMin: 'n/a', cacheHitRate: 'n/a', running: 'n/a', leftOut: 0, layers: 'n/a', endMs: request * MINUTE },
+    burn: { perHour: 'n/a', total: 'n/a', tokensPerMin: 'n/a', cacheHitRate: 'n/a', running: 'n/a', leftOut: 0, layers: 'n/a', endMs: request * MINUTE, ...burn },
     attention,
   };
 }
 
 // The session of `of`, read in part: its figures, models and Session section, with no chart.
-export function session(of: CardView): SessionView {
+function session(of: CardView): SessionView {
   return {
     card: of,
     linked: true,
@@ -73,13 +78,15 @@ export function session(of: CardView): SessionView {
 }
 
 // The worker's answers over the fleet `fleet` returns at each request: the fleet, and the session
-// of each of its cards (null, as for an agent Orca no longer lists, for a card not in it).
+// of each of its cards, with what the fleet gives of it (null, as for an agent Orca no longer
+// lists, for a card not in it).
 export function answersOf(fleet: () => Fleet): Answers {
   return {
     'spyhop.fleet': ({ request }): FleetAnswer => fleetAnswer(request as number, fleet()),
     'spyhop.session': ({ request, card: id }): SessionAnswer => {
-      const of = fleet().cards.find((found) => found.id === id);
-      return { request: request as number, session: of ? session(of) : null };
+      const { cards, sessions } = fleet();
+      const of = cards.find((found) => found.id === id);
+      return { request: request as number, session: of ? { ...session(of), ...sessions?.[of.id] } : null };
     },
   };
 }

@@ -5,13 +5,32 @@
 // focused control across a redraw of the same screen and starting a new screen at the top, as the
 // controller says. A click on a control (`data-press`), or Enter or Space on a focused card,
 // folded line or row of the attention list (a button by its role, `role="button"`), goes to the
-// controller, which also hears when the page is shown or hidden and when it goes.
+// controller, which also hears when the page is shown or hidden and when it goes. The pointer
+// over a chart shows its crosshair and box (src/live/charts.ts) at the point nearest it.
 import { createLive } from './live/controller.ts';
 import { STYLE } from './live/style.ts';
 
 const style = document.createElement('style');
 style.textContent = STYLE;
 document.head.append(style);
+
+// The crosshair shown, of the chart `chart` (its `data-chart`) at its point of the time `t`, with
+// that point's box; null when none is. A redraw of the same screen shows it again on the point of
+// the same time.
+let crosshair: { chart: string; t: number } | null = null;
+
+// Hides the crosshair and box shown, and shows those of `next`, the box in the half of the chart
+// its point is not in; none when `next` is null or its chart has no point of that time.
+function showCrosshair(next: typeof crosshair) {
+  document.querySelectorAll('[data-cross][data-on], [data-box][data-on]').forEach((shown) => shown.removeAttribute('data-on'));
+  const svg = next ? document.querySelector<SVGSVGElement>(`svg[data-chart="${next.chart}"]`) : null;
+  const cross = svg?.querySelector(`[data-cross][data-t="${next!.t}"]`);
+  const box = svg?.parentElement?.querySelector(`[data-box][data-t="${next!.t}"]`);
+  crosshair = cross && box ? next : null;
+  if (!cross || !box) return;
+  cross.setAttribute('data-on', '');
+  box.setAttribute('data-on', Number(cross.getAttribute('data-x')) < svg!.viewBox.baseVal.width / 2 ? 'right' : 'left');
+}
 
 const live = createLive(orca, (html, { sameScreen }) => {
   const scroller = document.scrollingElement;
@@ -29,6 +48,7 @@ const live = createLive(orca, (html, { sameScreen }) => {
   const kindName = focused?.hasAttribute('data-row') ? 'data-row' : focused?.hasAttribute('data-part') ? 'data-part' : null;
   const kind = kindName ? `[${kindName}="${CSS.escape(focused!.getAttribute(kindName)!)}"]` : '';
   document.body.innerHTML = html;
+  showCrosshair(sameScreen ? crosshair : null);
   if (selector) {
     const found = document.querySelector<HTMLElement>(selector + kind) ?? document.querySelector<HTMLElement>(`${selector}[data-part]`) ?? document.querySelector<HTMLElement>(selector);
     found?.focus({ preventScroll: true });
@@ -51,3 +71,22 @@ document.addEventListener('keydown', (event) => {
 document.addEventListener('visibilitychange', () => live.show(document.visibilityState === 'visible'));
 window.addEventListener('pagehide', () => live.close());
 live.show(document.visibilityState === 'visible');
+
+// The pointer over a chart's plot shows the crosshair of the point whose x is nearest it; leaving
+// the plot hides it. A plot that a redraw took out from under the pointer is not left.
+document.addEventListener('pointermove', (event) => {
+  const svg = (event.target as Element | null)?.closest('.plot')?.querySelector<SVGSVGElement>('svg[data-chart]');
+  if (!svg) return;
+  const { left, width } = svg.getBoundingClientRect();
+  const x = ((event.clientX - left) / width) * svg.viewBox.baseVal.width;
+  const off = (cross: Element) => Math.abs(Number(cross.getAttribute('data-x')) - x);
+  const nearest = Array.from(svg.querySelectorAll('[data-cross]')).reduce<Element | null>((best, cross) => (!best || off(cross) < off(best) ? cross : best), null);
+  if (!nearest) return;
+  const chart = svg.dataset.chart!;
+  const t = Number(nearest.getAttribute('data-t'));
+  if (crosshair?.chart !== chart || crosshair?.t !== t) showCrosshair({ chart, t });
+});
+document.addEventListener('pointerout', (event) => {
+  const plot = (event.target as Element | null)?.closest('.plot');
+  if (plot?.isConnected && !plot.contains(event.relatedTarget as Node | null)) showCrosshair(null);
+});

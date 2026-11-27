@@ -5,12 +5,13 @@
 // from the made-up origin PAGE_ORIGIN as Orca serves a panel: a page whose module is the panel's.
 // Chrome is looked for at CHROME, or at SPYHOP_CHROME when set (the page tests' own run without
 // Chrome sets it); without it, opening fails and names Google Chrome, so a run never passes by
-// skipping its tests. The browser closes once the test file's tests have run.
+// skipping its tests. A path the page asks for that the compiled page does not hold is answered
+// 404. Each page closes when its test ends, and the browser once the test file's tests have run.
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { after } from 'node:test';
+import { join, sep } from 'node:path';
+import { after, afterEach } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { type Browser, chromium, type Page } from 'playwright-core';
 import { type Answers, type Asked, standInOrca } from './orca.ts';
@@ -22,6 +23,11 @@ const ROOT = fileURLToPath(new URL('../../../', import.meta.url));
 
 let browser: Promise<Browser> | undefined;
 let compiled: string | undefined;
+// the pages of the test that runs, closed when it ends
+const pages: Page[] = [];
+afterEach(async () => {
+  await Promise.all(pages.splice(0).map((page) => page.close()));
+});
 after(async () => {
   await (await browser)?.close();
 });
@@ -46,10 +52,13 @@ export async function openPanel(answers: Answers): Promise<{ page: Page; request
   const out = compiledPage();
   browser ??= launch();
   const page = await (await browser).newPage();
+  pages.push(page);
   await page.route(`${PAGE_ORIGIN}/**`, (route) => {
     const path = new URL(route.request().url()).pathname;
     if (path === '/') return route.fulfill({ contentType: 'text/html', body: HTML });
-    return route.fulfill({ contentType: 'text/javascript', body: readFileSync(join(out, path)) });
+    const file = join(out, path);
+    if (!file.startsWith(out + sep) || !existsSync(file)) return route.fulfill({ status: 404 });
+    return route.fulfill({ contentType: 'text/javascript', body: readFileSync(file) });
   });
   const requests = await standInOrca(page, answers);
   await page.goto(`${PAGE_ORIGIN}/`);

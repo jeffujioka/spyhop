@@ -132,6 +132,22 @@ hours, or whole days, that keeps them to five; a span with no such mark gets its
 times. Under the tokens chart, whose bars are spaced per model call, at most five bars are
 marked, the first and every n-th one after it, each with the time of its last call.
 
+### Chart hover
+
+While the pointer is over one of those four charts, a line crosses the chart at the point
+nearest the pointer, with a dot on each layer there, and a box at the top of the chart, in the
+half the line is not in, gives the point's values; the chart's key and headline stay as they
+are, and the line and the box go when the pointer leaves the chart. The burn rate chart's box
+gives the minute, the total cost per hour and each layer's; the context chart's the time, the
+percent when there is a window, the tokens and the compactions since the point before, each
+with its tokens before and after, the newest two and how many more; the tokens chart's the
+call's time, or for a bar of several calls how many and their span (`4 calls between 12:01 and
+12:09`, the first bar's `4 calls up to 12:09`), and the tokens read from the cache, written to
+it, not cached and output; the cost chart's the time, the session's own cost, its sub-agents'
+and their total. A value that cannot be read reads n/a. A box stays within its chart from the
+panel's narrowest, 300 px: the burn rate box cuts a name over 12 characters short with `…`, the
+key keeping it whole. A refresh keeps the line and the box on the point of the same time.
+
 ## Harnesses
 
 Cards read the harnesses' own session files, read-only: omp, Claude Code and opencode (its

@@ -113,6 +113,22 @@ polyline[data-output], [data-layer] path { stroke: var(--k); stroke-width: 1.5; 
 .key { gap: 4px 10px; margin-top: 4px; }
 .key i { display: inline-block; width: 8px; height: 8px; margin-right: 4px; border-radius: 2px; background: var(--k); }
 .key i[class*="lvl-"] { background: var(--lvl); }
+/* A chart's crosshair and box, one per point, each hidden until the page shows the one at the
+   pointer (data-on): the line across the chart, a dot on each layer in the layer's colour, and
+   the box at the top of the chart, in the half (data-on="left|right") the line is not in. */
+[data-cross]:not([data-on]), [data-box]:not([data-on]) { display: none; }
+[data-cross] line { stroke: var(--orca-foreground); stroke-width: 1; opacity: .5; }
+[data-chart] [data-dot] { stroke: var(--k, var(--lvl, var(--spy-s1))); stroke-width: 7; }
+.plot > [data-box] {
+  position: absolute; top: 2px; z-index: 1; max-width: calc(50% - 4px); padding: 2px 5px;
+  font-size: 10px; line-height: 1.15; background: var(--orca-card);
+  color: var(--orca-card-foreground); border: 1px solid var(--orca-border); border-radius: var(--orca-radius);
+  pointer-events: none;
+}
+.plot > [data-box][data-on="left"] { left: 2px; }
+.plot > [data-box][data-on="right"] { right: 2px; }
+/* A box's lines wrap at their spaces, so that no label or value is cut off. */
+[data-box] i { display: inline-block; width: 8px; height: 8px; margin-right: 4px; border-radius: 2px; background: var(--k, var(--lvl)); }
 .marks { gap: 2px 10px; margin-top: 2px; }
 [data-part="cold-note"] { margin-top: 6px; }
 /* the session screen */
