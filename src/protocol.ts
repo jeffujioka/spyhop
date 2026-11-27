@@ -16,8 +16,9 @@ export type Num = number | 'n/a';
 // oldest first. `cost`: with the sub-agents' once every sub-agent transcript is read, the
 // session's own until then, while `reading` says how many of them are read (null once all are);
 // Claude Code's is the total it logs, which holds its sub-agents'. `subAgents`: how many there
-// are and how many run (n/a when the harness does not tell), null without any. `burnPerHour` is
-// not read yet: n/a.
+// are and how many run (n/a when the harness does not tell), null without any. `burnPerHour`: the
+// cost the session and its sub-agents logged in the last 10 minutes, per hour; n/a for a harness
+// that logs no cost per model call (Claude Code) and while sub-agents are being read.
 export type CardView = {
   id: string;
   state: string;
@@ -40,12 +41,51 @@ export type CardView = {
 // The cards of one Orca host (src/fleet.ts): `name` as Orca names the host, `count` its cards.
 export type HostGroup = { id: string; name: string; count: number; cards: CardView[] };
 
-// The fleet, its groups this computer's first, and the number of agents in each Orca state that
-// any agent is in; `request`: the panel's number of the request.
+// The fleet's burn rate card (src/fleet.ts), over the sessions shown and their sub-agents:
+// `perHour` the cost of the last 10 minutes per hour, of the harnesses that log a cost per model
+// call (omp, opencode); `total` the whole cost of every linked session; `tokensPerMin` over the
+// last 10 minutes and `cacheHitRate` over the last 60; `running` the sub-agents that run now;
+// `leftOut` the linked sessions the rate cannot count (Claude Code's); `layers` the rate at each
+// of the last 60 minutes, oldest first, USD per hour, of the BURN_NAMED sessions of the highest
+// cost over them, by title, then of the others as one layer `others`. Each sum is n/a while a
+// session it counts has a sub-agent transcript not read yet.
+export type BurnCard = {
+  perHour: Num;
+  total: Num;
+  tokensPerMin: Num;
+  cacheHitRate: Num;
+  running: Num;
+  leftOut: number;
+  layers: { name: string; values: number[] }[] | 'n/a';
+};
+
+// A row of the fleet's attention list (src/fleet.ts), which opens the screen of the card `card`,
+// titled `title`. `state`: an Orca agent blocked or waiting, `sinceMs` how long it has been so
+// (absent when Orca gives no time). `context`: a session at ATTENTION_CONTEXT percent of its window
+// or over, `percent` its share of the window, `tokensLeft` before the harness compacts on its own.
+// `cache`: an agent not working whose session's prompt cache goes cold in `coldInMs`, when the next
+// model call writes `rewriteTokens` of context to it again.
+export type AttentionRow = {
+  kind: 'state' | 'context' | 'cache';
+  card: string;
+  title: string;
+  state?: 'blocked' | 'waiting';
+  sinceMs?: number;
+  percent?: number;
+  tokensLeft?: Num;
+  coldInMs?: number;
+  rewriteTokens?: Num;
+};
+
+// The fleet, its groups this computer's first, the number of agents in each Orca state that any
+// agent is in, the burn rate card and the attention list; `request`: the panel's number of the
+// request.
 export type FleetAnswer = {
   request: number;
   groups: HostGroup[];
   counts: Partial<Record<'blocked' | 'waiting' | 'working' | 'done', number>>;
+  burn: BurnCard;
+  attention: AttentionRow[];
 };
 
 // One Orca host's group, posted during a fleet request as soon as that host's cards are built.
@@ -69,7 +109,9 @@ export type SubAgentView = { name: string; kind: string; model: string; task: st
 // on Claude Code, and while they are being read); `context`, `tokens`, `cost` and `tools`: the
 // series and tallies of the whole session file, null when it was not read whole or the card links
 // to none (`tools` too when the session made no tool call), `cost.sub` the sub-agents' cost over
-// time; `subAgents`: the session's sub-agents, in the order they started, null without any;
+// time, `cost.noCall` what the harness logged of the session's own cost without a model call
+// (null when nothing); `subAgents`: the session's sub-agents, in the order they started, null
+// without any;
 // `models`: the models of the session and its sub-agents by what the harness logs of them;
 // `session`: the Session section, `host` the Orca host's name when it is not this computer.
 export type SessionView = {
@@ -87,7 +129,7 @@ export type SessionView = {
     marks: { t: number; before: Num; after: Num }[];
   } | null;
   tokens: { points: Point[]; hitRate: Num; cold: { count: number; tokens: number; cost: Num } | null } | null;
-  cost: { harness: string; total: Num; perHour: Num; own: { t: number; v: number }[] | 'n/a'; sub: { t: number; v: number }[] | 'n/a' } | null;
+  cost: { harness: string; total: Num; perHour: Num; own: { t: number; v: number }[] | 'n/a'; noCall: number | null; sub: { t: number; v: number }[] | 'n/a' } | null;
   subAgents: { running: Num; total: number; cost: Num; agents: SubAgentView[] } | null;
   tools: { calls: number; failed: number; byTool: { name: string; calls: number; failed: number }[] } | null;
   models: { by: 'cost' | 'tokens'; rows: { model: string; main: boolean; subAgents: number; value: Num }[] };

@@ -93,6 +93,25 @@ test('Same list uses the cards built meanwhile', async () => {
   assert.equal(costOf(cards[0]), '$0.25');
 });
 
+// A guard of the worker's fast path, no scenario of the spec: Orca's title of a working omp agent
+// carries a spinner frame that changes every 100 ms, which is no change of the listed agents.
+test('A spinner frame in the title is the same list', async () => {
+  const home = useTempHome();
+  const remoteHome = tempHome();
+  const folder = join(remoteHome, 'work/boto');
+  const file = ompSession(remoteHome, folder, 0.1, 'Add quadrant mode');
+  const listed = (title: string) => [serverAgent(folder, 'main', 'tab1:leaf2', { title })];
+  jeffLists(remoteHome, listed('π ⠋ Add quadrant mode - boto'), 'term-9');
+  worker = await mountWorker(workerModule, { host: orcaHost(home, { workspaces: [] }) });
+  assert.equal(costOf(serverCardsOf(await refresh())[0]), '$0.10');
+
+  const { fleet, finds } = await refreshWithListHeld(remoteHome, listed('π ⠙ Add quadrant mode - boto'), 'term-9', dirname(dirname(file)));
+
+  // listed before the list answered, and not again after it: the cards built meanwhile are used
+  assert.equal(finds, 1);
+  assert.equal(serverCardsOf(fleet)[0].title, 'Add quadrant mode');
+});
+
 test('Changed list builds the cards again in the same refresh', async () => {
   const home = useTempHome();
   const remoteHome = tempHome();

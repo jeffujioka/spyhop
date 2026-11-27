@@ -11,8 +11,10 @@
 --                                   `bash` tool items, one of them `error`
 --   ses_legacy   /work/legacy       legacy only: cost .10
 --   ses_both     /work/both         in both: .44 in the current tables, .10 in the legacy ones
---   ses_logged   /work/logged       current only: rows of costs .30 and .14 below the session's
---                                   own `cost` of .50, as opencode logs some sessions
+--   ses_logged   /work/logged       current only: rows of costs 2.00 and .40 below the session's
+--                                   own `cost` of 2.50, as opencode logs some sessions
+--   ses_below    /work/below        current only: rows of costs .30 and .14 above the session's
+--                                   own `cost` of .40
 --   ses_twin     /work/twin         current only, and ses_twin_legacy /work/twin-legacy, legacy
 --                                   only: one session written in each generation's shape
 --     user          +0
@@ -96,11 +98,17 @@ INSERT INTO part VALUES ('q03', 'v03', 'ses_twin_legacy', 1790000060000, 1790000
 INSERT INTO part VALUES ('q04', 'v06', 'ses_twin_legacy', 1790000122000, 1790000122000, '{"type":"tool","callID":"t3","tool":"bash","state":{"status":"completed"}}');
 INSERT INTO part VALUES ('q05', 'v06', 'ses_twin_legacy', 1790000123000, 1790000123000, '{"type":"tool","callID":"t4","tool":"read","state":{"status":"completed"}}');
 
-INSERT INTO session_v2 VALUES ('ses_logged', 'prj', NULL, 's', '/work/logged', 't', '2.0.0', 0.50, NULL, NULL, 1790000000000, 1790000130000, NULL);
+INSERT INTO session_v2 VALUES ('ses_logged', 'prj', NULL, 's', '/work/logged', 't', '2.0.0', 2.50, NULL, NULL, 1790000000000, 1790000130000, NULL);
 INSERT INTO session_message VALUES ('g01', 'ses_logged', 'user', 1, 1790000000000, 1790000000000, '{"time":{"created":1790000000000},"text":"x"}');
-INSERT INTO session_message VALUES ('g02', 'ses_logged', 'assistant', 2, 1790000001000, 1790000005000, '{"time":{"created":1790000001000,"completed":1790000005000},"model":{"id":"claude-haiku-5.5","providerID":"p"},"content":[],"cost":0.30,"tokens":{"input":100,"output":50,"reasoning":10,"cache":{"read":0,"write":800}}}');
+INSERT INTO session_message VALUES ('g02', 'ses_logged', 'assistant', 2, 1790000001000, 1790000005000, '{"time":{"created":1790000001000,"completed":1790000005000},"model":{"id":"claude-haiku-5.5","providerID":"p"},"content":[],"cost":2.00,"tokens":{"input":100,"output":50,"reasoning":10,"cache":{"read":0,"write":800}}}');
 INSERT INTO session_message VALUES ('g03', 'ses_logged', 'user', 3, 1790000120000, 1790000120000, '{"time":{"created":1790000120000},"text":"x"}');
-INSERT INTO session_message VALUES ('g04', 'ses_logged', 'assistant', 4, 1790000121000, 1790000130000, '{"time":{"created":1790000121000,"completed":1790000130000},"model":{"id":"claude-haiku-5.5","providerID":"p"},"content":[],"cost":0.14,"tokens":{"input":20,"output":30,"reasoning":0,"cache":{"read":800,"write":100}}}');
+INSERT INTO session_message VALUES ('g04', 'ses_logged', 'assistant', 4, 1790000121000, 1790000130000, '{"time":{"created":1790000121000,"completed":1790000130000},"model":{"id":"claude-haiku-5.5","providerID":"p"},"content":[],"cost":0.40,"tokens":{"input":20,"output":30,"reasoning":0,"cache":{"read":800,"write":100}}}');
+
+INSERT INTO session_v2 VALUES ('ses_below', 'prj', NULL, 's', '/work/below', 't', '2.0.0', 0.40, NULL, NULL, 1790000000000, 1790000130000, NULL);
+INSERT INTO session_message VALUES ('n01', 'ses_below', 'user', 1, 1790000000000, 1790000000000, '{"time":{"created":1790000000000},"text":"x"}');
+INSERT INTO session_message VALUES ('n02', 'ses_below', 'assistant', 2, 1790000001000, 1790000005000, '{"time":{"created":1790000001000,"completed":1790000005000},"model":{"id":"claude-haiku-5.5","providerID":"p"},"content":[],"cost":0.30,"tokens":{"input":100,"output":50,"reasoning":10,"cache":{"read":0,"write":800}}}');
+INSERT INTO session_message VALUES ('n03', 'ses_below', 'user', 3, 1790000120000, 1790000120000, '{"time":{"created":1790000120000},"text":"x"}');
+INSERT INTO session_message VALUES ('n04', 'ses_below', 'assistant', 4, 1790000121000, 1790000130000, '{"time":{"created":1790000121000,"completed":1790000130000},"model":{"id":"claude-haiku-5.5","providerID":"p"},"content":[],"cost":0.14,"tokens":{"input":20,"output":30,"reasoning":0,"cache":{"read":800,"write":100}}}');
 
 INSERT INTO session_v2 VALUES ('ses_p', 'prj', NULL, 's', '/work/parent', 't', '2.0.0', 1.00, NULL, NULL, 1790000000000, 1790000300000, NULL);
 INSERT INTO session_message VALUES ('p01', 'ses_p', 'user', 1, 1790000000000, 1790000000000, '{"time":{"created":1790000000000},"text":"x"}');

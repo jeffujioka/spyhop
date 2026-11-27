@@ -229,6 +229,19 @@ test('Sub-agent and cache chips', async () => {
   assert.deepEqual(parts(claudeCard, 'data-chip', 'subagents').map(text), ['2 sub-agents']);
 });
 
+test('Chip of a Claude Code session with one sub-agent', async () => {
+  const { html } = await fleetOf([CLAUDE], {
+    prepare: (home) => {
+      const path = workspace(home, 'web-main');
+      claudeSession(home, path, { calls: [{ at: NOW - 30 * MINUTE, uncached: 1000 }], cost: 1 });
+      claudeSubAgent(home, path, 'a1', { calls: [{ at: NOW - 20 * MINUTE, uncached: 500 }], model: 'haiku' });
+    },
+  });
+
+  const [card] = parts(html, 'data-part', 'card');
+  assert.deepEqual(parts(card, 'data-chip', 'subagents').map(text), ['1 sub-agent']);
+});
+
 test('Card of a session without sub-agents', async () => {
   const { html } = await fleetOf([FIX], { prepare: ompWith([], [cached(NOW - 30 * MINUTE)]) });
 

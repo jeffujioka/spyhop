@@ -80,7 +80,8 @@
 //     none; `os` is the host's (`uname -s`);
 //   scanned()                              -> { changed, scans }
 //     optional, for a provider that scans session files: the finished scans of the files read,
-//     to keep for a later run, and whether any changed since it was last asked.
+//     and the kept scans of the files not read, to keep for a later run, and whether any
+//     changed since it was last asked.
 // Each may reject: the card then reads n/a (after a `folder` that rejects it keeps its figures
 // and the workspace folder; after a `subagents` that rejects it keeps the sub-agents of the
 // session's last listing that did not fail, or has none, null, without one). A provider

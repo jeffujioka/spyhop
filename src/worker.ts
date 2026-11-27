@@ -7,15 +7,19 @@
 // the others', a paired server's started on the agents it listed at the previous refresh, while
 // its lists load. Each card carries the time its agent entered its Orca state, as Orca gives it.
 // `spyhop.fleet` posts each host's group to the panel (`spyhop.group`) as soon as that host's
-// cards are built, and answers with the groups of them all (src/fleet.ts), which carry no series
-// of the session screen. `spyhop.session` builds the cards the same way, posts nothing, and
+// cards are built, and answers with the groups of them all, the burn rate card summed over every
+// card and the attention list (src/fleet.ts), which carry no series of the session screen.
+// `spyhop.session` builds
+// the cards the same way, posts nothing, and
 // answers with the session of the one card it asks for (src/session-detail.ts), or none when
 // Orca no longer lists its agent. The session reader's totals of each scanned session file are
 // kept in the plugin's storage (capability `storage:own`), and nothing else is: they are loaded
 // when the worker starts, which the first request waits for, and written at the end of a request
 // when a scan changed, at most once every 30 seconds, so a file scanned before is not scanned
-// again from its start. The CLI runs on each request, so only while the panel is open, and for
-// the palette command `spyhop.show`, which shows the panel. `spyhop.focus` focuses a card's pane
+// again from its start. Orca stores no value over 256 KiB, so they are split over the keys
+// `session-totals`, `session-totals.1` and on. The CLI runs on each request, so only while the
+// panel is open, and for the palette command `spyhop.show`, which shows the panel.
+// `spyhop.focus` focuses a card's pane
 // in this computer's Orca window: an agent on this computer or an SSH workspace by Orca's
 // `terminal.focus`, one on a paired Orca server by `orca terminal switch` to the server's
 // terminal; neither runs anything over ssh. A press that cannot focus answers `focused: false`
@@ -24,10 +28,10 @@ import { homedir } from 'node:os';
 import type { OrcaWorkerApi } from 'orca/worker';
 import { type BuiltCard, createAgentCards, type OrcaAgent, sameButStates } from './agent-cards.ts';
 import { cardView } from './card-view.ts';
-import { decodeScans, encodeScans } from './core/refresh.js';
+import { decodeScans, encodeScans, keptPartsOf } from './core/refresh.js';
 import { createTtlCache } from './core/ttl-cache.js';
 import { run } from './exec.ts';
-import { type FleetAgent, groupCards, LOCAL, stateCounts } from './fleet.ts';
+import { attentionRows, burnCard, type FleetAgent, groupCards, LOCAL, stateCounts } from './fleet.ts';
 import { orca as cli, type HostLists, listHosts, readServerAgents, type RemoteHost, remoteHosts, type ServerAgent } from './hosts.ts';
 import type { CardView, FleetAnswer, HostGroup, Pane, SessionAnswer } from './protocol.ts';
 import { sessionDetail } from './session-detail.ts';
@@ -35,9 +39,11 @@ import { sessionDetail } from './session-detail.ts';
 // How long Orca's lists of hosts and paired servers are kept: a server is paired seldom, its
 // agents change each refresh.
 const HOST_LISTS_TTL_MS = 60 * 1000;
-// The key of the plugin's storage that holds the kept scans (src/core/refresh.js), and the
-// least time between two writes of them.
+// The key of the plugin's storage that holds the first part of the kept scans
+// (src/core/refresh.js), the key of each later part, and the least time between two writes of
+// them.
 const KEPT_KEY = 'session-totals';
+const keptKey = (part: number) => (part === 0 ? KEPT_KEY : `${KEPT_KEY}.${part}`);
 const KEPT_WRITE_MS = 30 * 1000;
 
 export default function activate(orca: OrcaWorkerApi): void {
@@ -45,9 +51,12 @@ export default function activate(orca: OrcaWorkerApi): void {
   // The card builder, kept for the worker's life: it keeps the state of its session reads
   // between builds, which start from the scans the storage holds. A storage that cannot be read
   // (the capability not granted), or holds anything but this version's kept scans, gives none.
-  const starting = orca.storage
-    .get(KEPT_KEY)
-    .then(decodeScans, () => [])
+  const starting = (async () => {
+    const first = await orca.storage.get(KEPT_KEY);
+    const later = await Promise.all(Array.from({ length: keptPartsOf(first) - 1 }, (_, i) => orca.storage.get(keptKey(i + 1))));
+    return decodeScans([first, ...later]);
+  })()
+    .catch(() => [])
     .then((kept) => createAgentCards({ run, home, kept }));
   type Cards = Awaited<typeof starting>;
   // when the kept scans were last written, or tried to, and whether a scan has changed that no
@@ -82,12 +91,16 @@ export default function activate(orca: OrcaWorkerApi): void {
 
   // Orca gives a plugin no call that shows its own panel; its CLI does, by the key Orca installed
   // the plugin under (`local.spyhop` from a folder, `<owner>.spyhop` from Git): the listed one
-  // that contributes the panel `spyhop`. The command runs in its worker, so it is enabled.
+  // that contributes the panel `spyhop` and is not disabled. Both installs can be listed at once,
+  // but they share the key binding, so Orca runs only one of them, the one this worker is in,
+  // and refuses to open a panel of the disabled one.
   orca.commands.register('spyhop.show', async () => {
     const { plugins } = await cli(run, ['plugin', 'list']);
     const self = plugins.find(
-      (plugin: { pluginKey: string; panels?: { id: string }[] }) =>
-        plugin.pluginKey.endsWith('.spyhop') && plugin.panels?.some((panel) => panel.id === 'spyhop'),
+      (plugin: { pluginKey: string; status: string; panels?: { id: string }[] }) =>
+        plugin.pluginKey.endsWith('.spyhop') &&
+        plugin.status !== 'disabled' &&
+        plugin.panels?.some((panel) => panel.id === 'spyhop'),
     );
     if (!self) throw new Error('Orca lists no spyhop plugin');
     await cli(run, ['plugin', 'open', self.pluginKey, '--panel', 'spyhop']);
@@ -160,7 +173,12 @@ export default function activate(orca: OrcaWorkerApi): void {
       Promise.all([...remote].filter(([hostId]) => hostId.startsWith('runtime:')).map(([hostId, host]) => posted(serverCards(cards, hostId, host)))),
     ]);
     // The kept scans are written when one changed and the last write, or try, is 30 s old. A
-    // write that fails is tried again by the first refresh 30 s later, and fails no request.
+    // write that fails is tried again by the first refresh 30 s later, and fails no request. The
+    // first part, which names how many there are, is written last, so that a write that fails
+    // midway leaves the earlier first part; the parts it names then mix two writes, each scan
+    // of them a finished scan of its file, which a reader safely goes on from. The later parts
+    // of an earlier, larger write are removed once the new ones are written; a removal that
+    // fails is logged as such, for the totals are kept, and the parts are left to a later write.
     const now = Date.now();
     if (now - keptAt >= KEPT_WRITE_MS) {
       const { changed, scans } = cards.scanned();
@@ -168,8 +186,15 @@ export default function activate(orca: OrcaWorkerApi): void {
       if (unkept) {
         keptAt = now;
         try {
-          await orca.storage.set(KEPT_KEY, encodeScans(scans));
+          const parts = encodeScans(scans);
+          for (let part = parts.length - 1; part >= 0; part--) await orca.storage.set(keptKey(part), parts[part]);
           unkept = false;
+          try {
+            const left = (await orca.storage.keys()).filter((key) => key.startsWith(`${KEPT_KEY}.`) && Number(key.slice(KEPT_KEY.length + 1)) >= parts.length);
+            for (const key of left) await orca.storage.delete(key);
+          } catch (error) {
+            orca.log(`spyhop: cannot remove the old session-totals keys: ${(error as Error).message}`);
+          }
         } catch (error) {
           orca.log(`spyhop: cannot keep the session totals: ${(error as Error).message}`);
         }
@@ -185,7 +210,7 @@ export default function activate(orca: OrcaWorkerApi): void {
   }
 
   orca.panels.handle('spyhop.fleet', async ({ request }): Promise<FleetAnswer> => {
-    const { agents, views, names } = await build((group) => {
+    const { agents, views, cards, names } = await build((group) => {
       // a post Orca refuses (too large, too many) leaves the answer to draw the group
       try {
         orca.panels.post('spyhop.group', { request, group });
@@ -193,7 +218,14 @@ export default function activate(orca: OrcaWorkerApi): void {
         orca.log(`spyhop: cannot post the group of ${group.name}: ${(error as Error).message}`);
       }
     });
-    return { request, groups: groupCards(agents, [...views.values()], names), counts: stateCounts(agents) };
+    const now = Date.now();
+    return {
+      request,
+      groups: groupCards(agents, [...views.values()], names),
+      counts: stateCounts(agents),
+      burn: burnCard(cards, now),
+      attention: attentionRows(agents, cards, now),
+    };
   });
 
   orca.panels.handle('spyhop.session', async ({ request, card: id }): Promise<SessionAnswer> => {

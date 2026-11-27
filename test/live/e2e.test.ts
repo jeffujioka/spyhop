@@ -79,7 +79,8 @@ test('a session with sub-agents end to end', async () => {
     orca: DEVBOX_LISTS,
     prepare: (home) => {
       path = workspace(home, 'infra-main');
-      ompSession(remote, path, { title: 'Deploy the cluster', calls: [spent(1, NOW - 30 * minute)] });
+      // the session compacted once, which omp logs without a cost of its own
+      ompSession(remote, path, { title: 'Deploy the cluster', calls: [spent(1, NOW - 30 * minute)], compactions: [{ at: NOW - 25 * minute, before: 600_000, after: 100_000 }] });
       ompSubAgent(remote, path, 'Impl1', { init: { at: NOW - 20 * minute, kind: 'implementer' }, calls: [spent(0.5, NOW - 18 * minute)] });
       ompSubAgent(remote, path, 'Impl1/Rev1', { init: { at: NOW - 15 * minute, kind: 'reviewer' }, calls: [spent(0.25, NOW - 12 * minute)] });
       writeScout(scout);
@@ -89,7 +90,8 @@ test('a session with sub-agents end to end', async () => {
   // the fleet card, once every sub-agent transcript is read: its cost with all three, its chips
   const cardOf = () => parts(opened.html(), 'data-part', 'card')[0] ?? '';
   await until(() => figure(cardOf(), 'cost') === '$1.95');
-  assert.deepEqual(parts(cardOf(), 'data-chip', 'subagents').map(text), ['1 sub-agents running', '3 in total']);
+  assert.deepEqual(parts(cardOf(), 'data-chip', 'subagents').map(text), ['1 sub-agent running', '3 in total']);
+  assert.match(text(parts(opened.html(), 'data-part', 'burn')[0]), /\b1 sub-agent running/);
 
   await open(opened, 'Deploy the cluster');
 
@@ -97,6 +99,8 @@ test('a session with sub-agents end to end', async () => {
   assert.equal(parts(section, 'class', 'row item').length, 1);
   assert.equal(parts(section, 'data-agent').length, 3);
   assert.equal(figure(opened.html(), 'cost'), '$1.95');
+  // omp's total is its model calls' costs, so the cost card notes nothing logged without one
+  assert.deepEqual(parts(opened.html(), 'data-figure', 'noCall'), []);
 
   // the running sub-agent logs 0.10 USD more, then the refresh's 2 s
   writeScout([...scout, spent(0.1, NOW - minute)]);

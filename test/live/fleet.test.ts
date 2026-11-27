@@ -4,14 +4,16 @@
 // read through the markup's conventions (test/helpers/markup.ts). And the stylesheet's fonts.
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdirSync } from 'node:fs';
+import { chmodSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { formatAge, formatCount } from '../../src/core/format.js';
+import { readingNote } from '../../src/live/fleet.ts';
 import { STYLE } from '../../src/live/style.ts';
 import { NOW, workspace } from '../helpers/agent-cards.ts';
-import { claudeCalls, fleetOf, ompAutocompacts, ompCalls, ompWindow } from '../helpers/live.ts';
+import { claudeCalls, fleetOf, folderOf, ompAutocompacts, ompCalls, ompSession, ompSubAgent, ompWindow, spent } from '../helpers/live.ts';
 import { figure, parts, text } from '../helpers/markup.ts';
+import type { HostWorkspace } from '../helpers/orca-host.ts';
 
 // `count` contexts rising to `last`, the context after the last call.
 const rising = (count: number, last: number) => Array.from({ length: count }, (_, i) => Math.round((last * (i + 1)) / count));
@@ -82,6 +84,32 @@ test('Done agent as one line', async () => {
   // a control the keyboard reaches and presses, as a <button> is
   assert.match(folded[0], /^<div [^>]*role="button" tabindex="0"[^>]*data-press="open:/);
   for (const part of ['bar', 'burn']) assert.deepEqual(parts(folded[0], 'data-part', part), []);
+});
+
+test('Done agent whose sub-agents are being read', async () => {
+  const done: HostWorkspace = { project: 'api', name: 'main', agents: ['done'], title: 'π - Review the tunnel' };
+  let unread = '';
+  try {
+    const { html } = await fleetOf([done], {
+      prepare: (home) => {
+        const path = folderOf(home, done);
+        ompSession(home, path, { title: 'Review the tunnel', calls: [spent(1.2)] });
+        const transcripts = ['Impl1', 'Impl2', 'Impl3'].map((name) => ompSubAgent(home, path, name, { calls: [spent(0.3)] }));
+        // a transcript the read-only programs cannot read is not read yet
+        unread = transcripts[2];
+        chmodSync(unread, 0o000);
+      },
+    });
+
+    const [line] = parts(html, 'data-part', 'folded');
+    // where the cost goes, last on the line, its numbers in the font of figures
+    assert.match(text(line), /reading 2 \/ 3$/);
+    assert.match(line, /reading <span class="num">2<\/span>\/<span class="num">3<\/span><\/span><\/div>$/);
+    assert.equal(figure(line, 'cost'), undefined);
+    assert.doesNotMatch(text(line), /\$1\.20/);
+  } finally {
+    if (unread) chmodSync(unread, 0o644);
+  }
 });
 
 test('Card of a working omp agent', async () => {
@@ -214,6 +242,12 @@ test('a title with markup is shown as text', async () => {
 test('ages and counts as the panel writes them', () => {
   assert.deepEqual([45_000, 180_000, 7_500_000, 'n/a' as const].map(formatAge), ['45s', '3m', '2h 05m', 'n/a']);
   assert.deepEqual([1206, 7, 1_000_000, 'n/a' as const].map(formatCount), ['1,206', '7', '1,000,000', 'n/a']);
+});
+
+// A guard of a text the spec leaves open, no scenario of it: the note of the sub-agents being
+// read names one sub-agent in the singular.
+test('the reading note of one sub-agent', () => {
+  assert.deepEqual([{ read: 0, total: 1 }, { read: 1, total: 2 }].map((reading) => text(readingNote(reading))), ['reading 0 of 1 sub-agent', 'reading 1 of 2 sub-agents']);
 });
 
 // A guard of a format the spec leaves open, no scenario of it: a folded line without a window

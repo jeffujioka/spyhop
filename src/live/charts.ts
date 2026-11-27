@@ -1,5 +1,6 @@
-// The charts of the live panel, as markup: on a card, the spark line of a session's recent
-// contexts and the bar of its context; on the session screen, the context over the whole session,
+// The charts of the live panel, as markup: on the fleet screen, the burn rate of the last hour
+// stacked by session; on a card, the spark line of a session's recent contexts and the bar of its
+// context; on the session screen, the context over the whole session,
 // the tokens of each model call, the cost, and the bars of its sub-agents on one time axis. A
 // chart is an SVG as wide as its box (`width="100%"` over a `viewBox` 360 wide, stretched with
 // `preserveAspectRatio="none"`) with no text of its own: its headline, times, labels and notes are
@@ -8,9 +9,10 @@
 // and is not drawn without a point.
 // Pure: no DOM.
 
-import { formatClock, formatCost, formatPercent, formatTokens, orNa } from '../core/format.js';
+import { formatClock, formatCost, formatCostPerHour, formatPercent, formatTokens, orNa } from '../core/format.js';
 import { groupPoints } from '../core/series.js';
-import type { Num, Point, SessionView, SubAgentView } from '../protocol.ts';
+import { BURN_NAMED } from '../fleet.ts';
+import type { BurnCard, Num, Point, SessionView, SubAgentView } from '../protocol.ts';
 import { esc, num } from './html.ts';
 import { levelOf } from './levels.ts';
 
@@ -20,6 +22,7 @@ const SPARK_HEIGHT = 40;
 const CONTEXT_HEIGHT = 120;
 const TOKENS_HEIGHT = 120;
 const COST_HEIGHT = 100;
+const BURN_HEIGHT = 80;
 const AGENT_HEIGHT = 10;
 // Room of a session chart, in bars or points, unless its caller gives another.
 const ROOM = 120;
@@ -233,6 +236,27 @@ export function costChart(cost: Cost, room = ROOM): string {
   const last = costAt(cost, times.at(-1)!);
   const keys = layers.map((name) => `<span><i class="k-${name}"></i>${name === 'own' ? 'own turns' : 'sub-agents'} <span class="num">${formatCost(last[name])}</span></span>`).join('');
   return card('Cost', '', `${svgOf('cost', COST_HEIGHT)}${drawn}</svg>${axis(times)}<div class="row key muted">${keys}</div>`);
+}
+
+// The burn rate of each minute of `layers`, oldest first, stacked: each layer an area over those
+// before it, a named session's in the colour of its place and the others' in their own, under
+// a key of each layer's name and its newest rate. '' without a layer, or when they cannot be read.
+export function burnChart(layers: BurnCard['layers']): string {
+  if (layers === 'n/a' || layers.length === 0) return '';
+  const count = layers[0].values.length;
+  const below = Array.from({ length: count }, () => 0);
+  const y = valueScale(BURN_HEIGHT, Math.max(...below.map((_, i) => layers.reduce((sum, { values }) => sum + values[i], 0))));
+  const edge = () => below.map((v, i) => `${at(count > 1 ? PAD + (i / (count - 1)) * (WIDTH - 2 * PAD) : WIDTH / 2)} ${y(v)}`);
+  const kinds = layers.map((_, k) => (k < BURN_NAMED ? `k-s${k + 1}` : 'k-others'));
+  const drawn = layers.map(({ name, values }, k) => {
+    const lower = edge().reverse();
+    values.forEach((v, i) => (below[i] += v));
+    return `<g data-layer="${esc(name)}" data-last="${valueText(values.at(-1)!)}" class="${kinds[k]}"><path d="M${edge().join(' L')} L${lower.join(' L')} Z"/></g>`;
+  });
+  const keys = layers
+    .map(({ name, values }, k) => `<span><i class="${kinds[k]}"></i>${esc(name)} ${num('layerPerHour', formatCostPerHour(values.at(-1)!))}</span>`)
+    .join('');
+  return `${svgOf('burn', BURN_HEIGHT)}${drawn.join('')}</svg><div class="row key muted">${keys}</div>`;
 }
 
 // The bars of the sub-agents `agents`, in their order, each on its own line of one time axis that

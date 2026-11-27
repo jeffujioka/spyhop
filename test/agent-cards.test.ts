@@ -107,6 +107,20 @@ test('omp title prefixes dropped', async () => {
   assert.deepEqual(views.map((view) => view.title), ['Write the docs', 'Fix the login bug']);
 });
 
+test("Orca's title marks dropped", async () => {
+  const home = tempHome();
+  const path = workspace(home, 'boto');
+  const agents = [
+    agent({ id: 't1', agent: 'omp', title: 'π ⠿ Add quadrant mode - boto', path }),
+    agent({ id: 't2', agent: 'omp', state: 'blocked', title: 'π ! Fix the login bug - boto', path }),
+    agent({ id: 't3', agent: 'omp', state: 'done', title: 'OMP > Write the docs', path }),
+  ];
+
+  const views = (await cardsOf(home, agents)).map(({ view }) => view);
+
+  assert.deepEqual(views.map((view) => view.title), ['Add quadrant mode', 'Fix the login bug', 'Write the docs']);
+});
+
 test('Git asked again only after GIT_TTL_MS', async () => {
   const home = tempHome();
   const path = workspace(home, 'demo');

@@ -18,7 +18,7 @@
 
 import { add, parseEntries, tally } from './jsonl.js';
 import { burnRate, cacheRate, isNumber, tokenCount, wholeSession } from './shared.js';
-import { addCall, detailOf, entryOf, newSeries, pushRecent, retractLastCall, toolAnswered, toolCalled } from '../series.js';
+import { addCall, addMinute, detailOf, entryOf, newSeries, pushRecent, retractLastCall, toolAnswered, toolCalled } from '../series.js';
 
 // A user entry that carries a tool's result continues a turn; any other (not meta) one starts it.
 const isPrompt = ({ message, isMeta }) =>
@@ -76,9 +76,10 @@ function emptyState() {
     recentId: undefined,
     // the session's own responses: how many, their bounded series (src/core/series.js), the
     // compact boundaries with their tokens before and after, the cold starts, the tool uses by
-    // tool with the ids of those not answered yet, and the tokens by model. Claude Code logs no
-    // cost of a response, so no cost is kept. `last` is what the newest response added, to take
-    // it back when a later block of the response replaces it.
+    // tool with the ids of those not answered yet, the tokens by model and the sums of the newest
+    // minutes (see `addMinute`). Claude Code logs no cost of a response, so no cost is kept.
+    // `last` is what the newest response added, to take it back when a later block of the
+    // response replaces it.
     calls: 0,
     series: newSeries(),
     marks: [],
@@ -86,6 +87,7 @@ function emptyState() {
     tools: {},
     pending: new Map(),
     models: {},
+    minutes: [],
     last: undefined,
   };
 }
@@ -108,10 +110,12 @@ function credit(state, parts, sign) {
 }
 
 // Counts the response `last` (`{ id, call, cold, model, tokens }`) in the calls, the series, the
-// cold starts and the tokens by model; `sign` -1 takes it back out, which only the newest one can.
+// minutes, the cold starts and the tokens by model; `sign` -1 takes it back out, which only the
+// newest one can.
 function count(state, last, sign) {
   if (sign > 0) addCall(state.series, last.call);
   else retractLastCall(state.series, last.call);
+  addMinute(state.minutes, last.call.t, { ...last.call, tokens: last.tokens }, sign);
   state.calls += sign;
   if (last.cold) {
     state.cold.count += sign;

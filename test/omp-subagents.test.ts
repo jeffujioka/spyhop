@@ -2,7 +2,7 @@
 // one listing and read like session files, by the real read-only programs through the real
 // runner, over a temporary home folder.
 import assert from 'node:assert/strict';
-import { renameSync, utimesSync, writeFileSync } from 'node:fs';
+import { readFileSync, renameSync, utimesSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { test } from 'node:test';
 import { SUBAGENT_READS_PER_REFRESH } from '../src/core/providers/session-files.js';
@@ -15,9 +15,22 @@ const MODEL = 'github-copilot/claude-opus-5.5-1m';
 const sessionInit = (kind: string, task: string) =>
   `${JSON.stringify({ type: 'session_init', agent: kind, readOnly: false, resolvedModel: MODEL, spawns: '*', task })}\n`;
 
-// A model call at `timestamp` that logged 0.10 USD, as a line of a transcript.
+// A model call at `timestamp` that logged 0.10 USD and ended its turn (`stopReason` `stop`), as
+// a line of a transcript.
 const callAt = (timestamp: string) =>
-  `${JSON.stringify({ type: 'message', timestamp, message: { role: 'assistant', usage: { totalTokens: 100, cost: { total: 0.1 } } } })}\n`;
+  `${JSON.stringify({ type: 'message', timestamp, message: { role: 'assistant', stopReason: 'stop', usage: { totalTokens: 100, cost: { total: 0.1 } } } })}\n`;
+
+// A model call at `timestamp` that logged 0.10 USD and called the tool `read`, which leaves its
+// turn open, as a line of a transcript.
+const toolCallAt = (timestamp: string) =>
+  `${JSON.stringify({ type: 'message', timestamp, message: { role: 'assistant', stopReason: 'toolUse', usage: { totalTokens: 100, cost: { total: 0.1 } }, content: [{ type: 'toolCall', id: 't1', name: 'read' }] } })}\n`;
+
+// The answer of the tool call `toolCallAt` made, at `timestamp`, as a line of a transcript.
+const toolResultAt = (timestamp: string) =>
+  `${JSON.stringify({ type: 'message', timestamp, message: { role: 'toolResult', toolCallId: 't1', isError: false } })}\n`;
+
+// A message omp gives a sub-agent outside a model call, at `timestamp`, as a line of a transcript.
+const customAt = (timestamp: string) => `${JSON.stringify({ type: 'custom_message', timestamp, customType: 'irc', content: 'Go on.' })}\n`;
 
 // The omp session of the folder `path` under `home`, in the file the scenario names; its id is
 // `01a21357`.
@@ -31,12 +44,15 @@ function namedSession(home: string, path: string) {
 test('Folder beside an omp session file', async () => {
   const home = tempHome();
   const path = workspace(home, 'demo');
+  // the session's `session` entry is at 11:58
   const file = namedSession(home, path);
   // larger than the window a refresh reads from a file's end: its kind and model are read on
   // the first refresh all the same
-  subAgentFile(file, 'Impl1', [sessionInit('task', 'Build the parser'), callAt('2026-11-25T11:10:00.000Z'), PADDING]);
-  subAgentFile(file, 'Rev1', [sessionInit('reviewer', 'Review the parser\nof task 1'), callAt('2026-11-25T11:20:00.000Z')], { running: true });
+  subAgentFile(file, 'Impl1', [sessionInit('task', 'Build the parser'), PADDING, callAt('2026-11-25T11:59:00.000Z')]);
+  subAgentFile(file, 'Rev1', [sessionInit('reviewer', 'Review the parser\nof task 1'), toolCallAt('2026-11-25T11:59:10.000Z'), toolResultAt('2026-11-25T11:59:20.000Z')]);
   const folder = file.replace(/\.jsonl$/, '');
+  // the lock file tells nothing: Impl1 has ended
+  writeFileSync(join(folder, '.Impl1.jsonl.lock.os'), '');
   writeFileSync(join(folder, 'Impl1.md'), 'Done.\n');
   writeFileSync(join(folder, 'changes.jsonl'), `${JSON.stringify({ agent: 'Impl1', at: NOW, path: 'a.ts', tool: 'edit', type: 'edit' })}\n`);
 
@@ -52,6 +68,30 @@ test('Folder beside an omp session file', async () => {
     [null, 'Review the parser'],
   );
   assert.deepEqual([card.subAgents!.total, card.subAgents!.read], [2, 2]);
+});
+
+test('Revived sub-agent', async () => {
+  const home = tempHome();
+  const path = workspace(home, 'demo');
+  const file = namedSession(home, path);
+  subAgentFile(file, 'Impl1', [sessionInit('task', 'Build'), callAt('2026-11-25T11:59:00.000Z'), customAt('2026-11-25T11:59:30.000Z')]);
+
+  const [{ card }] = await cardsOf(home, [agent({ sessionId: '01a21357', path })]);
+
+  assert.deepEqual(card.subAgents!.agents.map(({ name, running }) => [name, running]), [['Impl1', true]]);
+});
+
+test('Copy from a continued session', async () => {
+  const home = tempHome();
+  const path = workspace(home, 'demo');
+  const file = namedSession(home, path);
+  // the session's `session` entry at 02:38:33
+  writeFileSync(file, readFileSync(file, 'utf8').replace('"timestamp":"2026-11-25T11:58:00.000Z"', '"timestamp":"2026-11-25T02:38:33.000Z"'));
+  subAgentFile(file, 'Impl1', [sessionInit('task', 'Build'), toolCallAt('2026-11-25T02:38:16.000Z')]);
+
+  const [{ card }] = await cardsOf(home, [agent({ sessionId: '01a21357', path })]);
+
+  assert.deepEqual(card.subAgents!.agents.map(({ name, running }) => [name, running]), [['Impl1', false]]);
 });
 
 test('a session without a sub-agent folder has no sub-agents', async () => {

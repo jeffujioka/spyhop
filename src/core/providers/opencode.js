@@ -16,7 +16,7 @@
 // them always gives its series (src/core/series.js), once its tool calls are read too.
 
 import { burnRate, isNumber, tokenCount } from './shared.js';
-import { addCall, addCost, detailOf, entryOf, newSeries, pushRecent } from '../series.js';
+import { addCall, addCost, addMinute, detailOf, entryOf, newSeries, pushRecent } from '../series.js';
 
 function parseSession({ messages, compactions, tools, loggedCost, sources }) {
   const rows = Array.isArray(messages) ? messages : [];
@@ -174,6 +174,7 @@ function detail(session) {
   const series = newSeries();
   const cold = { count: 0, tokens: 0, cost: null };
   const models = {};
+  const minutes = [];
   let calls = 0;
   for (const row of assistants) {
     if (!isCall(row)) continue;
@@ -188,6 +189,9 @@ function detail(session) {
       context: prompt > 0 ? prompt : null,
     };
     addCall(series, call);
+    // A call counts in the minute it was made, by `created`, with its own cost: a current
+    // session's minutes sum the costs of its calls, not the total opencode keeps for it (D18).
+    addMinute(minutes, row.created, { ...call, tokens: tokenCount(messageTotal(row)) });
     // a cold start: a call after the first that read nothing from the prompt cache
     if (calls > 0 && row.cacheRead === 0) {
       cold.count += 1;
@@ -211,7 +215,7 @@ function detail(session) {
   // or after it
   const marks = assistants.filter((row) => row.summary === 1 && row.error == null).map((row) => ({ t: row.created, before: null, after: null }));
   const range = span(session);
-  return detailOf({ recent, series, marks, cold, tools: byTool, models, firstEntry: range?.first, lastEntry: range?.last });
+  return detailOf({ recent, series, marks, cold, tools: byTool, models, minutes, firstEntry: range?.first, lastEntry: range?.last });
 }
 
 // `input` is `{ messages, compactions, tools, loggedCost, sources }`: `messages`, the session's

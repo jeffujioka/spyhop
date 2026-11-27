@@ -1,13 +1,18 @@
 // Series of a session for the card and the session screen: what the providers' folds keep beside
-// their totals, over the whole file. Runtime-neutral and pure, like the providers that use it.
+// their totals, over the whole file, and the per-minute sums of its newest minutes, from which
+// the fleet's burn rate card is made. Runtime-neutral and pure, like the providers that use it.
 //
 // Types, for the readers of this file:
-//   Call  = { t, read, write, uncached, output, cost, context }: one model call, at `t` (epoch
-//           ms), with the prompt tokens it read from the cache, wrote to it and sent uncached,
-//           its output tokens, its cost in USD (null: not logged) and the context after it
-//           (null: not logged);
-//   Point = Call & { n }: `n` neighbouring calls as one, their tokens and cost summed, dated and
-//           sized by the last of them.
+//   Call   = { t, read, write, uncached, output, cost, context }: one model call, at `t` (epoch
+//            ms), with the prompt tokens it read from the cache, wrote to it and sent uncached,
+//            its output tokens, its cost in USD (null: not logged) and the context after it
+//            (null: not logged);
+//   Point  = Call & { n }: `n` neighbouring calls as one, their tokens and cost summed, dated and
+//            sized by the last of them;
+//   Minute = { m, cost, tokens, read, write, uncached }: the calls of the epoch minute `m`
+//            (epoch ms / 60000, rounded down), their cost (null once one logged none), their
+//            tokens in all, and the prompt tokens they read from the cache, wrote to it and sent
+//            uncached.
 
 // The card's spark line draws the context after each of the session's last this many model calls.
 export const SPARK_CALLS = 30;
@@ -15,6 +20,15 @@ export const SPARK_CALLS = 30;
 // A session's series of model calls holds at most this many points, however long it runs
 // (spec D45).
 export const SERIES_POINTS = 120;
+
+// A session keeps the sums of its newest this many minutes, of which the burn rate card sums the
+// last 10 and draws the last 60.
+export const MINUTES_KEPT = 70;
+
+const MINUTE_MS = 60_000;
+
+// The epoch minute of the time `t` (epoch ms): the `m` of its Minute.
+export const minuteOf = (t) => Math.floor(t / MINUTE_MS);
 
 // Adds the context after one model call to `recent`, the contexts of the latest calls, oldest
 // first, and drops the oldest beyond SPARK_CALLS; it changes `recent` and returns it, so a fold's
@@ -99,6 +113,49 @@ export function groupPoints(points, room) {
   return grouped;
 }
 
+// Adds `call` (a Call with `tokens`, its tokens in all), made at `t`, to the sums of its minute in
+// `minutes`, which it changes and returns: the kept minutes, oldest first, the newest at most
+// MINUTES_KEPT - 1 minutes after the oldest. A call need not be newer than those added before it
+// (a sub-agent's transcript, a response written again), so it goes to its own minute wherever
+// that is, and a minute older than the kept ones counts nothing, nor does a call with no time.
+// `sign` -1 takes back out a call added before, as `retractLastCall` does in the series.
+export function addMinute(minutes, t, call, sign = 1) {
+  if (!Number.isFinite(t)) return minutes;
+  const m = minuteOf(t);
+  const newest = Math.max(m, minutes.at(-1)?.m ?? m);
+  if (m <= newest - MINUTES_KEPT) return minutes;
+  let i = minutes.length;
+  while (i > 0 && minutes[i - 1].m > m) i -= 1;
+  const minute = minutes[i - 1];
+  if (minute?.m === m) {
+    minute.cost = minute.cost === null || call.cost === null ? null : minute.cost + sign * call.cost;
+    minute.tokens += sign * call.tokens;
+    minute.read += sign * call.read;
+    minute.write += sign * call.write;
+    minute.uncached += sign * call.uncached;
+    return minutes;
+  }
+  if (sign < 0) return minutes;
+  minutes.splice(i, 0, { m, cost: call.cost, tokens: call.tokens, read: call.read, write: call.write, uncached: call.uncached });
+  minutes.splice(0, minutes.findIndex((kept) => kept.m > newest - MINUTES_KEPT));
+  return minutes;
+}
+
+// The sums of the kept `minutes` from the minute `from` to the minute `to`, both counted, as one
+// Minute dated `to`; a range with no call sums to 0.
+export function minuteSums(minutes, from, to) {
+  const sums = { m: to, cost: 0, tokens: 0, read: 0, write: 0, uncached: 0 };
+  for (const minute of minutes) {
+    if (minute.m < from || minute.m > to) continue;
+    sums.cost = addCost(sums.cost, minute.cost);
+    sums.tokens += minute.tokens;
+    sums.read += minute.read;
+    sums.write += minute.write;
+    sums.uncached += minute.uncached;
+  }
+  return sums;
+}
+
 // The tally of `key` in `record` (the tools or the models of a session), made by `empty` the
 // first time the key is seen.
 export function entryOf(record, key, empty) {
@@ -129,8 +186,8 @@ export function toolAnswered(state, id, failed) {
 // series is not whole (opencode's, when its tool calls cannot be read) gives `recent` alone.
 // `kind` and `model` are those a sub-agent's transcript records of itself (omp: its
 // `session_init`), null when it records none; `start` and `end` the times of the file's first
-// and last entry, null without one.
-export function detailOf({ recent, series, marks, cold, tools, models, kind = null, model = null, firstEntry, lastEntry }) {
+// and last entry, null without one; `minutes` the sums of its newest minutes (`addMinute`).
+export function detailOf({ recent, series, marks, cold, tools, models, minutes, kind = null, model = null, firstEntry, lastEntry }) {
   if (!series) return { recent: [...recent] };
-  return structuredClone({ recent, points: series.points, marks, cold, tools, models, kind, model, start: firstEntry ?? null, end: lastEntry ?? null });
+  return structuredClone({ recent, points: series.points, marks, cold, tools, models, minutes, kind, model, start: firstEntry ?? null, end: lastEntry ?? null });
 }

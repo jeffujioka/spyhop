@@ -226,7 +226,9 @@ export function ompCalls(home: string, path: string, { title, contexts, cost = 0
 // wrote to it and sent uncached, its output tokens, its cost and the cost of its cache write
 // (USD), its premium requests, and the context after it; each one not given is not logged.
 // `prompted`: the time of the user message the call answers, none when not given; `tools`: the
-// tool calls it makes, each answered right after it.
+// tool calls it makes, each answered right after it; `cached`: it ended at `at` and wrote to a
+// prompt cache that lasts 5 minutes (omp's `usage.cttl` of `ephemeral5m`), so the cache goes cold
+// 5 minutes after it.
 export type OmpCall = {
   at: number;
   read?: number;
@@ -239,6 +241,7 @@ export type OmpCall = {
   context?: number;
   prompted?: number;
   tools?: ToolCall[];
+  cached?: boolean;
 };
 // A tool call of the tool `name`, whose result says it failed when `failed`.
 export type ToolCall = { name: string; failed?: boolean };
@@ -255,13 +258,14 @@ export const spent = (usd: number, at = NOW - 60_000): OmpCall => ({ at, output:
 // their times, each line an entry.
 function ompEntries(calls: OmpCall[], compactions: Compaction[], model: string) {
   const timestamp = (at: number) => new Date(at).toISOString();
-  const message = ({ at, read, write, uncached, output, cost, writeCost, premium, context, tools = [] }: OmpCall, i: number) => {
+  const message = ({ at, read, write, uncached, output, cost, writeCost, premium, context, tools = [], cached = false }: OmpCall, i: number) => {
     const tokens = { input: uncached, cacheRead: read, cacheWrite: write, output };
     const usage = {
       ...Object.fromEntries(Object.entries(tokens).filter(([, value]) => value !== undefined)),
       totalTokens: Object.values(tokens).reduce<number>((sum, value) => sum + (value ?? 0), 0),
       ...(cost === undefined ? {} : { cost: { total: cost, ...(writeCost === undefined ? {} : { cacheWrite: writeCost }) } }),
       ...(premium === undefined ? {} : { premiumRequests: premium }),
+      ...(cached ? { cttl: { ephemeral5m: write ?? 0 } } : {}),
     };
     const id = (j: number) => `call-${i}-${j}`;
     const content = tools.map(({ name }, j) => ({ type: 'toolCall', id: id(j), name }));
@@ -272,7 +276,15 @@ function ompEntries(calls: OmpCall[], compactions: Compaction[], model: string) 
         {
           type: 'message',
           timestamp: timestamp(at),
-          message: { role: 'assistant', provider: PROVIDER, model, usage, content, ...(context === undefined ? {} : { contextSnapshot: { promptTokens: context } }) },
+          message: {
+            role: 'assistant',
+            provider: PROVIDER,
+            model,
+            usage,
+            content,
+            ...(context === undefined ? {} : { contextSnapshot: { promptTokens: context } }),
+            ...(cached ? { completedAt: at } : {}),
+          },
         },
         ...results,
       ],
@@ -283,8 +295,10 @@ function ompEntries(calls: OmpCall[], compactions: Compaction[], model: string) 
   return [...calls.map(message), ...prompts, ...compactions.map(compaction)].sort((a, b) => a.at - b.at).flatMap(({ lines }) => lines);
 }
 
-// The omp session file of the folder `path` under `home` that `ompSession` writes.
+// The omp session file of the folder `path` under `home` that `ompSession` writes, and the time of
+// its `session` entry.
 const ompSessionFile = (home: string, path: string) => join(ompSessionDir(home, path), '2026-11-25T11-58-00-000Z_s1.jsonl');
+const OMP_SESSION_START = '2026-11-25T11:58:00.000Z';
 
 // The folder `path`, with an omp session of it titled `title`, which records it as its folder and
 // logs `calls` of `model` and `compactions`, in the order of their times; `thinking`: the
@@ -296,7 +310,7 @@ export function ompSession(
 ) {
   mkdirSync(path, { recursive: true });
   mkdirSync(ompSessionDir(home, path), { recursive: true });
-  const start = '2026-11-25T11:58:00.000Z';
+  const start = OMP_SESSION_START;
   const level = thinking === undefined ? [] : [{ type: 'thinking_level_change', timestamp: start, thinkingLevel: thinking }];
   const lines = [{ type: 'title', title }, { type: 'session', version: 3, id: 's1', timestamp: start, cwd: path }, ...level, ...ompEntries(calls, compactions, model)];
   writeFileSync(ompSessionFile(home, path), lines.map((line) => `${JSON.stringify(line)}\n`).join(''));
@@ -306,7 +320,9 @@ export function ompSession(
 // `ompSession` wrote for the folder `path` under `home`, whose transcript logs `calls` of `model`
 // and `compactions`, in the order of their times; `init`: the `session_init` entry omp writes
 // first, at `at` (epoch ms), with the agent kind `kind`, the task `task` and the model, none when
-// not given; `running`: whether its lock file is beside it. The transcript's path.
+// not given; `running`: whether it runs, as omp tells it: its transcript then ends with a
+// `custom_message`, not older than the session's start, which leaves its turn open, and else with
+// a `session_exit`, at its last entry's time. The transcript's path.
 export function ompSubAgent(
   home: string,
   path: string,
@@ -320,8 +336,12 @@ export function ompSubAgent(
   }: { calls: OmpCall[]; compactions?: Compaction[]; model?: string; init?: { at: number; kind: string; task?: string }; running?: boolean },
 ) {
   const head = init ? [{ type: 'session_init', timestamp: new Date(init.at).toISOString(), agent: init.kind, readOnly: false, resolvedModel: model, spawns: '*', task: init.task ?? '' }] : [];
-  const lines = [...head, ...ompEntries(calls, compactions, model)].map((line) => `${JSON.stringify(line)}\n`);
-  return subAgentFile(ompSessionFile(home, path), name, lines, { running });
+  const last = Math.max(...[init?.at, ...calls.map(({ at }) => at), ...compactions.map(({ at }) => at)].filter((at) => at !== undefined));
+  const end = running
+    ? { type: 'custom_message', timestamp: new Date(Math.max(last, Date.parse(OMP_SESSION_START))).toISOString(), customType: 'irc', content: 'Go on.' }
+    : { type: 'session_exit', timestamp: new Date(last).toISOString() };
+  const lines = [...head, ...ompEntries(calls, compactions, model), end].map((line) => `${JSON.stringify(line)}\n`);
+  return subAgentFile(ompSessionFile(home, path), name, lines);
 }
 
 // omp's model catalogue under `home`, with `window` tokens as the window of `model`.

@@ -15,13 +15,35 @@ follows a change of theme without being loaded again. It opens on the fleet scre
 - **The header**: `Spyhop`, a `live` mark, and the number of agents in each Orca state
   (blocked, waiting, working, done) that any agent is in. The counts are drawn once a whole
   refresh is answered, never from part of one.
+- **The burn rate card**, drawn once a whole refresh is answered: the burn rate, the cost the
+  shown sessions and their sub-agents logged in the last 10 minutes as cost per hour, and beside
+  it `all sessions`, the whole cost of the shown sessions with their sub-agents (there is no
+  figure per day). Its chart draws the burn rate at each of the last 60 minutes, stacked by
+  session: the three sessions of the highest cost over that hour by title, each with its rate,
+  and every other one as `others`. Under it are the tokens per minute of the last 10 minutes,
+  the cache hit rate of the last 60 and how many sub-agents run now. Only omp and opencode log a
+  cost per model call, so only their sessions count in the rate and its chart; while a Claude
+  Code session is shown, the card says how many sessions the rate leaves out. Every sum reads
+  `n/a` while a session it counts has a sub-agent transcript not read yet, and `all sessions`
+  too while a shown session's cost cannot be read. An agent that links to no session counts in
+  no sum.
+- **The attention list**, drawn once a whole refresh is answered, and not at all when it has no
+  row: first a row for each agent blocked or waiting, with how long it has been so, the longest
+  first; then a row for each session at 75% of its window or more (the percent from which the
+  card's chip tells the tokens left), with its percent and, when known, the tokens left before
+  the harness compacts on its own, the one longest at 75% or more first; then a row for each agent
+  not working whose session's prompt cache goes cold within 2 minutes, with the time left,
+  counted down at each refresh, and the context tokens the next model call would write to it
+  again, the soonest first. opencode's sessions get no cache row: their cache countdown cannot
+  be read. Each row names its session by its title.
 - **A group per Orca host**, this computer's (`local`) first, then the others in the order Orca
   lists their first agent, each with the number of its cards. There are no project or workspace
   rows. A group's cards go by Orca state: blocked, waiting, working, done.
 - **A card per session** whose agent is not done (agents on one session share a card, and an
   agent that links to no session has a card of its own): the session's title (the folder's name
   for an untitled one), its cost as the harness logged it (there is no price table) with its
-  sub-agents' (see Sub-agents in the cost), the folder,
+  sub-agents' (see Sub-agents in the cost) and its burn rate over the last 10 minutes (`n/a` for
+  Claude Code, and while its sub-agents are being read), the folder,
   git branch, harness and model, the agent's state and how long it has been in it, and its
   context: the percent of the model's window used, the tokens used and the window, a bar marking
   where the harness compacts on its own, and a spark line of the context after each of the last
@@ -30,8 +52,9 @@ follows a change of theme without being loaded again. It opens on the fleet scre
   not tell which run, how many there are), none without a sub-agent; and its cache hit rate.
 - **A done agent's session on one folded line**: its title, folder, context and cost.
 
-Pressing a card or a folded line, by a click or by Enter or Space once it has the keyboard's
-focus, opens that session's screen at once, with its header from the card, and its back control
+Pressing a card, a folded line or a row of the attention list, by a click or by Enter or Space
+once it has the keyboard's focus, opens that session's screen at once, with its header from the
+card, and its back control
 shows the fleet screen again. When Orca no longer lists the agent of the open session screen, the
 next refresh shows the fleet screen. A screen that opens starts at its top; a refresh keeps the
 place it is scrolled to.
@@ -49,7 +72,8 @@ no known window shows its tokens, with no percent and no bar.
 
 A session's cost and tokens hold those of its sub-agents, sub-agents of sub-agents included,
 once every sub-agent transcript of the session is read. Until then the card and the session
-screen show the session's own figure with `reading <n> of <m> sub-agents`, never a partial sum.
+screen show the session's own figure with `reading <n> of <m> sub-agents`, and a done session's
+folded line shows `reading <n>/<m>` and no cost, never a partial sum.
 Claude Code's cost is the total it logs for the session, which holds its sub-agents' already, so
 nothing is added to it, and its split into own and sub-agents reads `n/a`; its tokens are
 summed like the other harnesses'. The model calls and the tool calls are the session's own.
@@ -73,7 +97,9 @@ the agent has a pane (see Focus pane). Under it:
     model call after the first that read nothing from the prompt cache, so it wrote the prompt
     to the cache again; the note gives how many, the tokens written again and their cost;
   - the cost over time, of the session's own model calls and of its sub-agents, with the total
-    as the harness logged it and the cost per hour over the session's duration.
+    as the harness logged it and the cost per hour over the session's duration; when the
+    harness logged part of the cost without a model call, as opencode can, the card says how
+    much.
 - **Sub-agents**, for a session with any: how many run (not for Claude Code or opencode, which
   do not tell), how many there are and their cost; a row for each running one, with its kind, name,
   task, how long it has run and its cost; and on one time axis a bar for each of the 8 that
@@ -176,15 +202,24 @@ model calls, the tokens, cost and context of all its model calls in at most 120 
 (neighbouring calls summed once there are more), its compactions with their tokens before and
 after, its cold starts, its tool calls and failures by tool name, the ids of its tool calls not
 answered yet (with their tool's name, so that a later answer counts its failure), its cost and
-tokens by model name, the agent kind and model a sub-agent's transcript records, the times of
-its first and last entry, and the position they cover, by harness, machine and path. No session
-text is stored, and nothing is written on any other host. They are there so that a file scanned
-once is not scanned again from its start after Orca restarts: the reader goes on from the kept
-position, and scans the file again when it is not the one that was scanned. They are written at
-most once every 30 seconds,
-and only when a scan changed. Deleting the storage costs one scan of each file, nothing else; so
-does an update of spyhop that keeps more of a session, which discards what an earlier version
-kept, once.
+tokens by model name, the agent kind and model a sub-agent's transcript records and whether its
+turn is open, the time of a session file's `session` entry, the times of its first and last
+entry, and the position they cover, by harness, machine and path. No session text is stored,
+and nothing is written on any other host. They are there so that a file scanned once is not
+scanned again from its start after Orca restarts: the reader goes on from the kept position,
+and scans the file again when it is not the one that was scanned. They are written at most once
+every 30 seconds, and only when a scan changed. Orca keeps no stored value over 256 KiB and no
+storage over 5 MiB, so they are stored as JSON texts split over the keys `session-totals`,
+`session-totals.1` and on, each under 256 KiB and all together at most 4 MiB; a later write that
+needs fewer keys removes the ones left over. A write keeps the totals of every file kept before,
+read since Orca started or not, so a session no agent shows now keeps its totals. Past 4 MiB,
+files are left out in this order until the rest fit: the transcripts of ended omp sub-agents, the
+one read longest ago first, then the other files, the one read longest ago first, by when each
+was last read in any run; a file whose totals alone would not fit in a key is left out too. A file
+left out is scanned again whole after a restart. They are stored as version
+5: the first open after an update from a spyhop that stored another version, or stored them in
+another form, scans each file once from its start, which is all that deleting the storage costs
+too.
 
 ## Focus pane
 
@@ -203,7 +238,8 @@ log (`orca plugin logs`). Orca's desktop app only.
 The palette command `Spyhop: Show session stats`, bound to `Mod+Alt+Shift+S` (Cmd on macOS,
 Ctrl elsewhere), shows the panel in the right sidebar. Orca gives a plugin no call that shows its
 own panel, so the command does it through the Orca CLI: it finds the plugin's key with `orca
-plugin list` and runs `orca plugin open <key> --panel spyhop`.
+plugin list` (the spyhop install that is not disabled, when a Git and a folder install are both
+listed) and runs `orca plugin open <key> --panel spyhop`.
 
 ## Install, develop, test
 
@@ -223,9 +259,12 @@ plugin list` and runs `orca plugin open <key> --panel spyhop`.
 - Test: `orca plugin test . --json` (`npm test`) runs the tests with Node's test runner and
   Orca's test kit; `orca plugin validate . --json` checks the manifest as Orca loads it.
 - Frame check: `bash scripts/frame-check.sh` runs the folder in the Orca app on this computer
-  as the dev plugin `local.spyhop`, opens the Live panel, asks the worker for the fleet with
-  `orca plugin dev request`, then shoots the panel 300 and 420 pixels wide on this computer's
-  own agents (the PNGs go to `.orca/shots/`) and fails on a `[frame]` error in
+  as the dev plugin `local.spyhop`, opens the Live panel, asks the worker for the fleet and then
+  for the session of each of its cards with `orca plugin dev request` (each answer under 1 MiB,
+  each series at most 120 points, every card's sub-agents read within 30 refreshes), then
+  shoots the fleet screen 300 and 420 pixels wide in Orca's dark and light themes on this
+  computer's own agents (the PNGs go to `.orca/shots/`; a theme takes effect only while Orca's
+  window is hidden or minimized) and fails on a `[frame]` error in
   `orca plugin logs`; it unloads the folder when it exits. `orca plugin check` lists no HTML
   panel and `orca plugin shot --scenario` refuses one, so the panel has no check scenarios: the
   session screen's look is checked by eye. Orca asks for the dev plugin's approval again after
@@ -253,7 +292,16 @@ plugin list` and runs `orca plugin open <key> --panel spyhop`.
 - **An opencode session's cost chart can end below its cost.** A session in opencode's current
   tables shows the total cost opencode keeps for it, which for some sessions is above the sum of
   the costs its model calls log; the cost chart, the Models section and the burn rate add up
-  those calls, so they end below that total.
+  those calls, so they end below that total, and the cost card says how much opencode logged
+  without a model call, the difference of the two. For such a session the card's burn rate and
+  the cost card's per hour can disagree: the first sums the calls' costs of the last 10 minutes,
+  the second is the total over the session's duration.
+- **An omp sub-agent killed mid-tool reads running.** An omp sub-agent runs while its turn is
+  open, as its transcript tells it: its newest message is not an answer that ended the turn,
+  and omp wrote no exit entry after it. An omp killed hard writes no exit entry, so a sub-agent
+  that was waiting on a tool then keeps reading running for as long as its Orca agent is listed.
+  A transcript that ends before its session started is a copy omp made when it continued an
+  earlier session, and does not run.
 - **A Claude Code or opencode agent without a `sessionId` shows the newest session of the
   workspace folder.** With no title to tell sessions apart, such an agent (every one on a
   paired Orca server, which never gives a `sessionId`) shows the newest session of the

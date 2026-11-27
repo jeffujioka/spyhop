@@ -81,7 +81,7 @@ test('Database with only the current tables', async () => {
     cards.map(({ card, view }) => [card.id, view.model, costOf(view)]),
     [
       ['o1', 'claude-haiku-5.5', '$0.44'],
-      ['o2', 'claude-haiku-5.5', '$0.50'],
+      ['o2', 'claude-haiku-5.5', '$2.50'],
     ],
   );
 });
@@ -117,18 +117,33 @@ test('Agents of both opencode kinds in one folder link as one harness', async ()
 });
 
 test('Session total opencode logged above its model calls', async () => {
-  // ses_logged's `session_v2.cost` is 0.50, its rows log 0.30 and 0.14
-  const { answer, fleet } = await sessionOf([{ project: 'web', name: 'main', agents: ['working'], harness: 'opencode', sessionId: 'ses_logged' }], {
+  // ses_logged's `session_v2.cost` is 2.50, its rows log 2.00 and 0.40
+  const { answer, fleet, html } = await sessionOf([{ project: 'web', name: 'main', agents: ['working'], harness: 'opencode', sessionId: 'ses_logged' }], {
     prepare: (home) => opencodeDatabase(home, 'current'),
   });
 
   // the card, the figures and the cost card read opencode's own total
-  assert.equal(formatCost(fleet.groups[0].cards[0].cost), '$0.50');
-  assert.equal(formatCost(answer.session.figures.cost), '$0.50');
-  assert.ok(answer.session.cost && answer.session.cost.total === 0.5);
+  assert.equal(formatCost(fleet.groups[0].cards[0].cost), '$2.50');
+  assert.equal(figure(html, 'cost'), '$2.50');
+  assert.equal(figure(html, 'total'), '$2.50');
   // the cost chart adds up the model calls, so it ends below that total
-  assert.ok(answer.session.cost.own !== 'n/a');
-  assert.equal(formatCost(answer.session.cost.own.at(-1)!.v), '$0.44');
+  assert.ok(answer.session.cost && answer.session.cost.own !== 'n/a');
+  assert.equal(formatCost(answer.session.cost.own.at(-1)!.v), '$2.40');
+  // and the cost card says what opencode logged without a model call
+  const [card] = parts(html, 'class', 'cost-card');
+  assert.equal(figure(card, 'noCall'), '$0.10');
+  assert.ok(text(card).includes('$0.10 logged without a model call'), text(card));
+});
+
+// The note is of cost logged above the model calls only: a total below them notes nothing.
+test('a session total below its model calls has no note', async () => {
+  // ses_below's `session_v2.cost` is 0.40, its rows log 0.30 and 0.14
+  const { html } = await sessionOf([{ project: 'web', name: 'main', agents: ['working'], harness: 'opencode', sessionId: 'ses_below' }], {
+    prepare: (home) => opencodeDatabase(home, 'current'),
+  });
+
+  assert.equal(figure(html, 'total'), '$0.40');
+  assert.deepEqual(parts(html, 'data-figure', 'noCall'), []);
 });
 
 test('Child sessions of an opencode session', async () => {
@@ -166,9 +181,9 @@ test('Child sessions of a legacy opencode session', async () => {
 // Four model calls whose context rises to 160,000 tokens, of `model` of `provider`.
 const rising = (provider: string, model: string): OpencodeCalls => ({ provider, model, contexts: [40_000, 80_000, 120_000, 160_000] });
 
-// The fleet card of a working opencode agent of the workspace `web`/`main` on this computer, or of
-// `infra`/`main` on `devbox` with `remote` its home, whose session's calls are `calls`; the
-// catalogue is under the agent's host's home when `catalogue`.
+// The fleet screen with a working opencode agent of the workspace `web`/`main` on this computer, or
+// of `infra`/`main` on `devbox` with `remote` its home, whose session's calls are `calls`, and that
+// agent's card; the catalogue is under the agent's host's home when `catalogue`.
 async function opencodeCard({ calls, catalogue, remote }: { calls: OpencodeCalls; catalogue: boolean; remote?: string }) {
   const on = remote ? { project: 'infra', name: 'main', hostId: `ssh:${DEVBOX}` } : { project: 'web', name: 'main' };
   const { html } = await fleetOf([{ ...on, agents: ['working'], harness: 'opencode' }], {
@@ -179,7 +194,7 @@ async function opencodeCard({ calls, catalogue, remote }: { calls: OpencodeCalls
       if (catalogue) opencodeCatalogue(host);
     },
   });
-  return parts(html, 'data-part', 'card')[0];
+  return { html, card: parts(html, 'data-part', 'card')[0] };
 }
 
 // A card of a session without a window: the tokens used, the spark line and the cost, and no
@@ -194,22 +209,24 @@ function assertNoWindow(card: string) {
 }
 
 test('Model in the catalogue', async () => {
-  const card = await opencodeCard({ calls: rising('github-copilot', 'claude-haiku-5.5'), catalogue: true });
+  const { html, card } = await opencodeCard({ calls: rising('github-copilot', 'claude-haiku-5.5'), catalogue: true });
 
   assert.equal(figure(card, 'percent'), '80%');
   assert.match(text(card), /160k \/ 200k/);
   assert.match(parts(card, 'data-part', 'bar')[0], /^<[^>]* class="[^"]*\blvl-hot\b/);
-  // the attention list's context row comes with task 5.3; until then the card is what is read
+  const rows = parts(html, 'data-row', 'context');
+  assert.equal(rows.length, 1);
+  assert.equal(figure(rows[0], 'percent'), '80%');
 });
 
 test('Model missing from the catalogue', async () => {
-  const card = await opencodeCard({ calls: rising('github-copilot', 'claude-haiku-9'), catalogue: true });
+  const { card } = await opencodeCard({ calls: rising('github-copilot', 'claude-haiku-9'), catalogue: true });
 
   assertNoWindow(card);
 });
 
 test('Catalogue missing', async () => {
-  const card = await opencodeCard({ calls: rising('github-copilot', 'claude-haiku-5.5'), catalogue: false, remote: tempHome() });
+  const { card } = await opencodeCard({ calls: rising('github-copilot', 'claude-haiku-5.5'), catalogue: false, remote: tempHome() });
 
   assertNoWindow(card);
 });

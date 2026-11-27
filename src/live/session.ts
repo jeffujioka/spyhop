@@ -6,7 +6,7 @@
 // header is the fleet's card's and the screen says it is loading.
 // Pure: an answer in, a markup string out (src/panel.ts draws it).
 
-import { formatAge, formatCost, formatCount, formatDate, formatDay, formatDuration, formatPercent, formatSeconds, formatTokens, orNa } from '../core/format.js';
+import { formatAge, formatCost, formatCostPerHour, formatCount, formatDate, formatDay, formatDuration, formatPercent, formatSeconds, formatTokens, orNa } from '../core/format.js';
 import type { CardView, SessionView, SubAgentView } from '../protocol.ts';
 import { agentBars, contextChart, costChart, tokensChart } from './charts.ts';
 import { readingNote } from './fleet.ts';
@@ -53,12 +53,14 @@ function figures({ cost, subShare, tokens, cacheShare, calls, failedTools, durat
 }
 
 // The cost card: the cost chart, and the total with where it comes from, the one place of the
-// panel that says so, and the cost per hour. The stylesheet puts them under the chart's title.
+// panel that says so, and the cost per hour; under them, when the harness logged part of the
+// session's cost without a model call, how much, which the chart does not draw. The stylesheet
+// puts them under the chart's title.
 function costCard(cost: NonNullable<SessionView['cost']>) {
-  const perHour = cost.perHour === 'n/a' ? cost.perHour : `${formatCost(cost.perHour)}/h`;
+  const noCall = cost.noCall === null ? '' : `<div class="muted">${num('noCall', formatCost(cost.noCall))} logged without a model call</div>`;
   return (
     `<div class="cost-card">${costChart(cost)}<div class="row headline">${num('total', formatCost(cost.total))}` +
-    `<span class="muted grow">as ${esc(cost.harness)} logged it</span>${num('perHour', perHour)}</div></div>`
+    `<span class="muted grow">as ${esc(cost.harness)} logged it</span>${num('perHour', formatCostPerHour(cost.perHour))}</div>${noCall}</div>`
   );
 }
 

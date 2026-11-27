@@ -33,17 +33,18 @@ header { margin-bottom: 4px; }
 .live { color: var(--orca-muted-foreground); font-size: 11.5px; }
 .live .dot { background: var(--spy-ok); }
 [data-part="counts"] { margin: 6px 0 0; font-size: 12px; }
-[data-part="group"] { margin-top: 14px; }
-[data-part="group"] > h2 {
+[data-part="group"], [data-part="attention"] { margin-top: 14px; }
+[data-part="group"] > h2, [data-part="attention"] > h2 {
   margin: 0; font-size: 10.5px; font-weight: 500; letter-spacing: .08em; text-transform: uppercase;
   color: var(--orca-muted-foreground);
 }
-[data-part="card"], [data-part="folded"] {
+[data-part="card"], [data-part="folded"], [data-row] {
   margin-top: 8px; padding: 10px 12px; min-width: 0; background: var(--orca-card); color: var(--orca-card-foreground);
   border: 1px solid var(--orca-border); border-radius: var(--orca-radius);
 }
-[data-part="card"]:hover, [data-part="folded"]:hover { background: var(--orca-accent); color: var(--orca-accent-foreground); }
-[data-part="folded"] { padding: 7px 12px; font-size: 12px; }
+[data-part="card"]:hover, [data-part="folded"]:hover, [data-row]:hover { background: var(--orca-accent); color: var(--orca-accent-foreground); }
+[data-part="folded"], [data-row] { padding: 7px 12px; font-size: 12px; }
+.tag { font-size: 10px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--orca-muted-foreground); }
 .title { font-weight: 600; }
 .meta { margin-top: 2px; font-size: 11.5px; color: var(--orca-muted-foreground); }
 .dot { display: inline-block; flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--orca-muted-foreground); }
@@ -75,6 +76,7 @@ svg { display: block; }
 .headline .muted, .axis, .marks, .key, [data-part="cold-note"] { font-size: 11px; }
 [data-chart="context"], [data-chart="tokens"] { height: 120px; margin-top: 4px; }
 [data-chart="cost"] { height: 100px; margin-top: 4px; }
+[data-chart="burn"] { height: 80px; margin-top: 4px; }
 [data-chart] path, [data-chart] line, [data-chart] polyline { fill: none; vector-effect: non-scaling-stroke; stroke-linecap: round; }
 [data-chart="context"] path { stroke: var(--lvl); stroke-width: 2; }
 [data-chart="context"].plain path { stroke: var(--spy-s1); }
@@ -92,6 +94,12 @@ svg { display: block; }
 [data-bar] rect { fill: var(--k); }
 polyline[data-output], [data-layer] path { stroke: var(--k); stroke-width: 1.5; }
 [data-layer] path[data-v] { stroke-width: 4; }
+/* the burn rate chart's sessions, by their place, and the others; its layers are filled areas */
+.k-s1 { --k: var(--spy-s1); }
+.k-s2 { --k: var(--spy-s2); }
+.k-s3 { --k: var(--spy-s3); }
+.k-others { --k: var(--spy-others); }
+[data-chart="burn"] [data-layer] path { fill: var(--k); stroke: none; }
 .key { gap: 4px 10px; margin-top: 4px; }
 .key i { display: inline-block; width: 8px; height: 8px; margin-right: 4px; border-radius: 2px; background: var(--k); }
 .key i[class*="lvl-"] { background: var(--lvl); }

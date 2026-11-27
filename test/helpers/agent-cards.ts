@@ -3,7 +3,7 @@
 // through the real runner.
 import { execFileSync } from 'node:child_process';
 import { copyFileSync, mkdirSync, writeFileSync } from 'node:fs';
-import { basename, dirname, join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { type BuiltCard, createAgentCards, type OrcaAgent } from '../../src/agent-cards.ts';
 import { cardView } from '../../src/card-view.ts';
 import { formatCost, formatTokens, orNa } from '../../src/core/format.js';
@@ -54,13 +54,12 @@ export function ompSessionOf(home: string, path: string, usd = 0.1, title?: stri
 
 // A sub-agent transcript of the omp session file `sessionFile`: `name` is its path in the folder
 // beside the session file, without `.jsonl` (`Impl1`, or `Impl1/Rev1` for a sub-agent that
-// `Impl1` started), and `lines` its lines, each ending in a newline. While `running`, its lock
-// file is beside it, as omp keeps one while a sub-agent runs. Returns the transcript's path.
-export function subAgentFile(sessionFile: string, name: string, lines: string[], { running = false } = {}) {
+// `Impl1` started), and `lines` its lines, each ending in a newline. Returns the transcript's
+// path.
+export function subAgentFile(sessionFile: string, name: string, lines: string[]) {
   const file = join(sessionFile.replace(/\.jsonl$/, ''), `${name}.jsonl`);
   mkdirSync(dirname(file), { recursive: true });
   writeFileSync(file, lines.join(''));
-  if (running) writeFileSync(join(dirname(file), `.${basename(file)}.lock.os`), '');
   return file;
 }
 

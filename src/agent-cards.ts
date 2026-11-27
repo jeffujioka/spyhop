@@ -8,6 +8,7 @@
 // host (`on`: its ssh alias); whatever cannot be read, an unreachable host included, shows as
 // n/a on the agent's card, and a build never rejects.
 
+import { withoutTitleMark } from './core/format.js';
 import { GIT_TTL_MS, readGit } from './core/git.js';
 import { NA, createSessions, readStats } from './core/providers/index.js';
 import { collapseBySession, linkAgents } from './core/session-link.js';
@@ -35,7 +36,8 @@ export type OrcaAgent = {
 // the bounded series of model calls, the compactions with their tokens before and after (null:
 // not logged), the cold starts, the tool calls by tool and the cost (null: not logged) and
 // tokens by model, the agent kind and the model a sub-agent's transcript records of itself
-// (null: none recorded), and the times of the file's first and last entry (null: none).
+// (null: none recorded), the times of the file's first and last entry (null: none), and the sums
+// of its newest minutes (a Minute of src/core/series.js each, oldest first).
 export type SessionSeries = {
   points: Point[];
   marks: { t: number; before: number | null; after: number | null }[];
@@ -46,7 +48,13 @@ export type SessionSeries = {
   model: string | null;
   start: number | null;
   end: number | null;
+  minutes: Minute[];
 };
+
+// The model calls of one epoch minute `m` (src/core/series.js): their cost (null once one logged
+// none), their tokens in all, and the prompt tokens they read from the cache, wrote to it and sent
+// uncached.
+export type Minute = { m: number; cost: number | null; tokens: number; read: number; write: number; uncached: number };
 
 // The stats of a card's session, as `readStats` (src/core/providers/index.js) gives them: every
 // field of STAT_FIELDS, n/a where it cannot be read, and `detail`, null unless the session file
@@ -63,6 +71,7 @@ export type CardStats = {
   contextMax: Num;
   contextPercent: Num;
   headroomTokens: Num;
+  cacheLeftMs: Num;
   cacheHitRate: Num;
   latencyMs: Num;
   thinkingLevel: string;
@@ -106,7 +115,8 @@ export type BuiltCard = {
 
 // Whether `agents` are the agents `before`, but for their states: the same ids in the same order,
 // each with the same harness, folder, machine, session id and title, so that both build the same
-// cards, but for the status of each.
+// cards, but for the status of each. Titles are compared without their mark (withoutTitleMark):
+// omp's spinner frame changes every 100 ms while the agent works and changes no card.
 export function sameButStates(before: OrcaAgent[], agents: OrcaAgent[]) {
   return (
     before.length === agents.length &&
@@ -118,7 +128,7 @@ export function sameButStates(before: OrcaAgent[], agents: OrcaAgent[]) {
         was.path === now.path &&
         (was.machine ?? null) === (now.machine ?? null) &&
         (was.sessionId ?? null) === (now.sessionId ?? null) &&
-        was.title === now.title
+        withoutTitleMark(was.title, was.agent) === withoutTitleMark(now.title, now.agent)
       );
     })
   );
@@ -133,8 +143,9 @@ const HARNESS_NAMES: Record<string, string> = { omp: 'omp', claude: 'Claude Code
 type Machine = string | null;
 
 // A finished scan of a session file, kept between runs of the worker (src/core/refresh.js): the
-// provider's totals `state` over the file's first `pos` bytes.
-export type KeptScan = { provider: string; machine: Machine; path: string; pos: number; state: unknown };
+// provider's totals `state` over the file's first `pos` bytes, when the file was last asked for
+// (epoch ms) and whether it is an ended sub-agent's.
+export type KeptScan = { provider: string; machine: Machine; path: string; pos: number; state: unknown; readAt?: number; ended?: boolean };
 
 // A session hook as the registry gives it: only what `subAgentsOf` asks of it is named.
 type SubAgentsHook = { subagents?: (file: unknown, where: object) => Promise<SubAgentInput[]> };
@@ -361,11 +372,12 @@ export function createAgentCards({ run, home, kept = [] }: { run: Run; home: str
       return collapseBySession(entries).map((entry: (typeof entries)[number]) => entry.card);
     },
 
-    // The finished scans of the session files read since this builder was made, to keep for a
-    // later run, and whether any changed since this was last asked. Their states are the
-    // readers' own, which a later build changes: encode them at once.
+    // The finished scans of the session files read since this builder was made, and the kept
+    // scans of the providers no build has asked for, as they were kept, to keep for a later run,
+    // and whether any changed since this was last asked. Their states are the readers' own,
+    // which a later build changes: encode them at once.
     scanned() {
-      const all: { changed: boolean; scans: KeptScan[] } = { changed: false, scans: [] };
+      const all: { changed: boolean; scans: KeptScan[] } = { changed: false, scans: kept.filter((scan) => !hooks.has(scan.provider)) };
       for (const [provider, hook] of hooks) {
         // a provider that reads no session file (opencode) has no scan
         const { changed, scans } = hook?.scanned?.() ?? { changed: false, scans: [] };

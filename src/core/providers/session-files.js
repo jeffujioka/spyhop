@@ -108,7 +108,8 @@ export function sessionHeads(execOn, { head, tells }) {
 // made on first use. `execOn(machine)` is the plugin's runner bound to a host, `fold` the
 // provider's. `kept`: the scans an earlier run kept for this provider (`{ machine, path, pos,
 // state }` each), each host's given to its reader; `scanned()` is `{ changed, scans }` of every
-// reader together (see `createSessionReader`), each scan with its `machine`.
+// reader together (see `createSessionReader`), each scan with its `machine`, and the kept scans
+// of the hosts no reader was made for, as they were kept.
 export function sessionReaders(execOn, fold, kept = []) {
   const readers = new Map();
   return {
@@ -120,7 +121,7 @@ export function sessionReaders(execOn, fold, kept = []) {
     },
 
     scanned() {
-      const all = { changed: false, scans: [] };
+      const all = { changed: false, scans: kept.filter((scan) => !readers.has(scan.machine)) };
       for (const [machine, reader] of readers) {
         const { changed, scans } = reader.scanned();
         all.changed ||= changed;

@@ -3,7 +3,9 @@
 # computer, as the dev plugin `local.spyhop`, and stops at the first step that fails, with the
 # step's answer on stderr. It validates the folder, records `orca plugin check`, loads the folder
 # with `orca plugin dev watch` (stopped when the script exits), opens the panel, asks the worker
-# for the fleet, shoots the panel 300 and 420 pixels wide, keeping each PNG, and reads the logs.
+# for the fleet, then for the session of each of its cards, checks every answer's bounds, shoots
+# the fleet screen 300 and 420 pixels wide in Orca's dark and light themes, keeping each PNG, and
+# reads the logs. The themes take effect only while Orca's window is hidden or minimized.
 # `plugin check` lists no HTML panel and `plugin shot --scenario` refuses one (Orca 1.4.273), so
 # the live shot of the dev plugin is the frame check and `plugin check` is only recorded.
 # Usage: bash scripts/frame-check.sh [--dry-run]; --dry-run prints each `orca` command line and
@@ -19,6 +21,10 @@ KEY=local.spyhop
 SHOTS=.orca/shots
 # Orca's limit on the answer a worker gives a panel's request.
 MAX_ANSWER_BYTES=1048576
+# The most points a series of a session answer holds (SERIES_POINTS, spec D45).
+SERIES_POINTS=120
+# The refreshes within which every sub-agent of a session is read, at 16 a refresh.
+READ_REFRESHES=30
 # A little over the panel's refresh period of 2 s.
 REFRESH_WAIT=3
 
@@ -111,20 +117,74 @@ run "$work/open.txt" plugin open "$KEY" --panel spyhop
 # worker means its first scan is done, and the shots wait one more refresh period for the panel's
 # own request to have been answered and drawn.
 run "$work/fleet.json" plugin dev request . spyhop.fleet --data '{"request":1}' --json
-[ -n "$dry" ] || expect "Buffer.byteLength(JSON.stringify(a.result.result)) < $MAX_ANSWER_BYTES && Array.isArray(a.result.result.groups)" \
-  "the fleet answer is not under $MAX_ANSWER_BYTES bytes with a groups array" "$work/fleet.json"
+[ -n "$dry" ] || expect "Buffer.byteLength(JSON.stringify(a.result.result)) < $MAX_ANSWER_BYTES && Array.isArray(a.result.result.groups) && typeof a.result.result.burn === 'object' && a.result.result.burn !== null && Array.isArray(a.result.result.attention)" \
+  "the fleet answer is not under $MAX_ANSWER_BYTES bytes with groups, burn and attention" "$work/fleet.json"
+
+# The session of every card of the fleet, each request one refresh of the worker: each answer is
+# under Orca's limit with series of at most SERIES_POINTS points, and the card's `reading` is null
+# once its sub-agents are all read. A card's id joins its parts with NUL characters, which no shell
+# variable holds, so each id goes through the script as its JSON text, one a line. A dry run has
+# no fleet answer and lists one card, `<id>`.
+if [ -n "$dry" ]; then
+  cards='"<id>"'
+else
+  cards=$(node -e 'console.log(JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")).result.result.groups.flatMap((group) => group.cards.map((card) => JSON.stringify(card.id))).join("\n"))' "$work/fleet.json")
+  [ -n "$cards" ] || echo 'frame check: the fleet answer lists no card, so no session answer is checked'
+fi
+# The ids come on descriptor 3, as `orca` reads the standard input.
+while IFS= read -r card <&3; do
+  [ -n "$card" ] || continue
+  data=$(node -e 'console.log(JSON.stringify({ request: 2, card: JSON.parse(process.argv[1]) }))' "$card")
+  refresh=1
+  while :; do
+    run "$work/session.json" plugin dev request . spyhop.session --data "$data" --json
+    [ -z "$dry" ] || break
+    # The worker answers `session: null` once Orca no longer lists the card's agent: a card that
+    # left during the check is passed over, and only one the fleet still lists fails.
+    if holds "$work/session.json" 'a.result.result.session === null'; then
+      run "$work/listed.json" plugin dev request . spyhop.fleet --data '{"request":3}' --json
+      if holds "$work/listed.json" "a.result.result.groups.some((group) => group.cards.some((card) => card.id === ($data).card))"; then
+        echo "frame check: the session answer of $card is null while the fleet still lists it" >&2
+        cat "$work/session.json" >&2
+        exit 1
+      fi
+      echo "frame check: $card left Orca during the check; its session is not checked"
+      break
+    fi
+    expect "const s = a.result.result.session; Buffer.byteLength(JSON.stringify(a.result.result)) < $MAX_ANSWER_BYTES && [s.tokens?.points, s.context?.points, s.cost?.own, s.cost?.sub].every((series) => !Array.isArray(series) || series.length <= $SERIES_POINTS)" \
+      "the session answer of $card is not under $MAX_ANSWER_BYTES bytes with series of at most $SERIES_POINTS points" "$work/session.json"
+    holds "$work/session.json" 'a.result.result.session.card.reading === null' && break
+    if [ "$refresh" -ge "$READ_REFRESHES" ]; then
+      echo "frame check: the sub-agents of $card are not all read within $READ_REFRESHES refreshes" >&2
+      cat "$work/session.json" >&2
+      exit 1
+    fi
+    refresh=$((refresh + 1))
+  done
+done 3<<EOF
+$cards
+EOF
 [ -n "$dry" ] || sleep "$REFRESH_WAIT"
 
-# Each shot writes the same PNG, so each is kept as .orca/shots/frame-check-<width>[-<theme>].png,
-# once the shot is known to have been taken without errors.
+# Each shot writes the same PNG, so each is kept as .orca/shots/frame-check-<width>-<theme>.png,
+# once the shot is known to have been taken without errors and in the theme asked for.
 for width in 300 420; do
-  run "$work/shot-$width.json" plugin shot "$KEY" --panel spyhop --width "$width" --json
-  if [ -z "$dry" ]; then
-    shot=$(node -e 'const a = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")).result; console.log([a.path ?? process.argv[2], a.theme].filter(Boolean).join("\t"))' "$work/shot-$width.json" "$SHOTS/$KEY-spyhop.png")
-    theme=$(printf '%s' "$shot" | cut -s -f2)
-    expect 'a.result.errors.length === 0 && a.result.settled === true' "the shot $width pixels wide has errors or did not settle" "$work/shot-$width.json"
-    cp "$(printf '%s' "$shot" | cut -f1)" "$SHOTS/frame-check-$width${theme:+-$theme}.png"
-  fi
+  for theme in dark light; do
+    run "$work/shot.json" plugin shot "$KEY" --panel spyhop --width "$width" --theme "$theme" --json
+    if [ -z "$dry" ]; then
+      expect 'a.result.errors.length === 0 && a.result.settled === true' \
+        "the shot $width pixels wide in the $theme theme has errors or did not settle" "$work/shot.json"
+      # Orca paints a theme only while its window is hidden or minimized (`orca plugin shot --help`).
+      if ! holds "$work/shot.json" 'a.result.themeApplied === true'; then
+        echo "frame check: the shot $width pixels wide is not in the $theme theme" >&2
+        echo "frame check: hide or minimize Orca's window, then run the check again" >&2
+        cat "$work/shot.json" >&2
+        exit 1
+      fi
+      cp "$(node -e 'console.log(JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")).result.path ?? process.argv[2])' "$work/shot.json" "$SHOTS/$KEY-spyhop.png")" \
+        "$SHOTS/frame-check-$width-$theme.png"
+    fi
+  done
 done
 
 run "$work/logs.json" plugin logs "$KEY" --json

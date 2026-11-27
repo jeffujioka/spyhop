@@ -35,6 +35,8 @@ export function sessionDetail(card: BuiltCard, { home, host, view }: { home: str
   const reached = series
     ? [...series.points.flatMap((point) => (point.context === null ? [] : [point.context])), ...series.marks.flatMap((mark) => (mark.before === null ? [] : [mark.before]))]
     : [];
+  // the cost the session's own model calls logged, after each of them
+  const own = series ? cumulativeCost(series.points) : NA;
   const cacheRead = sumOf([series, ...subSeries].map((kept) => (kept ? kept.points.reduce((sum, point) => sum + point.read, 0) : NA)));
   return {
     card: view,
@@ -68,7 +70,8 @@ export function sessionDetail(card: BuiltCard, { home, host, view }: { home: str
       harness: card.harnessName,
       total: cost,
       perHour: cost !== NA && durationMs !== NA && durationMs > 0 ? cost / (durationMs / HOUR_MS) : NA,
-      own: cumulativeCost(series.points),
+      own,
+      noCall: noCallCost(stats.costUsd, own),
       // the sub-agents' model calls merged by time, as one series of at most SERIES_POINTS points
       sub:
         subCost === NA || subSeries.some((kept) => kept === null)
@@ -135,6 +138,16 @@ function cumulativeCost(points: Point[]): { t: number; v: number }[] | 'n/a' {
   if (points.some((point) => point.cost === null)) return NA;
   let sum = 0;
   return points.map(({ t, cost }) => ({ t, v: (sum += cost!) }));
+}
+
+// What the harness logged of the session's own cost without a model call: its logged total
+// `logged` less what its model calls logged, the end of `own`, as opencode can log a session's
+// total above its messages' costs; null when that is under half a cent (none, or below the
+// calls), or either is not known.
+function noCallCost(logged: Num, own: { t: number; v: number }[] | 'n/a'): number | null {
+  if (logged === NA || own === NA) return null;
+  const rest = logged - (own.at(-1)?.v ?? 0);
+  return rest < 0.005 ? null : rest;
 }
 
 // The session's tool calls, by tool, the most called first and those of as many calls by name;

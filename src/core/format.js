@@ -21,6 +21,11 @@ export function formatCost(usd) {
   return usd === NA ? NA : `$${usd.toFixed(2)}`;
 }
 
+// A cost per hour as the live panel writes it: "$9.00/h". Takes a number or 'n/a'.
+export function formatCostPerHour(usd) {
+  return usd === NA ? NA : `${formatCost(usd)}/h`;
+}
+
 // Text of a duration: "450ms", "12s", "1m 30s", "1h 05m". Takes a number or 'n/a'.
 export function formatDuration(ms) {
   if (ms === NA) return NA;
@@ -41,6 +46,13 @@ export function formatAge(ms) {
   if (seconds < 3600) return `${Math.floor(seconds / 60)}m`;
   // an hour and over is written as a duration is
   return formatDuration(ms);
+}
+
+// A time left as the live panel counts it down, in whole seconds rounded up, so it reads 0:00 only
+// once the time is up: 42000 is "0:42", 90000 is "1:30". Takes a number.
+export function formatCountdown(ms) {
+  const seconds = Math.max(0, Math.ceil(ms / 1000));
+  return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
 }
 
 // A time of day as the live panel writes it: local "15:33". Takes epoch ms.
@@ -95,15 +107,27 @@ export function formatHomePath(folder, home) {
   return folder;
 }
 
-// The title of a session as the card shows it, from the Orca agent's title. omp sets the
-// terminal title to `π > <session title>` or `π - <session title>` (the title may start with a
-// private-use glyph, which is part of it), so that `π > ` or `π - ` prefix is dropped for omp;
-// another harness's title is taken as it is (no other prefix is known). An untitled session's
-// title is the folder's name, and then there is nothing to show: null. Otherwise a
-// `{ value, tone }` figure.
+// An Orca agent's title without the mark its harness paints in front of the session's title.
+// omp sets the terminal title to `π > <session title>`, or `OMP > <session title>` (seen in an
+// Orca terminal on this Mac); an omp extension may paint it instead as
+// `π <mark> <session title> - <folder name>`, the mark being `-` (idle), `!` (needs input) or a
+// braille spinner frame that changes every 100 ms while the agent works. So for omp the leading
+// `π ` or `OMP `, one such mark and its space are dropped, and the title stays one string however
+// the spinner turns (the title may start with a private-use glyph, which is part of it). Another
+// harness's title, and a missing one (null), is taken as it is (no other prefix is known).
+export function withoutTitleMark(title, harness) {
+  return harness === 'omp' && title != null ? title.replace(/^(?:π|OMP) [>!\-\u2800-\u28FF]\s/u, '') : title;
+}
+
+// The title of a session as the card shows it, from the Orca agent's title: without its mark
+// (withoutTitleMark) and, for omp, without a trailing ` - ` and the folder's name, which the
+// omp extension adds. An untitled session's title is the folder's name, and then there is
+// nothing to show: null. Otherwise a `{ value, tone }` figure.
 export function formatSessionTitle(title, folder, harness) {
-  const text = (harness === 'omp' ? (title ?? '').replace(/^π [>-]\s/, '') : title ?? '').trim();
-  return text === '' || text === formatFolderName(folder) ? null : { value: text, tone: 'normal' };
+  const name = formatFolderName(folder);
+  let text = (withoutTitleMark(title, harness) ?? '').trim();
+  if (harness === 'omp' && folder != null && text.endsWith(` - ${name}`)) text = text.slice(0, -` - ${name}`.length).trim();
+  return text === '' || text === name ? null : { value: text, tone: 'normal' };
 }
 
 // A git remote's URL for reading: without the scheme, the user (credentials are masked

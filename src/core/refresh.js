@@ -70,16 +70,18 @@ function dropBytes(text, n) {
 const newScan = () => ({ state: undefined, block: 0, skip: 0, carry: '', pos: -1 });
 
 // The kept scans of the session files, as the plugin stores them between runs: the finished
-// scans (`{ provider, machine, path, pos, state }`: the provider whose `fold` built the state,
-// the Orca host of the file, null for this computer, and the scan's `pos` and `state`) under
-// the number of the version that wrote them. A stored value is JSON, so a state is written in
+// scans (`{ provider, machine, path, pos, readAt, ended, state }`: the provider whose `fold`
+// built the state, the Orca host of the file, null for this computer, the scan's `pos`, when the
+// file was last asked for and whether it is an ended sub-agent's, which the drop order of
+// `encodeScans` goes by in every later run too, and the scan's `state`) under the number of the
+// version that wrote them. A stored value is JSON, so a state is written in
 // plain values that read back as the same state: `undefined`, `NaN` and a `Map`, which JSON
 // has no word for, are written as an object whose `$` names them, and so is an object that
 // has a `$` field of its own, as `fields`.
 // Raise KEPT_VERSION when a provider's state changes shape: values of another number are
 // ignored, so each file is scanned whole again once. It is raised by each slice of spyhop-live
 // that changes a fold's state.
-export const KEPT_VERSION = 4;
+export const KEPT_VERSION = 5;
 
 function encode(value) {
   if (value === undefined) return { $: 'undefined' };
@@ -102,9 +104,68 @@ function decode(value) {
   return Object.fromEntries(Object.entries(value.$ === 'fields' ? value.fields : value).map(([key, field]) => [key, decode(field)]));
 }
 
-// The value to store for `scans`. The states are read at once: a later fold changes them.
+// Orca refuses to store a value whose JSON is over 262144 bytes, and a storage file over 5 MiB,
+// which it writes pretty-printed. So the kept scans are stored as parts, each one JSON text (a
+// string, which pretty-printing leaves as it is) whose stored JSON is at most KEPT_VALUE_BYTES,
+// and all of them together at most KEPT_TOTAL_BYTES, 80% of Orca's cap, a margin for the
+// escaping of the strings and the file's other keys. The first part also holds how many parts
+// there are. ENVELOPE_BYTES is room for a part's fields beside its scans
+// (`"{\"version\":5,\"parts\":12,\"scans\":[]}"`), with margin; KEPT_TOTAL_BYTES leaves room for
+// the envelopes of as many parts as Orca keeps keys.
+export const KEPT_VALUE_BYTES = 262144;
+export const KEPT_TOTAL_BYTES = 4194304;
+const ENVELOPE_BYTES = 64;
+const MAX_PARTS = 1024;
+const utf8 = new TextEncoder();
+
+// The values to store for `scans`, in order (see KEPT_VALUE_BYTES). A scan whose JSON alone
+// would not fit in a part is left out. When the rest are more than KEPT_TOTAL_BYTES, scans are
+// left out in this order until they fit: the ended sub-agent transcripts (a scan's `ended`), the
+// one read longest ago first (its `readAt`, epoch ms), then the others, the one read longest ago
+// first. A scan left out is read again whole after a restart. The states are read at once: a
+// later fold changes them.
 export function encodeScans(scans) {
-  return { version: KEPT_VERSION, scans: scans.map((scan) => ({ ...scan, state: encode(scan.state) })) };
+  const texts = scans
+    .map(({ provider, machine, path, pos, state, readAt = 0, ended = false }) => {
+      const text = JSON.stringify({ provider, machine, path, pos, readAt, ended, state: encode(state) });
+      // the text as a part's string holds it, and the comma before it
+      return { text, readAt, ended, size: utf8.encode(JSON.stringify(text)).length - 2 + 1 };
+    })
+    .filter(({ size }) => ENVELOPE_BYTES + size <= KEPT_VALUE_BYTES)
+    .sort((a, b) => Number(b.ended) - Number(a.ended) || a.readAt - b.readAt);
+  let total = texts.reduce((sum, { size }) => sum + size, 0);
+  let dropped = 0;
+  while (total > KEPT_TOTAL_BYTES - ENVELOPE_BYTES * MAX_PARTS) total -= texts[dropped++].size;
+  /** @type {string[][]} the scans' texts of each part */
+  const groups = [[]];
+  let bytes = ENVELOPE_BYTES;
+  for (const { text, size } of texts.slice(dropped)) {
+    if (bytes + size > KEPT_VALUE_BYTES) {
+      groups.push([]);
+      bytes = ENVELOPE_BYTES;
+    }
+    groups.at(-1).push(text);
+    bytes += size;
+  }
+  return groups.map((group, i) => `{"version":${KEPT_VERSION},${i === 0 ? `"parts":${groups.length},` : ''}"scans":[${group.join(',')}]}`);
+}
+
+// A stored part read, or null when it is not one JSON text.
+function partOf(value) {
+  if (typeof value !== 'string') return null;
+  try {
+    return JSON.parse(value);
+  } catch {
+    return null;
+  }
+}
+
+// How many parts the stored first part `value` of the kept scans names: 1 for a value that names
+// none, or that is not a first part of this version.
+export function keptPartsOf(value) {
+  const part = partOf(value);
+  const parts = part?.version === KEPT_VERSION ? part.parts : undefined;
+  return Number.isInteger(parts) && parts >= 1 ? parts : 1;
 }
 
 const isKeptScan = (scan) =>
@@ -117,14 +178,18 @@ const isKeptScan = (scan) =>
   scan.pos >= 0 &&
   'state' in scan;
 
-// The kept scans a stored value holds; none when it is not what `encodeScans` of this version
-// gives (another version's number, a text, an array, a scan that lacks a field or whose `pos`
-// is not a whole number from 0 up), or when a state cannot be read back.
-export function decodeScans(value) {
-  if (value === null || typeof value !== 'object' || value.version !== KEPT_VERSION) return [];
-  if (!Array.isArray(value.scans) || !value.scans.every(isKeptScan)) return [];
+const isKeptPart = (part) =>
+  part !== null && typeof part === 'object' && part.version === KEPT_VERSION && Array.isArray(part.scans) && part.scans.every(isKeptScan);
+
+// The kept scans the stored parts `values` hold, in order; none when they are not what
+// `encodeScans` of this version gives (fewer or more parts than the first names, a value that is
+// not a JSON text, another version's number, a scan that lacks a field or whose `pos` is not a
+// whole number from 0 up), or when a state cannot be read back.
+export function decodeScans(values) {
+  const parts = values.map(partOf);
+  if (values.length !== keptPartsOf(values[0]) || !parts.every(isKeptPart)) return [];
   try {
-    return value.scans.map((scan) => ({ ...scan, state: decode(scan.state) }));
+    return parts.flatMap((part) => part.scans.map((scan) => ({ ...scan, state: decode(scan.state) })));
   } catch {
     return [];
   }
@@ -143,12 +208,14 @@ export function decodeScans(value) {
 // read again while its size and modified time are those of its last read, when neither the tail
 // nor the scan of that read failed: that read is the input.
 //
-// `kept`: the finished scans an earlier run kept (`{ path, pos, state }` each), which the
+// `kept`: the finished scans an earlier run kept (`{ path, pos, state, readAt }` each), which the
 // scans of those files start from; the reader owns their states from then on. `scanned()` is
 // what a later run can be given as `kept`: `{ changed, scans }`, the finished scans of the
-// files read by this reader (a kept scan of a file never read is left out), and whether any of
-// them changed since `scanned()` was last asked. Their states are the reader's own, which a
-// later read changes.
+// files read by this reader and the kept scans of the files it has not read, each with `readAt`,
+// when its file was last asked for (epoch ms, in this run or the one that kept it), and whether
+// any of them changed since `scanned()` was last asked. A kept scan not read is still a finished
+// scan of its file, so a run keeps what earlier runs scanned of files it never reads. Their
+// states are the reader's own, which a later read changes.
 export function createSessionReader({ exec, fold, kept = [] }) {
   // path -> the scan of that file
   const scans = new Map();
@@ -162,6 +229,8 @@ export function createSessionReader({ exec, fold, kept = [] }) {
   // path -> { mtimeMs, size, input }: the last read of that file, kept when neither its tail nor
   // its scan failed
   const reads = new Map();
+  // path -> when that file was last asked for (epoch ms), which `encodeScans` drops by
+  const readAt = new Map();
 
   // The state of the file's first `size` bytes or more, read as little as possible:
   //
@@ -263,6 +332,7 @@ export function createSessionReader({ exec, fold, kept = [] }) {
 
   return {
     async read(file) {
+      readAt.set(file.path, Date.now());
       const last = reads.get(file.path);
       if (last?.mtimeMs === file.mtimeMs && last.size === file.size) return last.input;
       // a tail that cannot be read, or cannot be started, is an empty text
@@ -290,7 +360,8 @@ export function createSessionReader({ exec, fold, kept = [] }) {
 
     scanned() {
       const finished = [];
-      for (const [path, { pos, state }] of scans) if (pos >= 0) finished.push({ path, pos, state });
+      for (const [path, { pos, state }] of scans) if (pos >= 0) finished.push({ path, pos, state, readAt: readAt.get(path) ?? 0 });
+      for (const { path, pos, state, readAt: keptAt = 0 } of keptScans.values()) finished.push({ path, pos, state, readAt: keptAt });
       const was = changed;
       changed = false;
       return { changed: was, scans: finished };

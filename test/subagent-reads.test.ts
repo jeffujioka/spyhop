@@ -28,7 +28,7 @@ function devboxAgent(costs: number[], { large = false } = {}) {
   const path = join(remoteHome, 'work/infra-main');
   const file = ompSessionOf(remoteHome, path);
   const transcripts = costs.map((usd, i) =>
-    subAgentFile(file, `Impl${i + 1}`, [costTurn(usd), ...(large ? [PADDING] : [])], { running: i === 0 }),
+    subAgentFile(file, `Impl${i + 1}`, [costTurn(usd), ...(large ? [PADDING] : [])]),
   );
   const calls = standIns({ homes: { devbox: remoteHome }, orca: {} });
   const lines = () =>

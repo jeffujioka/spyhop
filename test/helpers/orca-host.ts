@@ -6,7 +6,8 @@
 // (`terminal.focus`); `callsOf('terminal.focus')` lists those asks. `holdLists` holds back its
 // `workspace.list` answers, so the worker answers no fleet, until the release it returns;
 // `failLists` makes them fail, as an Orca that cannot list its workspaces does, until the end it
-// returns; `remove` takes a workspace off its lists.
+// returns; `remove` takes a workspace off its lists. `results` answers further methods, or
+// overrides the built-in storage ones, as mockHost's option of that name does.
 import { hostError, mockHost, type MockHostOptions } from 'orca/testing';
 import { workspace as folder } from './agent-cards.ts';
 
@@ -35,7 +36,7 @@ export type HostWorkspace = {
   stateStartedAt?: number;
 };
 
-export function orcaHost(home: string, { workspaces, storage, capabilities }: { workspaces: HostWorkspace[] } & Pick<MockHostOptions, 'storage' | 'capabilities'>) {
+export function orcaHost(home: string, { workspaces, storage, capabilities, results }: { workspaces: HostWorkspace[] } & Pick<MockHostOptions, 'storage' | 'capabilities' | 'results'>) {
   const rows = workspaces.map(({ project, name, agents, harness = 'omp', unreadable, hostId = 'local', terminals, sessionId = null, title = null, titles, stateStartedAt = 0 }) => {
     const path = folder(home, `${project}-${name}`);
     const projectId = `repo:${project}`;
@@ -70,6 +71,7 @@ export function orcaHost(home: string, { workspaces, storage, capabilities }: { 
         return { agents: found?.agents ?? [] };
       },
       'terminal.focus': { focused: true },
+      ...results,
     },
   });
   function holdLists() {
