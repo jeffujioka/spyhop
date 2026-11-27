@@ -13,7 +13,11 @@ export type Num = number | 'n/a';
 // A card as the live panel draws it (src/card-view.ts). `stateSinceMs`: how long the agent has
 // been in its Orca state. `context.compactAt`: the share of the window where the harness
 // compacts on its own; `context.spark`: the contexts after the session's last model calls,
-// oldest first. `reading`, `subAgents` and `burnPerHour` are not read yet: null, null and n/a.
+// oldest first. `cost`: with the sub-agents' once every sub-agent transcript is read, the
+// session's own until then, while `reading` says how many of them are read (null once all are);
+// Claude Code's is the total it logs, which holds its sub-agents'. `subAgents`: how many there
+// are and how many run (n/a when the harness does not tell), null without any. `burnPerHour` is
+// not read yet: n/a.
 export type CardView = {
   id: string;
   state: string;
@@ -53,13 +57,21 @@ export type GroupPost = { request: number; group: HostGroup };
 // context after the last that logged one (null: none did).
 export type Point = { t: number; n: number; read: number; write: number; uncached: number; output: number; cost: number | null; context: number | null };
 
+// A sub-agent of a session as the Sub-agents section draws it: its name, agent kind, model and
+// task (n/a: not told), whether it runs (null: the harness does not tell), the times of its
+// transcript's first and last entry and its cost (n/a on Claude Code, which logs none per
+// sub-agent).
+export type SubAgentView = { name: string; kind: string; model: string; task: string; running: boolean | null; startMs: Num; endMs: Num; cost: Num };
+
 // One card's session as the session screen draws it (src/session-detail.ts). `linked`: whether
-// the card links to a session; `path`: its folder for reading. `figures`: the figures row;
-// `context`, `tokens`, `cost` and `tools`: the series and tallies of the whole session file,
-// null when it was not read whole or the card links to none (`tools` too when the session made
-// no tool call); `models`: the session's models by what the harness logs of them; `session`:
-// the Session section, `host` the Orca host's name when it is not this computer. Sub-agents
-// are not read yet: `subAgents` is null and `figures.subShare` 0.
+// the card links to a session; `path`: its folder for reading. `figures`: the figures row, its
+// cost and tokens as the card's cost is summed, `subShare` the sub-agents' share of the cost (n/a
+// on Claude Code, and while they are being read); `context`, `tokens`, `cost` and `tools`: the
+// series and tallies of the whole session file, null when it was not read whole or the card links
+// to none (`tools` too when the session made no tool call), `cost.sub` the sub-agents' cost over
+// time; `subAgents`: the session's sub-agents, in the order they started, null without any;
+// `models`: the models of the session and its sub-agents by what the harness logs of them;
+// `session`: the Session section, `host` the Orca host's name when it is not this computer.
 export type SessionView = {
   card: CardView;
   linked: boolean;
@@ -76,7 +88,7 @@ export type SessionView = {
   } | null;
   tokens: { points: Point[]; hitRate: Num; cold: { count: number; tokens: number; cost: Num } | null } | null;
   cost: { harness: string; total: Num; perHour: Num; own: { t: number; v: number }[] | 'n/a'; sub: { t: number; v: number }[] | 'n/a' } | null;
-  subAgents: null;
+  subAgents: { running: Num; total: number; cost: Num; agents: SubAgentView[] } | null;
   tools: { calls: number; failed: number; byTool: { name: string; calls: number; failed: number }[] } | null;
   models: { by: 'cost' | 'tokens'; rows: { model: string; main: boolean; subAgents: number; value: Num }[] };
   session: { startedMs: Num; thinking: string; latencyMs: Num; premium: Num; branch: string | null; remote: string | null; host: string | null };

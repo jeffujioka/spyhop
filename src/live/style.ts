@@ -120,4 +120,18 @@ button:hover { background: var(--orca-accent); color: var(--orca-accent-foregrou
 .box .head .muted { font-size: 11px; }
 .box .item { font-size: 12px; padding: 2px 0; }
 .failed { color: var(--spy-critical); font-size: 11px; }
+/* the Sub-agents section: each bar under its label, in the colour of its kind */
+.kind-1 { --k: var(--spy-k1); }
+.kind-2 { --k: var(--spy-k2); }
+.kind-3 { --k: var(--spy-k3); }
+.kind-4 { --k: var(--spy-k4); }
+.kind-5 { --k: var(--spy-k5); }
+.kind-6 { --k: var(--spy-k6); }
+.agents { margin-top: 6px; }
+.agent { margin-top: 4px; }
+.agent .label { font-size: 11.5px; }
+.agent .label i { display: inline-block; flex: none; width: 8px; height: 8px; border-radius: 2px; background: var(--k); }
+[data-chart="subagents"] { height: 8px; margin-top: 2px; }
+[data-chart="subagents"] rect { fill: var(--k); }
+.more { margin-top: 6px; font-size: 11px; }
 `;

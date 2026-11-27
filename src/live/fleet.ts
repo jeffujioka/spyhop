@@ -1,10 +1,12 @@
 // The fleet screen of the live panel, as markup: the header, with the number of agents in each
 // Orca state once the whole fleet is answered, then each Orca host's group of sessions, a card per
 // session whose agent is not done and a folded line per done one, each of which opens its
-// session's screen when pressed. Groups only: no Orca project or workspace row. Pure: an answer
-// in, a markup string out (src/panel.ts draws it).
+// session's screen when pressed. Groups only: no Orca project or workspace row. A card whose
+// sub-agents are still being read says how many are, beside its own cost; its chips tell how
+// close its context is to an autocompaction, its sub-agents and its cache hit rate. Pure: an
+// answer in, a markup string out (src/panel.ts draws it).
 
-import { formatAge, formatCost, formatPercent, formatTokens, orNa } from '../core/format.js';
+import { formatAge, formatCost, formatCount, formatPercent, formatTokens, orNa } from '../core/format.js';
 import { STATES } from '../fleet.ts';
 import type { CardView, FleetAnswer, HostGroup } from '../protocol.ts';
 import { contextBar, sparkLine } from './charts.ts';
@@ -36,9 +38,28 @@ function context({ context: { tokens, window, percent, compactAt, spark } }: Car
   return `<div class="context"><div class="row">${head}</div>${bar}${sparkLine(spark)}</div>`;
 }
 
-function chips({ context: { percent }, tokensLeft }: CardView) {
-  if (!(typeof percent === 'number' && Math.round(percent * 100) >= WARNING_CHIP_AT && typeof tokensLeft === 'number')) return '';
-  return `<div class="row chips"><span data-chip="warning" class="lvl-${levelOf(percent)}"><span class="num">${formatTokens(tokensLeft)}</span> left</span></div>`;
+// The card's chips: the tokens left before the harness compacts on its own, from WARNING_CHIP_AT
+// percent of the window, when they are known; how many sub-agents run and how many there are, or
+// how many there are when the harness does not tell which run, none without a sub-agent; and the
+// cache hit rate.
+function chips({ context: { percent }, tokensLeft, subAgents, cacheHitRate }: CardView) {
+  const warning =
+    typeof percent === 'number' && Math.round(percent * 100) >= WARNING_CHIP_AT && typeof tokensLeft === 'number'
+      ? `<span data-chip="warning" class="lvl-${levelOf(percent)}"><span class="num">${formatTokens(tokensLeft)}</span> left</span>`
+      : '';
+  const count = (n: number) => `<span class="num">${formatCount(n)}</span>`;
+  const agents = !subAgents
+    ? ''
+    : subAgents.running === 'n/a'
+      ? `<span data-chip="subagents">${count(subAgents.total)} sub-agents</span>`
+      : `<span data-chip="subagents">${count(subAgents.running)} sub-agents running</span><span data-chip="subagents">${count(subAgents.total)} in total</span>`;
+  return `<div class="row chips">${warning}${agents}<span data-chip="cache">cache <span class="num">${formatPercent(cacheHitRate)}</span></span></div>`;
+}
+
+// How many of a session's sub-agent transcripts are read, while some are not: the card and the
+// session screen write it where the cost with sub-agents will be.
+export function readingNote({ read, total }: NonNullable<CardView['reading']>): string {
+  return `reading <span class="num">${read}</span> of <span class="num">${total}</span> sub-agents`;
 }
 
 // The attributes that make a card or a folded line the control that opens the session screen of
@@ -53,7 +74,7 @@ function card(view: CardView) {
     `<article data-part="card" data-state="${esc(view.state)}" ${opens(view)}>` +
     `<div class="row"><i class="dot"></i><b class="title grow">${esc(view.title)}</b>${num('cost', formatCost(view.cost))}</div>` +
     `<div class="row meta"><span class="grow">${where}</span><span>${esc(view.state)} · ${num('since', formatAge(view.stateSinceMs))}</span></div>` +
-    `${context(view)}${chips(view)}</article>`
+    `${view.reading ? `<div class="row meta">${readingNote(view.reading)}</div>` : ''}${context(view)}${chips(view)}</article>`
   );
 }
 

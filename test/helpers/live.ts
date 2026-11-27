@@ -7,22 +7,24 @@
 // (src/live/controller.ts) on such a worker, through the frame the tests play
 // (test/helpers/frame.ts); `openOnFleet` waits for its fleet, and `open` opens a session's screen
 // from it; `FIX` is the workspace the screen tests open it on, and `folderOf` the folder of a
-// workspace's session. The writers put omp and Claude Code session files, omp's model catalogue
-// and its config under that home, read by the real read-only programs.
+// workspace's session. The writers put omp and Claude Code session files and their sub-agents'
+// transcripts, omp's model catalogue and its config under that home, read by the real read-only
+// programs.
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { mock } from 'node:test';
 import { setImmediate } from 'node:timers/promises';
 import { mountWorker, type MockHostOptions, type TestWorker } from 'orca/testing';
 import { sessionDirSlug as claudeSlug } from '../../src/core/providers/claude-sources.js';
+import { SUBAGENT_READS_PER_REFRESH } from '../../src/core/providers/session-files.js';
 import { createLive, type Drawing, type Frame, type Live } from '../../src/live/controller.ts';
 import { fleetScreen } from '../../src/live/fleet.ts';
 import { sessionScreen } from '../../src/live/session.ts';
 import type { CardView, FleetAnswer, SessionAnswer } from '../../src/protocol.ts';
 import * as workerModule from '../../src/worker.ts';
-import { NOW, ompSessionDir, workspace } from './agent-cards.ts';
+import { NOW, ompSessionDir, subAgentFile, workspace } from './agent-cards.ts';
 import { atTestEnd, setEnv, useTempHome } from './env.ts';
 import { frameOf } from './frame.ts';
 import { attr, parts, text } from './markup.ts';
@@ -75,18 +77,29 @@ export async function fleetOf(workspaces: HostWorkspace[], mounting: Mounting = 
   return { answer, html: fleetScreen({ groups: answer.groups, whole: answer }) };
 }
 
-// The worker's session answer (request 2) for the card `card` picks from the cards of the fleet
-// it answered first (request 1), its first card when not given; that fleet answer; and the
-// session screen drawn from the answer, with the fleet's card.
+// The worker's session answer for the card `card` picks from the cards of the fleet it answered
+// first, its first card when not given; that fleet answer; and the session screen drawn from the
+// answer, with the fleet's card, at the mock clock's time. With `allRead`, the fleet is asked again
+// until no card's sub-agents are being read, as refreshes read some more of them each: at most
+// SUBAGENT_READS_PER_REFRESH of a session each, so a reading still going after two asks more than
+// that takes fails the test instead of asking for ever (`node:test` has no default timeout).
 export async function sessionOf(
   workspaces: HostWorkspace[],
-  { card = (cards) => cards[0].id, ...mounting }: Mounting & { card?: (cards: CardView[]) => string } = {},
+  { card = (cards) => cards[0].id, allRead = false, ...mounting }: Mounting & { card?: (cards: CardView[]) => string; allRead?: boolean } = {},
 ): Promise<{ answer: SessionAnswer; fleet: FleetAnswer; html: string }> {
-  const { mounted, fleet } = await mountedFleet(workspaces, mounting);
+  let { mounted, fleet } = await mountedFleet(workspaces, mounting);
+  let request = 1;
+  const reading = () => fleet.groups.flatMap((group) => group.cards.flatMap((found) => (found.reading ? [found.reading.total] : [])));
+  const asks = Math.ceil(Math.max(0, ...reading()) / SUBAGENT_READS_PER_REFRESH) + 2;
+  while (allRead && reading().length > 0) {
+    assert.ok(request < asks, `sub-agents still being read after ${asks} fleet answers`);
+    fleet = (await mounted.request('spyhop.fleet', { request: (request += 1) })) as FleetAnswer;
+  }
   const cards = fleet.groups.flatMap((group) => group.cards);
   const id = card(cards);
-  const answer = (await mounted.request('spyhop.session', { request: 2, card: id })) as SessionAnswer;
-  return { answer, fleet, html: sessionScreen(answer.session, { card: cards.find((found) => found.id === id) ?? null, showAll: false }) };
+  const answer = (await mounted.request('spyhop.session', { request: request + 1, card: id })) as SessionAnswer;
+  const ui = { card: cards.find((found) => found.id === id) ?? null, showAll: false, now: Date.now() };
+  return { answer, fleet, html: sessionScreen(answer.session, ui) };
 }
 
 // What a test may give `openLive` and `openOnFleet`.
@@ -189,11 +202,14 @@ export async function open({ live, html }: { live: Live; html: () => string }, t
 }
 
 // Resolves once `seen()` holds, asked again at each turn of the event loop, so after what the
-// last turn started has run; rejects when it does not within 5 s of real time.
+// last turn started has run; rejects when it does not within 10 s of real time. The bound only
+// turns a hang into a failure: while the whole suite runs, each call of the stand-in `ssh` takes
+// up to a few hundred milliseconds, and the first fleet of a session on another Orca host waits
+// on a dozen of them one after another, past 5 s at times.
 export async function until(seen: () => boolean) {
-  const end = performance.now() + 5000;
+  const end = performance.now() + 10_000;
   while (!seen()) {
-    if (performance.now() > end) throw new Error(`not seen within 5 s: ${seen}`);
+    if (performance.now() > end) throw new Error(`not seen within 10 s: ${seen}`);
     await setImmediate();
   }
 }
@@ -232,17 +248,12 @@ export type Compaction = { at: number; before: number; after: number };
 // The `count` calls of the tool `name`, of which the first `failed` failed.
 export const toolCalls = (name: string, count: number, failed = 0): ToolCall[] => Array.from({ length: count }, (_, i) => ({ name, failed: i < failed }));
 
-// The folder `path`, with an omp session of it titled `title`, which records it as its folder and
-// logs `calls` of `model` and `compactions`, in the order of their times; `thinking`: the
-// thinking level it was set to at its start, none when not given.
-export function ompSession(
-  home: string,
-  path: string,
-  { title, calls, compactions = [], model = MODEL, thinking }: { title: string; calls: OmpCall[]; compactions?: Compaction[]; model?: string; thinking?: string },
-) {
-  mkdirSync(path, { recursive: true });
-  const dir = ompSessionDir(home, path);
-  mkdirSync(dir, { recursive: true });
+// One model call of `usd` at `at`, a minute before NOW when not given, of 100 output tokens.
+export const spent = (usd: number, at = NOW - 60_000): OmpCall => ({ at, output: 100, cost: usd });
+
+// The lines of an omp session file that log `calls` of `model` and `compactions`, in the order of
+// their times, each line an entry.
+function ompEntries(calls: OmpCall[], compactions: Compaction[], model: string) {
   const timestamp = (at: number) => new Date(at).toISOString();
   const message = ({ at, read, write, uncached, output, cost, writeCost, premium, context, tools = [] }: OmpCall, i: number) => {
     const tokens = { input: uncached, cacheRead: read, cacheWrite: write, output };
@@ -269,11 +280,48 @@ export function ompSession(
   };
   const prompts = calls.flatMap(({ prompted }) => (prompted === undefined ? [] : [{ at: prompted, lines: [{ type: 'message', timestamp: timestamp(prompted), message: { role: 'user', content: '[text]' } }] }]));
   const compaction = ({ at, before, after }: Compaction) => ({ at, lines: [{ type: 'compaction', timestamp: timestamp(at), tokensBefore: before, tokensAfter: after }] });
-  const entries = [...calls.map(message), ...prompts, ...compactions.map(compaction)].sort((a, b) => a.at - b.at).flatMap(({ lines }) => lines);
+  return [...calls.map(message), ...prompts, ...compactions.map(compaction)].sort((a, b) => a.at - b.at).flatMap(({ lines }) => lines);
+}
+
+// The omp session file of the folder `path` under `home` that `ompSession` writes.
+const ompSessionFile = (home: string, path: string) => join(ompSessionDir(home, path), '2026-11-25T11-58-00-000Z_s1.jsonl');
+
+// The folder `path`, with an omp session of it titled `title`, which records it as its folder and
+// logs `calls` of `model` and `compactions`, in the order of their times; `thinking`: the
+// thinking level it was set to at its start, none when not given.
+export function ompSession(
+  home: string,
+  path: string,
+  { title, calls, compactions = [], model = MODEL, thinking }: { title: string; calls: OmpCall[]; compactions?: Compaction[]; model?: string; thinking?: string },
+) {
+  mkdirSync(path, { recursive: true });
+  mkdirSync(ompSessionDir(home, path), { recursive: true });
   const start = '2026-11-25T11:58:00.000Z';
   const level = thinking === undefined ? [] : [{ type: 'thinking_level_change', timestamp: start, thinkingLevel: thinking }];
-  const lines = [{ type: 'title', title }, { type: 'session', version: 3, id: 's1', timestamp: start, cwd: path }, ...level, ...entries];
-  writeFileSync(join(dir, '2026-11-25T11-58-00-000Z_s1.jsonl'), lines.map((line) => `${JSON.stringify(line)}\n`).join(''));
+  const lines = [{ type: 'title', title }, { type: 'session', version: 3, id: 's1', timestamp: start, cwd: path }, ...level, ...ompEntries(calls, compactions, model)];
+  writeFileSync(ompSessionFile(home, path), lines.map((line) => `${JSON.stringify(line)}\n`).join(''));
+}
+
+// The sub-agent `name` (`Impl1`, or `Impl1/Rev1` for one that `Impl1` started) of the omp session
+// `ompSession` wrote for the folder `path` under `home`, whose transcript logs `calls` of `model`
+// and `compactions`, in the order of their times; `init`: the `session_init` entry omp writes
+// first, at `at` (epoch ms), with the agent kind `kind`, the task `task` and the model, none when
+// not given; `running`: whether its lock file is beside it. The transcript's path.
+export function ompSubAgent(
+  home: string,
+  path: string,
+  name: string,
+  {
+    calls,
+    compactions = [],
+    model = MODEL,
+    init,
+    running = false,
+  }: { calls: OmpCall[]; compactions?: Compaction[]; model?: string; init?: { at: number; kind: string; task?: string }; running?: boolean },
+) {
+  const head = init ? [{ type: 'session_init', timestamp: new Date(init.at).toISOString(), agent: init.kind, readOnly: false, resolvedModel: model, spawns: '*', task: init.task ?? '' }] : [];
+  const lines = [...head, ...ompEntries(calls, compactions, model)].map((line) => `${JSON.stringify(line)}\n`);
+  return subAgentFile(ompSessionFile(home, path), name, lines, { running });
 }
 
 // omp's model catalogue under `home`, with `window` tokens as the window of `model`.
@@ -304,11 +352,9 @@ export function claudeCalls(home: string, path: string, contexts: number[]) {
 // the tool uses it makes, each answered right after it.
 export type ClaudeCall = { at: number; read?: number; write?: number; uncached?: number; output?: number; tools?: ToolCall[] };
 
-// A Claude Code session of the folder `path`, which it records, with `calls` and `compactions`
-// (automatic ones), in the order of their times.
-export function claudeSession(home: string, path: string, { calls, compactions = [] }: { calls: ClaudeCall[]; compactions?: Compaction[] }) {
-  const dir = join(home, '.claude/projects', claudeSlug(path));
-  mkdirSync(dir, { recursive: true });
+// The lines of a Claude Code transcript of the folder `path` that log `calls` of `model` and
+// `compactions` (automatic ones), in the order of their times, each line an entry.
+function claudeEntries(path: string, calls: ClaudeCall[], compactions: Compaction[], model: string) {
   const entry = (at: number) => ({ sessionId: 'c1', isSidechain: false, cwd: path, timestamp: new Date(at).toISOString() });
   const response = ({ at, read = 0, write = 0, uncached = 0, output = 0, tools = [] }: ClaudeCall, i: number) => {
     const id = (j: number) => `toolu_${i}_${j}`;
@@ -324,7 +370,7 @@ export function claudeSession(home: string, path: string, { calls, compactions =
           message: {
             id: `msg_${i}`,
             role: 'assistant',
-            model: 'claude-opus-4-6',
+            model,
             content: [{ type: 'text', text: '[text]' }, ...uses],
             usage: { input_tokens: uncached, cache_creation_input_tokens: write, cache_read_input_tokens: read, output_tokens: output },
           },
@@ -337,6 +383,40 @@ export function claudeSession(home: string, path: string, { calls, compactions =
     at,
     lines: [{ type: 'system', subtype: 'compact_boundary', ...entry(at), compactMetadata: { trigger: 'auto', preTokens: before, postTokens: after } }],
   });
-  const entries = [...calls.map(response), ...compactions.map(boundary)].sort((a, b) => a.at - b.at).flatMap(({ lines }) => lines);
-  writeFileSync(join(dir, 'c1.jsonl'), entries.map((line) => `${JSON.stringify(line)}\n`).join(''));
+  return [...calls.map(response), ...compactions.map(boundary)].sort((a, b) => a.at - b.at).flatMap(({ lines }) => lines);
+}
+
+// Claude Code's folder of the sessions of the folder `path` under `home`.
+const claudeDir = (home: string, path: string) => join(home, '.claude/projects', claudeSlug(path));
+
+// A Claude Code session of the folder `path`, which it records, with `calls` of `model` and
+// `compactions` (automatic ones), in the order of their times; `cost`: the session's total cost,
+// USD, which Claude Code logs after them, none when not given.
+export function claudeSession(
+  home: string,
+  path: string,
+  { calls, compactions = [], model = 'claude-opus-4-6', cost }: { calls: ClaudeCall[]; compactions?: Compaction[]; model?: string; cost?: number },
+) {
+  const dir = claudeDir(home, path);
+  mkdirSync(dir, { recursive: true });
+  const logged = cost === undefined ? [] : [{ type: 'cost-state', sessionId: 'c1', totalCostUSD: cost }];
+  const lines = [...claudeEntries(path, calls, compactions, model), ...logged];
+  writeFileSync(join(dir, 'c1.jsonl'), lines.map((line) => `${JSON.stringify(line)}\n`).join(''));
+}
+
+// The sub-agent `agent-<id>` of the Claude Code session `claudeSession` wrote for the folder
+// `path` under `home`, whose transcript logs `calls` of `model`; with `meta`, the meta file
+// Claude Code writes beside it, which names it by `description` and types it by `agentType`, with
+// the model `model`; without, none. The transcript's path.
+export function claudeSubAgent(
+  home: string,
+  path: string,
+  id: string,
+  { calls, model, meta }: { calls: ClaudeCall[]; model: string; meta?: { agentType: string; description: string } },
+) {
+  const file = join(claudeDir(home, path), 'c1/subagents', `agent-${id}.jsonl`);
+  mkdirSync(dirname(file), { recursive: true });
+  writeFileSync(file, claudeEntries(path, calls, [], model).map((line) => `${JSON.stringify(line)}\n`).join(''));
+  if (meta) writeFileSync(join(dirname(file), `agent-${id}.meta.json`), JSON.stringify({ ...meta, model }));
+  return file;
 }

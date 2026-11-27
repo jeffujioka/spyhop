@@ -29,14 +29,15 @@ function readsOnly([program, ...args]: string[]): boolean {
 }
 
 // Whether a command line `ssh` runs on the remote host is programs joined by `&&` that only
-// read, every word of them quoted.
+// read, every word of them quoted: in single quotes, a quote within the word written `'\''` as
+// the plugin's runner (src/exec.ts) writes it.
 export function readOnlyLine(line: string): boolean {
-  const words = line.match(/'[^']*'|&&/g) ?? [];
+  const words = line.match(/(?:'[^']*'|\\')+|&&/g) ?? [];
   if (words.join(' ') !== line) return false;
   const commands: string[][] = [[]];
   for (const word of words) {
     if (word === '&&') commands.push([]);
-    else commands.at(-1)!.push(word.slice(1, -1));
+    else commands.at(-1)!.push(word.replace(/'([^']*)'|\\'/g, (_, inside: string | undefined) => inside ?? "'"));
   }
   return commands.every((command) => command.length > 0 && readsOnly(command));
 }

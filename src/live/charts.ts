@@ -1,16 +1,17 @@
 // The charts of the live panel, as markup: on a card, the spark line of a session's recent
 // contexts and the bar of its context; on the session screen, the context over the whole session,
-// the tokens of each model call and the cost. A chart is an SVG as wide as its box
-// (`width="100%"` over a `viewBox` 360 wide, stretched with `preserveAspectRatio="none"`) with no
-// text of its own: its headline, times and notes are HTML around it. Its colours come from the
-// stylesheet (src/live/style.ts), by its classes and attributes. A session chart groups
-// neighbouring model calls to the room it has (`groupPoints`), and is not drawn without a point.
+// the tokens of each model call, the cost, and the bars of its sub-agents on one time axis. A
+// chart is an SVG as wide as its box (`width="100%"` over a `viewBox` 360 wide, stretched with
+// `preserveAspectRatio="none"`) with no text of its own: its headline, times, labels and notes are
+// HTML around it. Its colours come from the stylesheet (src/live/style.ts), by its classes and
+// attributes. A session chart groups neighbouring model calls to the room it has (`groupPoints`),
+// and is not drawn without a point.
 // Pure: no DOM.
 
 import { formatClock, formatCost, formatPercent, formatTokens, orNa } from '../core/format.js';
 import { groupPoints } from '../core/series.js';
-import type { Num, Point, SessionView } from '../protocol.ts';
-import { num } from './html.ts';
+import type { Num, Point, SessionView, SubAgentView } from '../protocol.ts';
+import { esc, num } from './html.ts';
 import { levelOf } from './levels.ts';
 
 // Width of every chart's viewBox, and the heights of the spark line's and the session charts'.
@@ -19,6 +20,7 @@ const SPARK_HEIGHT = 40;
 const CONTEXT_HEIGHT = 120;
 const TOKENS_HEIGHT = 120;
 const COST_HEIGHT = 100;
+const AGENT_HEIGHT = 10;
 // Room of a session chart, in bars or points, unless its caller gives another.
 const ROOM = 120;
 // Space kept inside a session chart's edges, so the dots of its first and last points show whole.
@@ -231,4 +233,22 @@ export function costChart(cost: Cost, room = ROOM): string {
   const last = costAt(cost, times.at(-1)!);
   const keys = layers.map((name) => `<span><i class="k-${name}"></i>${name === 'own' ? 'own turns' : 'sub-agents'} <span class="num">${formatCost(last[name])}</span></span>`).join('');
   return card('Cost', '', `${svgOf('cost', COST_HEIGHT)}${drawn}</svg>${axis(times)}<div class="row key muted">${keys}</div>`);
+}
+
+// The bars of the sub-agents `agents`, in their order, each on its own line of one time axis that
+// spans them all: from its start to its end, in the colour of its kind (`kind-<k>`, k from
+// `kinds`), under its label: its name, kind, model and cost. One whose start or end is not known
+// has its label and no bar.
+export function agentBars(agents: SubAgentView[], kinds: Map<string, number>): string {
+  const times = agents.flatMap(({ startMs, endMs }) => (startMs === 'n/a' || endMs === 'n/a' ? [] : [startMs, endMs]));
+  const x = timeScale(times);
+  const drawn = agents.map(({ name, kind, model, startMs, endMs, cost }) => {
+    const bar = startMs === 'n/a' || endMs === 'n/a' ? '' : `<rect x="${x(startMs)}" y="1" width="${Math.max(1, at(x(endMs) - x(startMs)))}" height="${AGENT_HEIGHT - 2}" rx="2"/>`;
+    return (
+      `<div data-agent data-kind="${esc(kind)}" data-start="${startMs}" data-end="${endMs}" data-cost="${cost === 'n/a' ? cost : valueText(cost)}" class="agent kind-${kinds.get(kind)}">` +
+      `<div class="row label"><i></i><span class="grow">${[name, kind, model].map(esc).join(' · ')}</span> · <span class="num">${formatCost(cost)}</span></div>` +
+      `${svgOf('subagents', AGENT_HEIGHT)}${bar}</svg></div>`
+    );
+  });
+  return `${drawn.join('')}${times.length > 0 ? axis(times) : ''}`;
 }

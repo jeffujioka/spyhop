@@ -7,7 +7,8 @@
 // then replaces the groups and is kept as the last whole fleet, the only source of the header's
 // counts. Pressing a card or a folded line draws that session's screen at once, from the fleet's
 // card, and asks for the session as soon as no ask is out; back draws the last fleet and asks for
-// the fleet the same way, as does a session answer that says Orca no longer lists the agent. Focus
+// the fleet the same way, as does a session answer that says Orca no longer lists the agent. Show
+// all lists every sub-agent of the open session until the screen changes. Focus
 // asks the worker to focus the pane of the open session's agent; its answer, and its failure,
 // change nothing drawn. An answer is drawn only on the screen, and for the card, it was asked for.
 // A change of Orca's theme draws nothing: the stylesheet's variables follow it in place. A failed
@@ -37,8 +38,9 @@ export type Live = { show(visible: boolean): void; press(target: string): void; 
 export type Drawing = { sameScreen: boolean };
 
 // The screen drawn: the fleet, or the session of the card `id`, with the fleet's card of it (null
-// when the fleet drawn has none) and its answer once one is in.
-type Screen = { name: 'fleet' } | { name: 'session'; id: string; card: CardView | null; session: SessionView | null };
+// when the fleet drawn has none), its answer once one is in, and whether every sub-agent is
+// listed (`showAll`).
+type Screen = { name: 'fleet' } | { name: 'session'; id: string; card: CardView | null; session: SessionView | null; showAll: boolean };
 
 const LOADING = '<main data-screen="fleet"><p data-part="loading" class="muted">Reading the Orca agents</p></main>';
 const EMPTY = '<main data-screen="fleet"><p class="muted">No Orca agents</p></main>';
@@ -63,7 +65,7 @@ export function createLive(frame: Frame, draw: (html: string, drawing: Drawing) 
     const now = screen.name === 'session' ? `session:${screen.id}` : 'fleet';
     const drawing = { sameScreen: now === drawn };
     drawn = now;
-    if (screen.name === 'session') draw(sessionScreen(screen.session, { card: screen.card, showAll: false }), drawing);
+    if (screen.name === 'session') draw(sessionScreen(screen.session, { card: screen.card, showAll: screen.showAll, now: Date.now() }), drawing);
     else if (view.groups.length > 0) draw(fleetScreen(view), drawing);
     else draw(view.whole ? EMPTY : LOADING, drawing);
   }
@@ -137,11 +139,14 @@ export function createLive(frame: Frame, draw: (html: string, drawing: Drawing) 
     if (target.startsWith('open:')) {
       const id = decodeURIComponent(target.slice('open:'.length));
       const card = view.groups.flatMap((group) => group.cards).find((found) => found.id === id) ?? null;
-      screen = { name: 'session', id, card, session: null };
+      screen = { name: 'session', id, card, session: null, showAll: false };
       askSoon();
       redraw();
     } else if (target === 'back' && screen.name === 'session') {
       showFleet();
+      redraw();
+    } else if (target === 'all' && screen.name === 'session') {
+      screen = { ...screen, showAll: true };
       redraw();
     } else if (target === 'focus' && screen.name === 'session') {
       // the pane of the card the screen's header is drawn from; whether Orca focused it, or why

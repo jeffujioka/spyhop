@@ -3,11 +3,12 @@
 // through the real runner.
 import { execFileSync } from 'node:child_process';
 import { copyFileSync, mkdirSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { type BuiltCard, createAgentCards, type OrcaAgent } from '../../src/agent-cards.ts';
 import { cardView } from '../../src/card-view.ts';
 import { formatCost, formatTokens, orNa } from '../../src/core/format.js';
 import { sessionDirSlug as ompSlug } from '../../src/core/providers/omp-sources.js';
+import { TAIL_BYTES } from '../../src/core/refresh.js';
 import { run, type Run } from '../../src/exec.ts';
 import type { CardView } from '../../src/protocol.ts';
 import { fixture } from './files.ts';
@@ -50,6 +51,21 @@ export function ompSessionOf(home: string, path: string, usd = 0.1, title?: stri
   writeFileSync(file, `${titleLine}${JSON.stringify(session)}\n${costTurn(usd)}`);
   return file;
 }
+
+// A sub-agent transcript of the omp session file `sessionFile`: `name` is its path in the folder
+// beside the session file, without `.jsonl` (`Impl1`, or `Impl1/Rev1` for a sub-agent that
+// `Impl1` started), and `lines` its lines, each ending in a newline. While `running`, its lock
+// file is beside it, as omp keeps one while a sub-agent runs. Returns the transcript's path.
+export function subAgentFile(sessionFile: string, name: string, lines: string[], { running = false } = {}) {
+  const file = join(sessionFile.replace(/\.jsonl$/, ''), `${name}.jsonl`);
+  mkdirSync(dirname(file), { recursive: true });
+  writeFileSync(file, lines.join(''));
+  if (running) writeFileSync(join(dirname(file), `.${basename(file)}.lock.os`), '');
+  return file;
+}
+
+// Lines no figure reads, longer together than the window a refresh reads from a file's end.
+export const PADDING = `${JSON.stringify({ type: 'custom', note: 'x'.repeat(2000) })}\n`.repeat(Math.ceil((TAIL_BYTES * 1.5) / 2000));
 
 // opencode's database under `home`, made from opencode/<name>.sql with the sqlite3 CLI; returns
 // its path. basic.sql's sessions are of the folder /work/demo.

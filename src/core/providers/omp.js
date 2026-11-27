@@ -20,7 +20,9 @@
 // value and each entry of `LATEST` is a function `(session, now) => partial stats` (`now` is
 // epoch ms; only a figure that measures from the present reads it). A later figure is one more
 // function in a list, so adding a figure never rewrites an earlier one. Beside the stats,
-// `detailOf(state)` gives the series of the whole file (src/core/series.js), from the same state.
+// `detailOf(state)` gives the series of the whole file (src/core/series.js), from the same state,
+// with the agent kind and the model a sub-agent's `session_init` entry records, and the times of
+// the file's first and last entry, a sub-agent's start and end.
 
 import { add, parseEntries, tally } from './jsonl.js';
 import { burnRate, cacheRate, isNumber, tokenCount, wholeSession } from './shared.js';
@@ -32,6 +34,10 @@ function emptyState() {
     // timestamps (epoch ms, NaN when unreadable) of the first and the latest message entry
     firstMessage: undefined,
     lastMessage: undefined,
+    // timestamps (epoch ms) of the first and the latest entry of any type that carries one: a
+    // sub-agent's start and end
+    firstEntry: undefined,
+    lastEntry: undefined,
     totalTokens: tally(),
     costUsd: tally(),
     premiumRequests: tally(),
@@ -63,6 +69,10 @@ function emptyState() {
     // the `session` entry is the second line of a file, so a state that holds it starts at
     // the top of the file
     fromStart: false,
+    // the agent kind and the model of a sub-agent's transcript, as its `session_init` entry
+    // records them; null in a file without one, as the main agent's session file is
+    kind: null,
+    model: null,
   };
 }
 
@@ -71,8 +81,16 @@ function emptyState() {
 function fold(state, entries) {
   const s = state ?? emptyState();
   for (const e of entries) {
+    const at = Date.parse(e.timestamp);
+    if (isNumber(at)) {
+      s.firstEntry ??= at;
+      s.lastEntry = at;
+    }
     if (e.type === 'session') {
       s.fromStart = true;
+    } else if (e.type === 'session_init') {
+      if (typeof e.agent === 'string') s.kind = e.agent;
+      if (typeof e.resolvedModel === 'string') s.model = e.resolvedModel;
     } else if (e.type === 'message' && e.message) {
       const time = Date.parse(e.timestamp);
       s.firstMessage ??= time;

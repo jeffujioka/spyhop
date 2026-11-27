@@ -63,11 +63,25 @@
 //     more on it than `path`, `mtimeMs` and `size`, as opencode does the folder), so a hook
 //     answers from what that read or its listing already gave and runs a program only where
 //     they did not;
+//   subagents(file, { machine, home, os, now }) -> Promise<SubAgentInput[]>
+//     optional: the sub-agents of the session of a linked file, sub-agents of sub-agents
+//     included, each `{ name, kind, model, task, running, input }`: its name, its agent kind,
+//     its model and its task as the hook tells them without its transcript (null: not told;
+//     the builder then takes the kind and the model from its stats' `detail`), whether it
+//     runs (null: the harness does not tell), and `input`, the `input` of this provider's
+//     `readStats` for its transcript, or null when this call did not read it. A hook reads
+//     the transcripts as it reads session files, through the same `sessionReaders`, so their
+//     scans are kept with the others, and bounds how many it reads in one call (omp and Claude
+//     Code: `subAgentReads`, session-files.js). A session without sub-agents gives none;
+//     one whose sub-agents cannot be listed rejects, so that unknown never reads as none;
+//     `os` is the host's (`uname -s`);
 //   scanned()                              -> { changed, scans }
 //     optional, for a provider that scans session files: the finished scans of the files read,
 //     to keep for a later run, and whether any changed since it was last asked.
 // Each may reject: the card then reads n/a (after a `folder` that rejects it keeps its figures
-// and the workspace folder). A provider without the hook yields no session.
+// and the workspace folder; after a `subagents` that rejects it keeps the sub-agents of the
+// session's last listing that did not fail, or has none, null, without one). A provider
+// without the hook yields no session.
 //
 // Stats shape (single place; herdr-session-stats docs/omp-session-format.md repeats it with the
 // omp sources).
@@ -109,6 +123,13 @@
 //             writes, null where not logged
 //   tools     its own tool calls by tool: `{ calls, failed }`
 //   models    its own model calls by model: `{ cost, tokens }`, the cost null where not logged
+//   kind      the agent kind a sub-agent's transcript records of itself, null where it records
+//             none (omp: `session_init.agent`)
+//   model     the model a sub-agent's transcript records of itself, null where it records none
+//             (omp: `session_init.resolvedModel`)
+//   start     the time of the file's first entry of any type, a sub-agent's start (epoch ms),
+//             null where no entry carries a time
+//   end       the time of its last such entry, a sub-agent's end
 // (opencode gives `recent` alone.)
 
 import { ompProvider } from './omp.js';

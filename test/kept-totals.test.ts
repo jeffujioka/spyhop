@@ -13,12 +13,12 @@ import { mock } from 'node:test';
 import { afterEach, assert, mountWorker, test, type MockHostOptions, type TestWorker } from 'orca/testing';
 import { createAgentCards } from '../src/agent-cards.ts';
 import { sessionDirSlug } from '../src/core/providers/claude-sources.js';
-import { decodeScans, KEPT_VERSION, TAIL_BYTES } from '../src/core/refresh.js';
+import { decodeScans, KEPT_VERSION } from '../src/core/refresh.js';
 import { run } from '../src/exec.ts';
 import type { FleetAnswer, SessionAnswer } from '../src/protocol.ts';
 import * as workerModule from '../src/worker.ts';
 import { claudeAssistant, claudeUsage } from './core/helpers/entries.ts';
-import { NOW, agent, costOf, costTurn, ompSessionOf as ompSession, tokensOf } from './helpers/agent-cards.ts';
+import { NOW, PADDING, agent, costOf, costTurn, ompSessionOf as ompSession, tokensOf } from './helpers/agent-cards.ts';
 import { useTempHome } from './helpers/env.ts';
 import { tempHome } from './helpers/files.ts';
 import { ompCalls } from './helpers/live.ts';
@@ -34,9 +34,6 @@ afterEach(async () => {
   worker = undefined;
   mock.timers.reset();
 });
-
-// Lines no figure reads, longer together than the window a refresh reads from a file's end.
-const PADDING = `${JSON.stringify({ type: 'custom', note: 'x'.repeat(2000) })}\n`.repeat(Math.ceil((TAIL_BYTES * 1.5) / 2000));
 
 // An omp Orca agent on the SSH target `devbox`, whose session file, larger than the window, has
 // logged 0.10 USD: the file, `devbox`'s home, the `ssh` and `orca` stand-ins, and `start`, which

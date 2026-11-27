@@ -45,6 +45,10 @@ function emptyState() {
     // timestamps (epoch ms) of the first and the latest user or assistant entry
     firstMessage: undefined,
     lastMessage: undefined,
+    // timestamps (epoch ms) of the first and the latest entry of any type that carries one: a
+    // sub-agent's start and end
+    firstEntry: undefined,
+    lastEntry: undefined,
     // timestamp (epoch ms) of the latest prompt, and the latency of the latest reply: its
     // timestamp minus that of the prompt before it, undefined when unknown
     began: undefined,
@@ -123,6 +127,10 @@ function fold(state, entries) {
   for (const entry of entries) {
     const { message } = entry;
     const time = Date.parse(entry.timestamp);
+    if (isNumber(time)) {
+      s.firstEntry ??= time;
+      s.lastEntry = time;
+    }
     if ((entry.type === 'user' || entry.type === 'assistant') && message && typeof message === 'object' && isNumber(time)) {
       s.firstMessage ??= time;
       s.lastMessage = time;

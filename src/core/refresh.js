@@ -79,7 +79,7 @@ const newScan = () => ({ state: undefined, block: 0, skip: 0, carry: '', pos: -1
 // Raise KEPT_VERSION when a provider's state changes shape: values of another number are
 // ignored, so each file is scanned whole again once. It is raised by each slice of spyhop-live
 // that changes a fold's state.
-export const KEPT_VERSION = 3;
+export const KEPT_VERSION = 4;
 
 function encode(value) {
   if (value === undefined) return { $: 'undefined' };

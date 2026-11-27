@@ -20,11 +20,14 @@ follows a change of theme without being loaded again. It opens on the fleet scre
   rows. A group's cards go by Orca state: blocked, waiting, working, done.
 - **A card per session** whose agent is not done (agents on one session share a card, and an
   agent that links to no session has a card of its own): the session's title (the folder's name
-  for an untitled one), its cost as the harness logged it (there is no price table), the folder,
+  for an untitled one), its cost as the harness logged it (there is no price table) with its
+  sub-agents' (see Sub-agents in the cost), the folder,
   git branch, harness and model, the agent's state and how long it has been in it, and its
   context: the percent of the model's window used, the tokens used and the window, a bar marking
   where the harness compacts on its own, and a spark line of the context after each of the last
-  30 model calls. From 75% of the window, a chip tells the tokens left before compaction.
+  30 model calls. Its chips tell, from 75% of the window, the tokens left before compaction;
+  how many of its sub-agents run and how many there are (for Claude Code, which does not tell
+  which run, how many there are), none without a sub-agent; and its cache hit rate.
 - **A done agent's session on one folded line**: its title, folder, context and cost.
 
 Pressing a card or a folded line, by a click or by Enter or Space once it has the keyboard's
@@ -41,6 +44,15 @@ harness, or whose session tells no folder shows the workspace folder and its bra
 
 A figure the session does not give reads `n/a`; the plugin never estimates one. A context with
 no known window shows its tokens, with no percent and no bar.
+
+### Sub-agents in the cost
+
+A session's cost and tokens hold those of its sub-agents, sub-agents of sub-agents included,
+once every sub-agent transcript of the session is read. Until then the card and the session
+screen show the session's own figure with `reading <n> of <m> sub-agents`, never a partial sum.
+Claude Code's cost is the total it logs for the session, which holds its sub-agents' already, so
+nothing is added to it, and its split into own and sub-agents reads `n/a`; its tokens are
+summed like the other harnesses'. The model calls and the tool calls are the session's own.
 
 ## Session screen
 
@@ -61,7 +73,14 @@ the agent has a pane (see Focus pane). Under it:
     model call after the first that read nothing from the prompt cache, so it wrote the prompt
     to the cache again; the note gives how many, the tokens written again and their cost;
   - the cost over time, of the session's own model calls and of its sub-agents, with the total
-    as the harness logged it.
+    as the harness logged it and the cost per hour over the session's duration.
+- **Sub-agents**, for a session with any: how many run (not for Claude Code, which does not
+  tell), how many there are and their cost; a row for each running one, with its kind, name,
+  task, how long it has run and its cost; and on one time axis a bar for each of the 8 that
+  started last, in the order they started, from the time of its transcript's first entry to its
+  last, coloured by its kind, under its name, kind, model and cost. With more, the section says
+  how many started earlier and offers `Show all`, which draws a bar of each until the screen
+  changes.
 - **Tools**: the six tools called most, the rest summed as `others`, each with its failures.
 - **Models**: the cost by model, or the tokens for a harness that logs no cost per call
   (Claude Code), each with what used it: the main agent, the sub-agents.
@@ -145,19 +164,22 @@ refresh is never drawn.
 ## What spyhop stores
 
 Session totals only, in the plugin's own storage on this computer (`storage:own`); the panel's
-page keeps nothing of its own, and shows only what the worker answers. For each
-session file larger than the 256 KiB a refresh reads from its end, the totals the session reader
-counted over the file, the context sizes of its last 30 model calls, the tokens, cost and context
-of all its model calls in at most 120 points (neighbouring calls summed once there are more), its
-compactions with their tokens before and after, its cold starts, its tool calls and failures by
-tool name, the ids of its tool calls not answered yet (with their tool's name, so that a later
-answer counts its failure), its cost and tokens by model name, and the position they cover, by
-harness, machine and path. No session text is stored, and nothing is written on any
-other host. They are there so that a file scanned once is not scanned again from its start after
-Orca restarts: the reader goes on from the kept position, and scans the file again when it is
-not the one that was scanned. They are written at most once every 30 seconds, and only when a
-scan changed. Deleting the storage costs one scan of each file, nothing else; so does an update
-of spyhop that keeps more of a session, which discards what an earlier version kept, once.
+page keeps nothing of its own, and shows only what the worker answers. For each session file,
+and each omp or Claude Code sub-agent transcript, larger than the 256 KiB a refresh reads from
+its end, the totals the session reader counted over the file, the context sizes of its last 30
+model calls, the tokens, cost and context of all its model calls in at most 120 points
+(neighbouring calls summed once there are more), its compactions with their tokens before and
+after, its cold starts, its tool calls and failures by tool name, the ids of its tool calls not
+answered yet (with their tool's name, so that a later answer counts its failure), its cost and
+tokens by model name, the agent kind and model a sub-agent's transcript records, the times of
+its first and last entry, and the position they cover, by harness, machine and path. No session
+text is stored, and nothing is written on any other host. They are there so that a file scanned
+once is not scanned again from its start after Orca restarts: the reader goes on from the kept
+position, and scans the file again when it is not the one that was scanned. They are written at
+most once every 30 seconds,
+and only when a scan changed. Deleting the storage costs one scan of each file, nothing else; so
+does an update of spyhop that keeps more of a session, which discards what an earlier version
+kept, once.
 
 ## Focus pane
 
@@ -206,6 +228,13 @@ plugin list` and runs `orca plugin open <key> --panel spyhop`.
 
 ## Known limits
 
+- **A session with many sub-agents is read over a few refreshes.** An omp session's sub-agents
+  are found by one `find` of the folder beside its session file, and a Claude Code session's by
+  one `find` of the `subagents` folder of the folder named after its id, at each refresh. Of
+  their transcripts that are new or changed since they were read, each refresh reads the 16
+  newest, and the others at the next refreshes; a transcript once read is not read again until
+  it changes. A running omp sub-agent's task is read from the first lines of its transcript
+  once, and a Claude Code sub-agent's meta file, which names it, is read once.
 - **A dead host slows every refresh.** ssh waits up to 5 seconds to connect to a host that does
   not answer. Once a command finds the host gone, spyhop asks it nothing more than its place
   (`uname -s`, `printenv HOME`), so each refresh still spends one 5-second attempt on it and the

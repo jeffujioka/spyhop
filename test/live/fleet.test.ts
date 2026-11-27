@@ -182,7 +182,8 @@ test('Card of a session without a window', async () => {
   assert.match(parts(card, 'data-chart', 'spark')[0], /^<svg[^>]* data-points="12"/);
   assert.equal(figure(card, 'percent'), undefined);
   assert.equal(figure(card, 'window'), undefined);
-  assert.doesNotMatch(text(card), /%/);
+  // no percent of a window: the cache chip's percent is the cache hit rate
+  assert.doesNotMatch(text(parts(card, 'class', 'context')[0]), /%/);
   assert.deepEqual(parts(card, 'data-part', 'bar'), []);
   assert.deepEqual(parts(card, 'data-chip', 'warning'), []);
   assert.deepEqual(parts(html, 'data-part', 'attention'), []);

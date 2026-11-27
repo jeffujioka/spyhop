@@ -23,6 +23,9 @@ const built = (fields: Partial<BuiltCard> = {}, stats: Record<string, unknown> =
   status: 'working',
   machine: null,
   stateSince: null,
+  subAgents: null,
+  agents: ['t1'],
+  linked: true,
   ...fields,
   stats: { ...readStats('', null, 0), ...stats } as BuiltCard['stats'],
 });
