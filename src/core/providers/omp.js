@@ -19,10 +19,12 @@
 // activity) come from the text, which is the tail: `parseTail` turns it into one `session`
 // value and each entry of `LATEST` is a function `(session, now) => partial stats` (`now` is
 // epoch ms; only a figure that measures from the present reads it). A later figure is one more
-// function in a list, so adding a figure never rewrites an earlier one.
+// function in a list, so adding a figure never rewrites an earlier one. Beside the stats,
+// `detailOf(state)` gives the series of the whole file (src/core/series.js), from the same state.
 
 import { add, parseEntries, tally } from './jsonl.js';
 import { burnRate, cacheRate, isNumber } from './shared.js';
+import { detailOf, pushRecent } from '../series.js';
 
 // A fresh accumulator. Sums are `tally`s: undefined until an entry carries the value.
 function emptyState() {
@@ -45,6 +47,8 @@ function emptyState() {
     began: undefined,
     latencyMs: undefined,
     compactions: 0,
+    // the context of the session's last model calls, oldest first (see `pushRecent`)
+    recent: [],
     // the `session` entry is the second line of a file, so a state that holds it starts at
     // the top of the file
     fromStart: false,
@@ -79,6 +83,8 @@ function fold(state, entries) {
           s.cacheReads += 1;
           if (usage.cacheRead > 0) s.cacheHits += 1;
         }
+        const prompt = e.message.contextSnapshot?.promptTokens;
+        if (isNumber(prompt)) pushRecent(s.recent, prompt);
       }
     } else if (e.type === 'compaction') {
       s.compactions += 1;
@@ -273,6 +279,7 @@ export const ompProvider = {
       ...(total ? TOTALS.map((figure) => figure(total)) : []),
       ...(total ? [autocompactions(total, whole)] : []),
       ...LATEST.map((figure) => figure(tail, now)),
+      { detail: total && whole ? detailOf(total) : null },
     );
   },
 };

@@ -11,9 +11,11 @@
 // src/core/providers/opencode-sources.js.
 //
 // Structure as omp.js: `parseSession` makes one `session` value; each entry of `FIGURES` is a
-// function `(session, now) => partial stats`.
+// function `(session, now) => partial stats`. The rows are the whole session, so `detail` of
+// them always gives its series (src/core/series.js).
 
 import { burnRate, isNumber } from './shared.js';
+import { detailOf, pushRecent } from '../series.js';
 
 function parseSession({ messages, compactions }) {
   const rows = Array.isArray(messages) ? messages : [];
@@ -142,6 +144,14 @@ const FIGURES = [
   thinking,
 ];
 
+// The series of the session: the prompt of each assistant message that sent one, a compaction
+// summary's included, since each is a model call.
+function detail({ assistants }) {
+  const recent = [];
+  for (const size of assistants.map(promptTokens)) if (size > 0) pushRecent(recent, size);
+  return detailOf({ recent });
+}
+
 // `input` is `{ messages, compactions }`: `messages`, the session's message rows in order
 // (`{ id, role, parentId, created, completed, modelId, variant, summary, cost, total, input,
 // output, reasoning, cacheRead, cacheWrite }`, each a number, a string or null as the database
@@ -150,6 +160,6 @@ const FIGURES = [
 export const opencodeProvider = {
   readStats(input, now) {
     const session = parseSession(input ?? {});
-    return Object.assign({}, ...FIGURES.map((figure) => figure(session, now)));
+    return Object.assign({}, ...FIGURES.map((figure) => figure(session, now)), { detail: detail(session) });
   },
 };

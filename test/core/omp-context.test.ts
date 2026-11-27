@@ -1,5 +1,4 @@
 import { describe, test } from 'node:test';
-import { cardModel } from '../../src/core/card-model.js';
 import { formatTokens } from '../../src/core/format.js';
 import { NA, readStats } from '../../src/core/providers/index.js';
 import { parseEntries } from '../../src/core/providers/jsonl.js';
@@ -7,10 +6,6 @@ import { ompProvider } from '../../src/core/providers/omp.js';
 import { fixtureText } from '../helpers/files.ts';
 import { NOW, ompMessage } from './helpers/entries.ts';
 import { expect } from './helpers/expect.ts';
-
-// What the card shows of the context: the hero of its context group, the usage percent with
-// the window as its label.
-const context = (stats) => cardModel({ id: 'p', folder: null, harnessName: 'omp', stats }, { home: '/h' }).groups[1].hero;
 
 // One synthetic assistant message entry whose prompt held `promptTokens` tokens.
 const assistant = (promptTokens, extra = {}) =>
@@ -37,12 +32,11 @@ describe('omp session: context window and autocompactions', () => {
     expect(stats.contextTokens).toBe(50_000);
     expect(stats.contextMax).toBe(200_000);
     expect(stats.contextPercent).toBe(0.25);
-    expect(context(stats)).toMatchObject({ value: '25%', label: 'of 200k' });
 
     // a max without any logged usage still shows, with the percentage as n/a
     const unused = provider({ models: window200k }).readStats(assistant(undefined, { contextSnapshot: undefined }), NOW);
     expect(unused.contextPercent).toBe(NA);
-    expect(context(unused)).toMatchObject({ value: NA, label: 'of 200k' });
+    expect(unused.contextMax).toBe(200_000);
   });
 
   test('usage is the latest assistant message that carries a snapshot', () => {
@@ -50,14 +44,18 @@ describe('omp session: context window and autocompactions', () => {
     const stats = provider({ models: window200k }).readStats(text, NOW);
 
     expect(stats.contextTokens).toBe(80_000);
-    expect(context(stats)).toMatchObject({ value: '40%', label: 'of 200k' });
+    expect(stats.contextMax).toBe(200_000);
+    expect(stats.contextPercent).toBe(0.4);
   });
 
   test('a one-million window reads 1M', () => {
     const models = [{ id: 'claude-sonnet-5.5-1m', contextWindow: 1_000_000 }];
     const text = assistant(250_000, { model: 'claude-sonnet-5.5-1m' });
 
-    expect(context(provider({ models }).readStats(text, NOW))).toMatchObject({ value: '25%', label: 'of 1M' });
+    const stats = provider({ models }).readStats(text, NOW);
+    expect(stats.contextPercent).toBe(0.25);
+    expect(stats.contextMax).toBe(1_000_000);
+    expect(formatTokens(stats.contextMax)).toBe('1M');
     // a size that rounds up to a thousand k is written in M
     expect(formatTokens(999_500)).toBe('1M');
     expect(formatTokens(999_499)).toBe('999k');
@@ -74,7 +72,6 @@ describe('omp session: context window and autocompactions', () => {
       expect(stats.contextMax).toBe(NA);
       expect(stats.contextPercent).toBe(NA);
       expect(stats.headroomTokens).toBe(NA);
-      expect(context(stats)).toMatchObject({ value: NA, label: '' });
     }
   });
 
@@ -147,7 +144,8 @@ describe('omp session: context window and autocompactions', () => {
 
       expect(stats.headroomTokens).toBe(NA);
       // the context over max still shows
-      expect(context(stats)).toMatchObject({ value: '25%', label: 'of 200k' });
+      expect(stats.contextMax).toBe(200_000);
+      expect(stats.contextPercent).toBe(0.25);
     }
   });
 

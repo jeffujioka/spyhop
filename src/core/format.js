@@ -32,6 +32,22 @@ export function formatDuration(ms) {
   return `${Math.floor(seconds / 3600)}h ${pad(Math.floor(seconds / 60) % 60)}m`;
 }
 
+// How long an agent has been in its state, as the live panel writes it: "45s", "3m", "2h 05m".
+// Takes a number or 'n/a'.
+export function formatAge(ms) {
+  if (ms === NA) return NA;
+  const seconds = Math.max(0, Math.floor(ms / 1000));
+  if (seconds < 60) return `${seconds}s`;
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}m`;
+  // an hour and over is written as a duration is
+  return formatDuration(ms);
+}
+
+// A count with its thousands marked: 1206 is "1,206". Takes a number or 'n/a'.
+export function formatCount(n) {
+  return n === NA ? NA : Math.round(n).toLocaleString('en-US');
+}
+
 // A figure formatted, or 'n/a' when it is not known.
 export const orNa = (value, format) => (value === NA ? NA : format(value));
 

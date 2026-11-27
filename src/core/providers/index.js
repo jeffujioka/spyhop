@@ -2,7 +2,9 @@
 //
 // Provider registry: the one seam between a harness's session files and the card.
 //
-// A provider is `{ readStats(input, now) }`, synchronous, and returns a partial stats object.
+// A provider is `{ readStats(input, now) }`, synchronous, and returns a partial stats object and
+// `detail`, the series of the whole session (src/core/series.js), or null when its input is not
+// the whole session.
 // `input` is whatever the provider reads from (omp and Claude Code: the jsonl text of the
 // session, or `{ text, sources, state }` with the files already read by the caller, `text`
 // being the tail window of a large file and `state` the provider's accumulator over the whole
@@ -92,7 +94,10 @@
 //   thinkingLevel      string   thinking level of the session
 //   premiumRequests    number   sum of usage.premiumRequests
 //
-// The result of readStats also carries `harness`, the name asked for, which is never n/a.
+// The result of readStats also carries `harness`, the name asked for, which is never n/a, and
+// `detail`: `{ recent }`, the contexts of the session's last SPARK_CALLS model calls, oldest
+// first; null unless the provider read the whole session (a tail window alone gives none), and
+// for a harness without a provider.
 
 import { ompProvider } from './omp.js';
 import { createOmpSessions } from './omp-sources.js';
@@ -143,6 +148,7 @@ export function readStats(harness, input, now) {
   for (const field of STAT_FIELDS) {
     stats[field] = provided[field] ?? NA;
   }
+  stats.detail = provided.detail ?? null;
   return stats;
 }
 

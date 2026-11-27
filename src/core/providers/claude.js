@@ -13,10 +13,12 @@
 // that the caller can build in pieces over a file larger than the tail window; each entry of
 // `TOTALS` is a function `(state) => partial stats`. The figures about the end of the file come
 // from the text (the tail), which `parseTail` turns into one `session` value; each entry of
-// `LATEST` is a function `(session, now) => partial stats`.
+// `LATEST` is a function `(session, now) => partial stats`. Beside the stats, `detailOf(state)`
+// gives the series of the whole file (src/core/series.js), from the same state.
 
 import { add, parseEntries, tally } from './jsonl.js';
 import { burnRate, cacheRate, isNumber } from './shared.js';
+import { detailOf, pushRecent } from '../series.js';
 
 // A user entry that carries a tool's result continues a turn; any other (not meta) one starts it.
 const isPrompt = ({ message, isMeta }) =>
@@ -64,6 +66,10 @@ function emptyState() {
     // a `compact_boundary` whose trigger is neither `manual` nor `auto` was seen: it may be an
     // automatic compaction under a name this reader does not know, so the count is unknown
     unknownTrigger: false,
+    // the context of the session's last responses, oldest first (see `pushRecent`), and the
+    // `message.id` of the newest one, whose later blocks replace its context instead of adding one
+    recent: [],
+    recentId: undefined,
   };
 }
 
@@ -105,6 +111,12 @@ function fold(state, entries) {
           s.responses.set(message.id, parts);
         }
         credit(s, parts, 1);
+        const prompt = promptTokens(message);
+        if (prompt !== undefined) {
+          if (typeof message.id === 'string' && message.id === s.recentId) s.recent[s.recent.length - 1] = prompt;
+          else pushRecent(s.recent, prompt);
+          s.recentId = message.id;
+        }
         if (s.logged) s.logged.stale = true;
       }
     } else if (entry.type === 'cost-state') {
@@ -195,12 +207,19 @@ function autocompactions({ compactions, unknownTrigger }, whole) {
   return whole && !unknownTrigger ? { autocompactions: compactions } : {};
 }
 
-// Context usage is the prompt of the latest response: input plus the cache it read and wrote.
-// The files hold no window for the model, so there is no maximum, percentage or headroom.
+// The prompt of a response: input plus the cache it read and wrote; undefined unless it logged
+// all three.
+function promptTokens(m) {
+  const counts = [inputTokens(m), cacheRead(m), cacheWrite(m)];
+  return counts.every(isNumber) ? counts.reduce((a, b) => a + b, 0) : undefined;
+}
+
+// Context usage is the prompt of the latest response. The files hold no window for the model, so
+// there is no maximum, percentage or headroom.
 function context({ assistants }) {
   const m = assistants.at(-1)?.message;
-  const counts = m && [inputTokens(m), cacheRead(m), cacheWrite(m)];
-  return counts?.every(isNumber) ? { contextTokens: counts.reduce((a, b) => a + b, 0) } : {};
+  const used = m && promptTokens(m);
+  return used === undefined ? {} : { contextTokens: used };
 }
 
 // Cost is the session total Claude Code logs in a `cost-state` entry (herdr-session-stats
@@ -252,6 +271,7 @@ export const claudeProvider = {
       ...(total ? TOTALS.map((figure) => figure(total)) : []),
       ...(total ? [autocompactions(total, whole)] : []),
       ...LATEST.map((figure) => figure(tail, now)),
+      { detail: total && whole ? detailOf(total) : null },
     );
   },
 };

@@ -12,13 +12,14 @@ import { createAgentCards } from '../src/agent-cards.ts';
 import { GIT_TTL_MS } from '../src/core/git.js';
 import { run } from '../src/exec.ts';
 import { listHosts, remoteHosts } from '../src/hosts.ts';
-import type { CardView as Card, TreeAnswer } from '../src/protocol.ts';
+import type { CardView, FleetAnswer } from '../src/protocol.ts';
 import * as workerModule from '../src/worker.ts';
 import { NOW, agent, costOf, ompSessionOf as ompSession } from './helpers/agent-cards.ts';
 import { useTempHome } from './helpers/env.ts';
 import { tempHome } from './helpers/files.ts';
 import { recordingRun } from './core/helpers/recording-run.ts';
 import { DEVBOX, DEVBOX_HOST, JEFF_ENV, JEFF_SERVER_ENVIRONMENTS, JEFF_TARGET, LOCAL_HOST, environmentListOf, hostListOf } from './helpers/orca-answers.ts';
+import { readOnlyLine } from './helpers/read-only.ts';
 import { answer, standIns } from './helpers/stand-ins.ts';
 
 let worker: TestWorker | undefined;
@@ -36,58 +37,16 @@ const hostList = hostListOf(
   { kind: 'environment', name: 'jeff-server', id: JEFF_ENV },
 );
 
-// Whether one program with its arguments only reads.
-function readsOnly([program, ...args]: string[]) {
-  switch (program) {
-    case 'cd':
-    case 'uname':
-    case 'printenv':
-    case 'cat':
-    case 'head':
-    case 'tail':
-    case 'stat':
-    case '/usr/bin/stat':
-      return true;
-    case 'dd':
-      return !args.some((arg) => arg.startsWith('of='));
-    case 'find': {
-      const exec = args.indexOf('-exec');
-      return !args.some((arg) => ['-delete', '-execdir', '-ok', '-fprint'].includes(arg)) && (exec < 0 || readsOnly(args.slice(exec + 1, -2)));
-    }
-    case 'git':
-      return (args[0] === 'branch' && args[1] === '--show-current') || (args[0] === 'remote' && args[1] === 'get-url');
-    case 'sqlite3':
-      return args[0] === '-readonly';
-    default:
-      return false;
-  }
-}
+// The cards of the group of the Orca host `host`, none when the answer has no such group.
+const cardsIn = (fleet: FleetAnswer, host: string) => fleet.groups.find((group) => group.name === host)?.cards;
 
-// Whether a command line `ssh` runs on the remote host is programs joined by `&&` that only
-// read, every word of them quoted.
-function readOnlyLine(line: string) {
-  const words = line.match(/'[^']*'|&&/g) ?? [];
-  if (words.join(' ') !== line) return false;
-  const commands: string[][] = [[]];
-  for (const word of words) {
-    if (word === '&&') commands.push([]);
-    else commands.at(-1)!.push(word.slice(1, -1));
-  }
-  return commands.every((command) => command.length > 0 && readsOnly(command));
-}
-
-// The cards under the rows `host`, `project` and `workspace`.
-function cardsUnder(tree: TreeAnswer, host: string, project: string, workspace: string) {
-  return tree.hosts
-    .find((row) => row.name === host)
-    ?.projects.find((row) => row.name === project)
-    ?.workspaces.find((row) => row.name === workspace)?.cards;
-}
-
-// Every session figure of a card: the model, and each figure of the groups after the identity.
-const sessionFigures = (card: Card) => [
-  card.groups[0].model.value,
-  ...card.groups.slice(1).flatMap((group) => [...(group.hero ? [group.hero.value] : []), ...group.figures.map((figure) => figure.value)]),
+// Every session figure of a card: the model, the cost and each figure of the context and cache.
+const sessionFigures = (card: CardView) => [
+  card.model,
+  card.cost,
+  ...Object.values(card.context).filter((value) => !Array.isArray(value)),
+  card.tokensLeft,
+  card.cacheHitRate,
 ];
 
 // An Orca workspace row of `workspace.list`, on the Orca host `hostId`.
@@ -105,17 +64,16 @@ const workspaceRow = (hostId: string, project: string, name: string, path: strin
 const ompAgent = (terminalId: string) => ({ terminalId, title: null, agent: 'omp', state: 'working', stateStartedAt: 0, sessionId: 's1' });
 
 // The worker on an Orca host with `rows`, each with one omp agent in `agents.list`, which
-// `agent` changes, and the focused workspace `context` (`workspace.readContext`).
-async function treeOf(rows: object[], context: object | null = null, agent: object = {}) {
+// `agent` changes; its fleet answer.
+async function fleetOf(rows: object[], agent: object = {}) {
   const host = mockHost({
     results: {
       'workspace.list': { workspaces: rows, truncated: false },
       'agents.list': ({ workspaceId }: { workspaceId: string }) => ({ agents: [{ ...ompAgent(`${workspaceId}-t1`), ...agent }] }),
-      'workspace.readContext': context,
     },
   });
   worker = await mountWorker(workerModule, { host });
-  return (await worker.request('spyhop.tree')) as TreeAnswer;
+  return (await worker.request('spyhop.fleet', { request: 1 })) as FleetAnswer;
 }
 
 test('Agent on an SSH workspace', async () => {
@@ -130,10 +88,10 @@ test('Agent on an SSH workspace', async () => {
     controlmaster: { devbox: 'false' },
   });
 
-  const tree = await treeOf([workspaceRow(`ssh:${DEVBOX}`, 'infra', 'main', folder)]);
+  const fleet = await fleetOf([workspaceRow(`ssh:${DEVBOX}`, 'infra', 'main', folder)]);
 
-  const [card] = cardsUnder(tree, 'devbox', 'infra', 'main') ?? [];
-  assert.ok(card, JSON.stringify(tree.hosts.map((host) => host.name)));
+  const [card] = cardsIn(fleet, 'devbox') ?? [];
+  assert.ok(card, JSON.stringify(fleet.groups.map((group) => group.name)));
   assert.equal(costOf(card), '$0.10');
   const ssh = calls.ssh();
   assert.ok(ssh.length > 0);
@@ -156,12 +114,11 @@ test('Session of a sub-folder on an SSH workspace', async () => {
   });
 
   const row = workspaceRow(`ssh:${DEVBOX}`, 'infra', 'main', folder);
-  const tree = await treeOf([row], null, { title: 'π - Ship the deploy script - tools', sessionId: null });
+  const fleet = await fleetOf([row], { title: 'π - Ship the deploy script - tools', sessionId: null });
 
-  const [card] = cardsUnder(tree, 'devbox', 'infra', 'main') ?? [];
-  assert.ok(card, JSON.stringify(tree.hosts.map((host) => host.name)));
-  const [identity] = card.groups;
-  assert.deepEqual([costOf(card), identity.path.value, identity.branch], ['$0.10', tools, 'feat/deploy']);
+  const [card] = cardsIn(fleet, 'devbox') ?? [];
+  assert.ok(card, JSON.stringify(fleet.groups.map((group) => group.name)));
+  assert.deepEqual([costOf(card), card.folder, card.branch], ['$0.10', 'tools', 'feat/deploy']);
   const ssh = calls.ssh();
   assert.ok(ssh.length > 0);
   assert.deepEqual(ssh.filter((args) => args[0] !== 'devbox' || !readOnlyLine(args.at(-1)!)), []);
@@ -171,15 +128,19 @@ test('Session of a sub-folder on an SSH workspace', async () => {
 // `main` of its project `spyhop`, whose session, titled as the agent's title says, has logged
 // 0.10 USD; and this computer's workspace `api`/`main` without one. Orca's `workspace.list`
 // lists this computer's workspaces only: a paired server's are told of by its own
-// `orca agent list`.
-function pairedServer(orca: Record<string, string> = {}) {
+// `orca agent list`. `at`: the folder of the server's workspace under its home;
+// `worktreeIdOf`: Orca's worktreeId of the agent's workspace in that folder.
+function pairedServer(
+  orca: Record<string, string> = {},
+  { at = 'work/spyhop-main', worktreeIdOf = (folder: string) => `338dd6a3-d3c7-4e4e-a557-ccc460353d0f::${folder}` } = {},
+) {
   const home = useTempHome();
   const localFolder = join(home, 'work/api-main');
   mkdirSync(localFolder, { recursive: true });
   const remoteHome = tempHome();
-  const folder = join(remoteHome, 'work/spyhop-main');
+  const folder = join(remoteHome, at);
   ompSession(remoteHome, folder, 0.1, 'Fix the login bug');
-  const worktreeId = `338dd6a3-d3c7-4e4e-a557-ccc460353d0f::${folder}`;
+  const worktreeId = worktreeIdOf(folder);
   // the server's own agents, local to it
   const agents = answer({
     agents: [
@@ -209,29 +170,27 @@ function pairedServer(orca: Record<string, string> = {}) {
       ...orca,
     },
   });
-  return { rows: [workspaceRow('local', 'api', 'main', localFolder)], worktreeId, calls };
+  return { rows: [workspaceRow('local', 'api', 'main', localFolder)], calls };
 }
 
 test('Agent on a paired Orca server', async () => {
   const { rows, calls } = pairedServer();
 
-  const tree = await treeOf(rows);
+  const fleet = await fleetOf(rows);
   // a refresh within a minute lists the server's agents again, not the hosts
-  await worker!.request('spyhop.tree');
+  await worker!.request('spyhop.fleet', { request: 2 });
 
-  // a row per host: the server's agents do not join this computer's. The server's row is named
-  // by its environment, and its sessions are read over its SSH target's alias.
+  // a group per host: the server's agents do not join this computer's. The server's group is
+  // named by its environment, and its sessions are read over its SSH target's alias.
   assert.deepEqual(
-    tree.hosts.map((host) => host.name),
-    ['local', 'jeff-server'],
+    fleet.groups.map((group) => [group.name, group.count]),
+    [
+      ['local', 1],
+      ['jeff-server', 1],
+    ],
   );
-  assert.equal(new Set(tree.hosts.map((host) => host.id)).size, 2);
-  const server = tree.hosts.find((host) => host.name === 'jeff-server');
-  assert.deepEqual(
-    server?.projects.map((project) => [project.name, project.workspaces.flatMap((row) => row.cards).length]),
-    [['spyhop', 1]],
-  );
-  const [card] = cardsUnder(tree, 'jeff-server', 'spyhop', 'main') ?? [];
+  assert.equal(new Set(fleet.groups.map((group) => group.id)).size, 2);
+  const [card] = cardsIn(fleet, 'jeff-server') ?? [];
   assert.ok(card);
   assert.equal(costOf(card), '$0.10');
   const ssh = calls.ssh();
@@ -247,24 +206,36 @@ test('Agent on a paired Orca server', async () => {
   );
 });
 
-test('Focused workspace on a paired Orca server', async () => {
-  const { rows, worktreeId } = pairedServer();
+// Orca's worktreeId of a workspace of a folder inside an Orca project, as `orca agent list` gives
+// it on the paired server starfish-bs: the folder, then `::workspace:<id>`.
+test('Agent in a workspace of a folder on a paired Orca server', async () => {
+  const { rows } = pairedServer(
+    {},
+    {
+      at: 'mbition/jfujiok',
+      worktreeIdOf: (folder) => `a8d4f10e-29a2-4be1-9760-cd7acb7f9a9c::${folder}/::workspace:3d7f895f-fbce-4d0b-ab01-1e95a9a7f7f2`,
+    },
+  );
 
-  // Orca's id of a workspace is its worktreeId
-  const tree = await treeOf(rows, { workspaceId: worktreeId, branch: 'main', displayName: 'main', terminals: [] });
+  const fleet = await fleetOf(rows);
 
-  const workspace = tree.hosts
-    .find((host) => host.name === 'jeff-server')
-    ?.projects.find((project) => project.name === 'spyhop')
-    ?.workspaces.find((row) => row.name === 'main');
-  assert.ok(workspace, JSON.stringify(tree.hosts.map((host) => host.name)));
-  // the worker names Orca's id of the focused workspace, by which the panel finds its row
-  assert.equal(tree.focused, worktreeId);
-  assert.ok(workspace.workspaceIds.includes(worktreeId), JSON.stringify(workspace.workspaceIds));
+  const [card] = cardsIn(fleet, 'jeff-server') ?? [];
+  assert.ok(card, JSON.stringify(fleet.groups.map((group) => group.name)));
+  assert.deepEqual([card.folder, costOf(card)], ['jfujiok', '$0.10']);
+});
+
+test('Paired server agent whose worktree id names no absolute folder', async () => {
+  const { rows } = pairedServer({}, { worktreeIdOf: () => '338dd6a3-d3c7-4e4e-a557-ccc460353d0f::work/spyhop-main' });
+
+  const fleet = await fleetOf(rows);
+
+  const [card] = cardsIn(fleet, 'jeff-server') ?? [];
+  assert.ok(card, JSON.stringify(fleet.groups.map((group) => group.name)));
+  assert.deepEqual([card.folder, ...sessionFigures(card).filter((value) => value !== 'n/a')], ['n/a']);
 });
 
 // A paired server that answers its lists with no result, or with a null agent, still leaves the
-// tree drawn: this computer's cards, and the server's agents when only its terminals are odd.
+// fleet drawn: this computer's cards, and the server's agents when only its terminals are odd.
 for (const [what, orca, serverCards] of [
   ['terminal list answers no result', { 'terminal list --environment jeff-server --json': answer(null) }, 1],
   ['agent list answers no result', { 'agent list --environment jeff-server --json': answer(null) }, 0],
@@ -273,10 +244,10 @@ for (const [what, orca, serverCards] of [
   test(`Paired server whose ${what}`, async () => {
     const { rows } = pairedServer(orca);
 
-    const tree = await treeOf(rows);
+    const fleet = await fleetOf(rows);
 
-    assert.equal(cardsUnder(tree, 'local', 'api', 'main')?.length, 1, JSON.stringify(tree.hosts.map((host) => host.name)));
-    assert.equal(cardsUnder(tree, 'jeff-server', 'spyhop', 'main')?.length ?? 0, serverCards);
+    assert.equal(cardsIn(fleet, 'local')?.length, 1, JSON.stringify(fleet.groups.map((group) => group.name)));
+    assert.equal(cardsIn(fleet, 'jeff-server')?.length ?? 0, serverCards);
   });
 }
 
@@ -298,18 +269,18 @@ test('Unreachable Orca host', async () => {
     orca: { 'host list --json': hostList, 'environment list --json': environmentListOf() },
   });
 
-  const tree = await treeOf([
+  const fleet = await fleetOf([
     workspaceRow('local', 'api', 'main', localFolder),
     workspaceRow(`ssh:${DEVBOX}`, 'infra', 'main', '/home/dev/work/infra-main'),
   ]);
 
-  const [remote] = cardsUnder(tree, 'devbox', 'infra', 'main') ?? [];
+  const [remote] = cardsIn(fleet, 'devbox') ?? [];
   assert.ok(remote);
   assert.deepEqual(
     sessionFigures(remote).filter((value) => value !== 'n/a'),
     [],
   );
-  const [local] = cardsUnder(tree, 'local', 'api', 'main') ?? [];
+  const [local] = cardsIn(fleet, 'local') ?? [];
   assert.equal(costOf(local), '$0.10');
   assert.ok(calls.ssh().length > 0);
 });

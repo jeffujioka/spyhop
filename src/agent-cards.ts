@@ -1,6 +1,6 @@
 // The cards of Orca agents, on this computer and on other Orca hosts: one card per harness
 // session the agents of one workspace folder link to, and one per agent that links to none,
-// whatever its state, in the card shape of the core's card model (src/core/card-model.js).
+// whatever its state (BuiltCard, which src/card-view.ts turns into what the panel draws).
 // Each card holds what Orca says of the agent (its harness, state and title), the stats of the
 // harness session the agent links to, the folder that session records as its own (the folder
 // of the agent's workspace when it links to none, or its session tells none) and the git facts
@@ -13,10 +13,13 @@ import { NA, createSessions, readStats } from './core/providers/index.js';
 import { collapseBySession, linkAgents } from './core/session-link.js';
 import { createTtlCache } from './core/ttl-cache.js';
 import type { Run } from './exec.ts';
+import type { Num } from './protocol.ts';
 
 // An agent as Orca reports it (`agents.list` of the worker host API, `orca agent list --json`),
 // with the path of its workspace folder; `id` is the one the caller names the agent by.
 // `machine`: the ssh alias of the Orca host it is on, null or absent for this computer.
+// `stateSince`: when the agent entered its state, epoch ms, as Orca gives it; null or absent
+// when Orca gives none.
 export type OrcaAgent = {
   id: string;
   agent: string | null;
@@ -25,6 +28,43 @@ export type OrcaAgent = {
   sessionId?: string | null;
   path: string | null;
   machine?: string | null;
+  stateSince?: number | null;
+};
+
+// The stats of a card's session, as `readStats` (src/core/providers/index.js) gives them: every
+// field of STAT_FIELDS, n/a where it cannot be read, and `detail`, null unless the session file
+// was read whole. The fields the panels' TypeScript reads are named.
+export type CardStats = {
+  [field: string]: unknown;
+  model: string;
+  costUsd: Num;
+  totalTokens: Num;
+  premiumRequests: Num;
+  contextTokens: Num;
+  contextMax: Num;
+  contextPercent: Num;
+  headroomTokens: Num;
+  cacheHitRate: Num;
+  detail: { recent: number[] } | null;
+};
+
+// A card as `build` returns it. `agents`: the ids of the agents that share it, in the order of
+// the agents, the first being the card's own `id`. `folder`: the one its session records, else
+// its workspace's; `harness`: Orca's kind of the agent, `harnessName` the name a card gives it;
+// `status`: the agent's Orca state; `stateSince`: the agent's.
+export type BuiltCard = {
+  id: string;
+  agents: string[];
+  folder: string | null;
+  branch: string | null;
+  origin: string | null;
+  harness: string | null;
+  harnessName: string;
+  title: string | null;
+  status: string;
+  machine: Machine;
+  stateSince: number | null;
+  stats: CardStats;
 };
 
 // Whether `agents` are the agents `before`, but for their states: the same ids in the same order,
@@ -146,7 +186,7 @@ export function createAgentCards({ run, home, kept = [] }: { run: Run; home: str
     // The agents' cards, in the order of `agents`, agents of one harness, workspace folder and
     // machine that link to one session sharing the card of the first of them. `now`: epoch
     // milliseconds.
-    async build(agents: OrcaAgent[], now: number) {
+    async build(agents: OrcaAgent[], now: number): Promise<BuiltCard[]> {
       // harness, folder and machine -> its agents, in agent order
       const groups = new Map<string, OrcaAgent[]>();
       for (const agent of agents) {
@@ -203,8 +243,9 @@ export function createAgentCards({ run, home, kept = [] }: { run: Run; home: str
               () => ({ branch: null, origin: null }),
             );
           const git = await gits(`${machine ?? ''}\0${folder}`, now, readsGit);
-          const card = {
+          const card: BuiltCard = {
             id: agent.id,
+            agents: [agent.id],
             folder,
             branch: git.branch,
             origin: git.origin,
@@ -213,6 +254,7 @@ export function createAgentCards({ run, home, kept = [] }: { run: Run; home: str
             title: agent.title,
             status: agent.state,
             machine,
+            stateSince: agent.stateSince ?? null,
             stats: session.stats,
           };
           // Agents share a card within their workspace folder only: omp agents of nested
@@ -221,6 +263,14 @@ export function createAgentCards({ run, home, kept = [] }: { run: Run; home: str
           return { sessionPath: sessionPath && `${agent.path}\0${sessionPath}`, card };
         }),
       );
+      // the card of each session path, the first agent's, lists every agent that shares it
+      const first = new Map<string, BuiltCard>();
+      for (const { sessionPath, card } of entries) {
+        if (sessionPath === null) continue;
+        const shared = first.get(sessionPath);
+        if (shared) shared.agents.push(card.id);
+        else first.set(sessionPath, card);
+      }
       return collapseBySession(entries).map((entry: (typeof entries)[number]) => entry.card);
     },
 

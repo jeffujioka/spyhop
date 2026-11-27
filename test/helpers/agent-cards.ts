@@ -4,10 +4,12 @@
 import { execFileSync } from 'node:child_process';
 import { copyFileSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { createAgentCards, type OrcaAgent } from '../../src/agent-cards.ts';
-import { cardModel } from '../../src/core/card-model.js';
+import { type BuiltCard, createAgentCards, type OrcaAgent } from '../../src/agent-cards.ts';
+import { cardView } from '../../src/card-view.ts';
+import { formatCost, formatTokens, orNa } from '../../src/core/format.js';
 import { sessionDirSlug as ompSlug } from '../../src/core/providers/omp-sources.js';
 import { run, type Run } from '../../src/exec.ts';
+import type { CardView } from '../../src/protocol.ts';
 import { fixture } from './files.ts';
 
 export const NOW = Date.parse('2026-11-25T12:00:00.000Z');
@@ -74,16 +76,13 @@ export const agent = (fields: Partial<OrcaAgent>): OrcaAgent => ({
 // through, the real one unless a test wraps it.
 export function refreshing(home: string, exec: Run = run) {
   const cards = createAgentCards({ run: exec, home });
-  return async (agents: OrcaAgent[]) => (await cards.build(agents, NOW)).map((card) => ({ card, model: cardModel(card, { home }) }));
+  return async (agents: OrcaAgent[]) =>
+    (await cards.build(agents, NOW)).map((card) => ({ card, view: cardView(card, { home, pane: null, now: NOW }) }));
 }
 
 // The cards of a first refresh.
 export const cardsOf = (home: string, agents: OrcaAgent[], exec: Run = run) => refreshing(home, exec)(agents);
 
-// The cost and the Tokens figure of a card's spend group, of a card model or a card the worker
-// sends the panel.
-type Figure = { label: string; value: string };
-type Cardlike = { groups: ReadonlyArray<{ id: string; hero?: Figure | null; figures?: Figure[] }> };
-const spendOf = (card: Cardlike) => card.groups.find((group) => group.id === 'spend');
-export const costOf = (card: Cardlike) => spendOf(card)?.hero?.value;
-export const tokensOf = (card: Cardlike) => spendOf(card)?.figures?.find((figure) => figure.label === 'Tokens')?.value;
+// The cost of a card's view, and the tokens of a built card, as the panel writes them.
+export const costOf = (view: CardView): string => formatCost(view.cost);
+export const tokensOf = (card: BuiltCard): string => orNa(card.stats.totalTokens, formatTokens);

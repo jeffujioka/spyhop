@@ -8,14 +8,13 @@ import { test } from 'node:test';
 import { createAgentCards } from '../src/agent-cards.ts';
 import { GIT_TTL_MS } from '../src/core/git.js';
 import { sessionDirSlug } from '../src/core/providers/claude-sources.js';
+import { formatHomePath } from '../src/core/format.js';
 import { NA, STAT_FIELDS } from '../src/core/providers/index.js';
 import { TAIL_BYTES } from '../src/core/refresh.js';
 import { run } from '../src/exec.ts';
-import { NOW, agent, cardsOf, costTurn, ompSessionOf, opencodeDatabase, sessions, tokensOf, workspace } from './helpers/agent-cards.ts';
+import { NOW, agent, cardsOf, costOf, costTurn, ompSessionOf, opencodeDatabase, sessions, tokensOf, workspace } from './helpers/agent-cards.ts';
 import { fixtureText, tempHome } from './helpers/files.ts';
 import { recordingRun } from './core/helpers/recording-run.ts';
-
-const GROUPS = ['identity', 'context', 'spend', 'cache', 'activity'];
 
 test('omp agent card', async () => {
   const home = tempHome();
@@ -24,13 +23,11 @@ test('omp agent card', async () => {
   const sessionId = '00000000-0000-7000-8000-000000000001';
   sessions(join(home, '.omp/agent/sessions/-work-demo'), { [`2026-11-02_${sessionId}.jsonl`]: 'omp/basic.jsonl' });
 
-  const [{ model }] = await cardsOf(home, [agent({ agent: 'omp', sessionId, path })]);
-  const [identity, , spend] = model.groups;
+  const [{ view }] = await cardsOf(home, [agent({ agent: 'omp', sessionId, path })]);
 
-  assert.deepEqual(model.groups.map((group: { id: string }) => group.id), GROUPS);
-  assert.equal(identity.harness.value, 'omp');
-  assert.equal(identity.model.value, 'claude-sonnet-5.5-1m');
-  assert.equal(spend.hero.value, '$0.06');
+  assert.equal(view.harness, 'omp');
+  assert.equal(view.model, 'claude-sonnet-5.5-1m');
+  assert.equal(costOf(view), '$0.06');
 });
 
 test('Claude Code agent card', async () => {
@@ -38,13 +35,11 @@ test('Claude Code agent card', async () => {
   const path = workspace(home, 'app');
   sessions(join(home, '.claude/projects', sessionDirSlug(path)), { 'aaaa.jsonl': 'claude/basic.jsonl' });
 
-  const [{ model }] = await cardsOf(home, [agent({ agent: 'claude', path })]);
-  const [identity] = model.groups;
+  const [{ card, view }] = await cardsOf(home, [agent({ agent: 'claude', path })]);
 
-  assert.deepEqual(model.groups.map((group: { id: string }) => group.id), GROUPS);
-  assert.equal(identity.harness.value, 'Claude Code');
-  assert.equal(identity.model.value, 'claude-opus-4-6');
-  assert.equal(tokensOf(model), '181k');
+  assert.equal(view.harness, 'Claude Code');
+  assert.equal(view.model, 'claude-opus-4-6');
+  assert.equal(tokensOf(card), '181k');
 });
 
 test('opencode agent card', async () => {
@@ -52,22 +47,20 @@ test('opencode agent card', async () => {
   opencodeDatabase(home);
 
   // the fixture's sessions are of the folder /work/demo
-  const [{ model }] = await cardsOf(home, [agent({ agent: 'opencode', path: '/work/demo' })]);
-  const [identity, , spend] = model.groups;
+  const [{ view }] = await cardsOf(home, [agent({ agent: 'opencode', path: '/work/demo' })]);
 
-  assert.deepEqual(model.groups.map((group: { id: string }) => group.id), GROUPS);
-  assert.equal(identity.harness.value, 'opencode');
-  assert.equal(identity.model.value, 'model-b');
-  assert.equal(spend.hero.value, '$0.41');
+  assert.equal(view.harness, 'opencode');
+  assert.equal(view.model, 'model-b');
+  assert.equal(costOf(view), '$0.41');
 });
 
 test('Agent without a provider', async () => {
   const home = tempHome();
   const path = workspace(home, 'demo');
 
-  const [{ card, model }] = await cardsOf(home, [agent({ agent: 'codex', path })]);
+  const [{ card, view }] = await cardsOf(home, [agent({ agent: 'codex', path })]);
 
-  assert.equal(model.groups[0].harness.value, 'codex');
+  assert.equal(view.harness, 'codex');
   assert.deepEqual(STAT_FIELDS.filter((field: string) => card.stats[field] !== NA), []);
 });
 
@@ -96,9 +89,9 @@ test('Agent state on the card', async () => {
   const home = tempHome();
   const path = workspace(home, 'demo');
 
-  const [{ model }] = await cardsOf(home, [agent({ agent: 'omp', state: 'waiting', path })]);
+  const [{ view }] = await cardsOf(home, [agent({ agent: 'omp', state: 'waiting', path })]);
 
-  assert.equal(model.groups[0].status.label, 'waiting');
+  assert.equal(view.state, 'waiting');
 });
 
 test('omp title prefixes dropped', async () => {
@@ -109,10 +102,9 @@ test('omp title prefixes dropped', async () => {
     agent({ id: 't2', agent: 'omp', title: 'π - Fix the login bug', path }),
   ];
 
-  const models = (await cardsOf(home, agents)).map(({ model }) => model);
+  const views = (await cardsOf(home, agents)).map(({ view }) => view);
 
-  // the title line and the Session row both show the identity group's session figure
-  assert.deepEqual(models.map((model) => model.groups[0].session?.value), ['Write the docs', 'Fix the login bug']);
+  assert.deepEqual(views.map((view) => view.title), ['Write the docs', 'Fix the login bug']);
 });
 
 test('Git asked again only after GIT_TTL_MS', async () => {
@@ -134,11 +126,10 @@ test('Card without a linked session keeps the workspace folder', async () => {
   const path = workspace(home, 'demo');
   execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: path });
 
-  const [{ card, model }] = await cardsOf(home, [agent({ agent: 'omp', path })]);
-  const [identity] = model.groups;
+  const [{ card, view }] = await cardsOf(home, [agent({ agent: 'omp', path })]);
 
-  assert.equal(identity.path.value, '~/work/demo');
-  assert.equal(identity.branch, 'main');
+  assert.equal(formatHomePath(card.folder, home), '~/work/demo');
+  assert.equal(view.branch, 'main');
   assert.deepEqual(STAT_FIELDS.filter((field: string) => card.stats[field] !== NA), []);
 });
 

@@ -77,8 +77,9 @@ const newScan = () => ({ state: undefined, block: 0, skip: 0, carry: '', pos: -1
 // has no word for, are written as an object whose `$` names them, and so is an object that
 // has a `$` field of its own, as `fields`.
 // Raise KEPT_VERSION when a provider's state changes shape: values of another number are
-// ignored.
-export const KEPT_VERSION = 1;
+// ignored, so each file is scanned whole again once. It is raised by each slice of spyhop-live
+// that changes a fold's state.
+export const KEPT_VERSION = 2;
 
 function encode(value) {
   if (value === undefined) return { $: 'undefined' };

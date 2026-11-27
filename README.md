@@ -4,40 +4,37 @@ An Orca plugin that shows AI harness session stats for every Orca agent, on this
 on Orca's other hosts, in a panel of the right sidebar.
 
 It is derived from [herdr-session-stats](https://github.com/jeffujioka/herdr-session-stats), a
-herdr mod; the session readers and the card model in `src/core/` are copied from it, while
-`src/core/limit.js` and `src/core/ttl-cache.js` are spyhop's own.
+herdr mod; the session readers in `src/core/` are copied from it, while `src/core/limit.js`,
+`src/core/series.js` and `src/core/ttl-cache.js` are spyhop's own.
 
 ## What the panel shows
 
-The panel is a tree: Orca host → Orca project → Orca workspace → agent cards. Only the
-workspaces that have an Orca agent are listed, with the projects and hosts that hold them, in the
-order Orca lists the agents. When the panel opens, the focused workspace, its project and its
-host are expanded and every other row is collapsed. When focus moves to another workspace, that
-workspace, its project and its host are expanded, and the workspace expanded for the previous
-focus collapses unless you opened or closed it since; every other row stays as you leave it.
+The panel is the Live panel, an HTML panel drawn in Orca's own theme, light or dark, which
+follows a change of theme without being loaded again. It opens on the fleet screen:
 
-Above the tree, the Focused block shows the focused workspace: its name, with its host and
-project under it, and its cards, Focus pane buttons included. It follows focus as soon as Orca
-reports that focus moved; while the focused workspace has no Orca agent, it is not shown.
+- **The header**: `Spyhop`, a `live` mark, and the number of agents in each Orca state
+  (blocked, waiting, working, done) that any agent is in. The counts are drawn once a whole
+  refresh is answered, never from part of one.
+- **A group per Orca host**, this computer's (`local`) first, then the others in the order Orca
+  lists their first agent, each with the number of its cards. There are no project or workspace
+  rows. A group's cards go by Orca state: blocked, waiting, working, done.
+- **A card per session** whose agent is not done (agents on one session share a card, and an
+  agent that links to no session has a card of its own): the session's title (the folder's name
+  for an untitled one), its cost as the harness logged it (there is no price table), the folder,
+  git branch, harness and model, the agent's state and how long it has been in it, and its
+  context: the percent of the model's window used, the tokens used and the window, a bar marking
+  where the harness compacts on its own, and a spark line of the context after each of the last
+  30 model calls. From 75% of the window, a chip tells the tokens left before compaction.
+- **A done agent's session on one folded line**: its title, folder, context and cost.
 
-One card per harness session an agent links to (agents on one session share a card), and one
-per agent that links to none. A card has five groups, always in this order:
+The folder is the one the linked session records as its own, which can be a sub-folder of the
+Orca workspace folder, and the branch is that folder's: for omp the folder of the session's
+`session` entry, for Claude Code the folder the session started in (the first `cwd` in its
+file), for opencode the session's `directory`. A card with no linked session, of another
+harness, or whose session tells no folder shows the workspace folder and its branch.
 
-| Group | Shows |
-| --- | --- |
-| Identity | the agent's state (working, blocked, waiting, done) and the rows Session, Path, Branch, Remote, Machine, Harness and Model, always in that order: the session's title, the path (home as `~`), the git branch and remote, the machine, the harness and the model. A row with nothing to show is not drawn: Session for an untitled agent, Branch and Remote for a folder that is no git repository or has no branch or no origin, Machine for an agent on this computer. Path, Harness and Model are always drawn, a model that cannot be read as `n/a`. The path is the folder the linked session records as its own, which can be a sub-folder of the Orca workspace folder, and the branch and remote are that folder's: for omp the folder of the session's `session` entry, for Claude Code the folder the session started in (the first `cwd` in its file), for opencode the session's `directory`. A card with no linked session, of another harness, or whose session tells no folder shows the workspace folder and its branch and remote |
-| Context | the usage as a percent of the model's window, with tokens used, tokens left before compaction and compactions recorded |
-| Spend | the cost the harness logged (there is no price table), cost per hour, tokens used by the session, tokens per minute |
-| Cache | the time until the prompt cache is cold, and the hit rate with the turns that hit and missed it |
-| Activity | session duration, time since the last message, last turn, thinking level, premium requests used |
-
-Project and workspace rows carry Totals of cost, tokens and premium requests over the cards
-under them. A Total reads `n/a` when any of those cards reads `n/a` for it, so a part is never
-shown as the whole.
-
-A figure the session does not give reads `n/a`; the plugin never estimates one. Only the
-Identity group leaves a row out: the other four groups always draw every figure, so their rows
-stay where they are from card to card.
+A figure the session does not give reads `n/a`; the plugin never estimates one. A context with
+no known window shows its tokens, with no percent and no bar.
 
 ## Harnesses
 
@@ -69,7 +66,7 @@ database). An agent of any other harness gets a card whose figures all read `n/a
 ## Other hosts
 
 An agent on an SSH workspace, and an agent on a paired Orca server, get cards too, under their
-own host row. Their session files and git facts are read over `ssh <alias> -o BatchMode=yes -o
+own host's group. Their session files and git facts are read over `ssh <alias> -o BatchMode=yes -o
 ConnectTimeout=5`, at most eight commands at once on a host whose SSH connection spyhop keeps
 for itself and four on any other (one whose own SSH settings already reuse connections, or
 whose settings cannot be read), with read-only commands only: `cd`,
@@ -94,37 +91,41 @@ fails, or `/tmp/spyhop-<uid>` is a symlink or another user's folder, the plugin 
 
 ## Refresh
 
-While the panel is open it asks for the tree every 2 seconds, and at once when focus moves to
-another workspace. While it is closed, hidden or unmounted it asks for nothing: a refresh that
-was running when it closed runs to its end, and no other starts.
+While the panel is open it asks the worker for the fleet every 2 seconds: each request starts 2
+seconds after the previous one started, or as soon as that one is answered when it took longer,
+and never while another is unanswered. While it is closed or hidden it asks for nothing: a
+refresh that was running when it closed runs to its end, and no other starts. A refresh that
+fails leaves the screen as it was, and the next one draws it again.
 
-During a refresh each host's rows appear as soon as that host's cards are built, without waiting
-for another host: this computer's are not held up by a slow SSH host or paired server. When the
-refresh ends the whole tree replaces what is drawn, so the rows of a host that is gone
-disappear then.
+During a refresh each host's group appears as soon as that host's cards are built, without
+waiting for another host: this computer's are not held up by a slow SSH host or paired server.
+When the refresh ends its whole answer replaces what is drawn, so the group of a host that is
+gone disappears then, and the header's counts are drawn from it. A group built for an older
+refresh is never drawn.
 
 ## What spyhop stores
 
-Session totals only, in the plugin's own storage on this computer (`storage:own`): for each
+Session totals only, in the plugin's own storage on this computer (`storage:own`); the panel's
+page keeps nothing of its own, and shows only what the worker answers. For each
 session file larger than the 256 KiB a refresh reads from its end, the totals the session reader
-counted over the file and the position they cover, by harness, machine and path. No session
-text is stored, and nothing is written on any other host. They are there so that a file scanned
-once is not scanned again from its start after Orca restarts: the reader goes on from the kept
-position, and scans the file again when it is not the one that was scanned. They are written
-at most once every 30 seconds, and only when a scan changed. Deleting the storage costs one
-scan of each file, nothing else.
+counted over the file, the context sizes of its last 30 model calls, and the position they
+cover, by harness, machine and path. No session text is stored, and nothing is written on any
+other host. They are there so that a file scanned once is not scanned again from its start after
+Orca restarts: the reader goes on from the kept position, and scans the file again when it is
+not the one that was scanned. They are written at most once every 30 seconds, and only when a
+scan changed. Deleting the storage costs one scan of each file, nothing else; so does an update
+of spyhop that keeps more of a session, which discards what an earlier version kept, once.
 
 ## Focus pane
 
-A card whose agent has a pane shows a **Focus pane** button; a card whose agent has none (an
-agent of a paired server in a pane no listed terminal is in, for one) shows no button. Pressing
-it focuses that agent's pane in this computer's Orca window, showing its workspace, as clicking
-the pane does; a card that agents share focuses the first of them in Orca's order. For an agent
-on this computer or an SSH workspace it asks Orca through `terminal.focus`; for one on a paired
-Orca server it runs `orca terminal switch --environment <name> --terminal <handle>`, the handle
+The Live panel has no Focus pane button yet. The worker focuses an agent's pane in this
+computer's Orca window when the panel asks it to, showing its workspace, as clicking the pane
+does; a card that agents share focuses the first of them in Orca's order. For an agent on this
+computer or an SSH workspace it asks Orca through `terminal.focus`; for one on a paired Orca
+server it runs `orca terminal switch --environment <name> --terminal <handle>`, the handle
 `orca terminal list` gave for the pane. Neither writes anything on any host or runs anything
-over ssh. A press that cannot focus changes nothing in the panel, and writes the reason to the
-plugin's log (`orca plugin logs`). Orca's desktop app only.
+over ssh. A focus that fails writes the reason to the plugin's log (`orca plugin logs`). Orca's
+desktop app only.
 
 ## Command and key
 
@@ -141,7 +142,7 @@ plugin list` and runs `orca plugin open <key> --panel spyhop`.
   spyhop runs code in a worker, so Orca asks for approval (`approval_required`) and prints the
   command to re-run with `--approve <fingerprint>`. It needs Orca 1.4.259 or newer, and is
   granted four capabilities: `workspace:read` and `agent:read` to list the workspaces and
-  agents, `workspace:write` for the Focus pane button only (`terminal.focus`, no other
+  agents, `workspace:write` for focusing an agent's pane only (`terminal.focus`, no other
   method of it), and `storage:own` for the session totals it keeps (see What spyhop stores).
   An installed spyhop without `workspace:write` or `storage:own` asks for approval again when
   updated.
@@ -150,16 +151,24 @@ plugin list` and runs `orca plugin open <key> --panel spyhop`.
   `tsc`).
 - Test: `orca plugin test . --json` (`npm test`) runs the tests with Node's test runner and
   Orca's test kit; `orca plugin validate . --json` checks the manifest as Orca loads it.
+- Frame check: `bash scripts/frame-check.sh` runs the folder in the Orca app on this computer
+  as the dev plugin `local.spyhop`, opens the Live panel, asks the worker for the fleet with
+  `orca plugin dev request`, then shoots the panel 300 and 420 pixels wide on this computer's
+  own agents (the PNGs go to `.orca/shots/`) and fails on a `[frame]` error in
+  `orca plugin logs`; it unloads the folder when it exits. `orca plugin check` lists no HTML
+  panel and `orca plugin shot --scenario` refuses one, so the panel has no check scenarios: the
+  session screen's look is checked by eye. Orca asks for the dev plugin's approval again after
+  every change to a file of the folder, and the check prints the command that gives it.
 
 ## Known limits
 
 - **A dead host slows every refresh.** ssh waits up to 5 seconds to connect to a host that does
   not answer. Once a command finds the host gone, spyhop asks it nothing more than its place
   (`uname -s`, `printenv HOME`), so each refresh still spends one 5-second attempt on it and the
-  panel refreshes about every 5 seconds instead of every 2. The other hosts' rows are drawn at
-  the start of each refresh, without waiting for it.
-- **An unreachable paired server disappears.** When its agents cannot be listed, its host row
-  is not drawn.
+  panel refreshes about every 5 seconds instead of every 2. The other hosts' groups are drawn
+  at the start of each refresh, without waiting for it.
+- **An unreachable paired server disappears.** When its agents cannot be listed, its group is
+  not drawn.
 - **Claude Code and opencode on other hosts are untested.** Their cards there may read `n/a`.
 - **A Claude Code or opencode agent without a `sessionId` shows the newest session of the
   workspace folder.** With no title to tell sessions apart, such an agent (every one on a
@@ -170,7 +179,7 @@ plugin list` and runs `orca plugin open <key> --panel spyhop`.
 - **A Claude Code card may keep the workspace folder as its path.** A session file smaller
   than 256 KiB is searched whole for the folder the session started in. In a larger one the
   folder is looked for in the first 64 KiB only: such a session whose first prompt is larger
-  than that shows the workspace folder and its branch and remote.
+  than that shows the workspace folder and its branch.
 - **An omp agent that has just started reads `n/a`** until Orca reports its `sessionId` or omp
   writes the session's title, which the agent's title then contains. On a paired Orca server,
   whose agents never have a `sessionId`, an omp agent whose title names no session (an

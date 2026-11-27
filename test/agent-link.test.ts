@@ -8,12 +8,11 @@ import { execFileSync } from 'node:child_process';
 import { chmodSync, mkdirSync, utimesSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
+import { formatHomePath, formatRemote } from '../src/core/format.js';
 import { sessionDirSlug as claudeSlug } from '../src/core/providers/claude-sources.js';
 import { NA, STAT_FIELDS } from '../src/core/providers/index.js';
 import { HEADS_PER_LISTING } from '../src/core/providers/omp-sources.js';
 import { run, type Run } from '../src/exec.ts';
-import { buildTree } from '../src/tree.ts';
-import { worktreeId } from '../src/worktree-id.ts';
 import { NOW, agent, cardsOf, costOf, ompSessionDir, opencodeDatabase, refreshing, tokensOf, workspace } from './helpers/agent-cards.ts';
 import { fixtureText, tempHome } from './helpers/files.ts';
 
@@ -86,9 +85,9 @@ test('Orca names the session', async () => {
   ompSession(home, path, BASIC, 1);
   ompSession(home, path, COMPACTED, 30);
 
-  const [{ model }] = await cardsOf(home, [agent({ agent: 'omp', sessionId: COMPACTED.id, path })]);
+  const [{ view }] = await cardsOf(home, [agent({ agent: 'omp', sessionId: COMPACTED.id, path })]);
 
-  assert.equal(costOf(model), COMPACTED.cost);
+  assert.equal(costOf(view), COMPACTED.cost);
 });
 
 test("Session of a sub-folder found by Orca's session id", async () => {
@@ -102,13 +101,12 @@ test("Session of a sub-folder found by Orca's session id", async () => {
   ompSession(home, projects, BASIC, 1);
   ompSession(home, boto, COMPACTED, 30);
 
-  const [{ model }] = await cardsOf(home, [agent({ agent: 'omp', sessionId: COMPACTED.id, path: projects })]);
-  const [identity] = model.groups;
+  const [{ card, view }] = await cardsOf(home, [agent({ agent: 'omp', sessionId: COMPACTED.id, path: projects })]);
 
-  assert.equal(costOf(model), COMPACTED.cost);
-  assert.equal(identity.path.value, '~/projects/boto');
-  assert.equal(identity.branch, 'feat/jaci');
-  assert.equal(identity.remote, 'github.com/jeffujioka/jaci');
+  assert.equal(costOf(view), COMPACTED.cost);
+  assert.equal(formatHomePath(card.folder, home), '~/projects/boto');
+  assert.equal(view.branch, 'feat/jaci');
+  assert.equal(formatRemote(card.origin), 'github.com/jeffujioka/jaci');
 });
 
 test('No session id', async () => {
@@ -117,9 +115,9 @@ test('No session id', async () => {
   ompSession(home, path, BASIC, 1, 'Fix the login bug');
   ompSession(home, path, COMPACTED, 30, 'Write the docs');
 
-  const [{ model }] = await cardsOf(home, [agent({ agent: 'omp', sessionId: null, title: 'π - Write the docs', path })]);
+  const [{ view }] = await cardsOf(home, [agent({ agent: 'omp', sessionId: null, title: 'π - Write the docs', path })]);
 
-  assert.equal(costOf(model), COMPACTED.cost);
+  assert.equal(costOf(view), COMPACTED.cost);
 });
 
 test('Session of a sub-folder found by title', async () => {
@@ -130,10 +128,10 @@ test('Session of a sub-folder found by title', async () => {
   ompSession(home, projects, BASIC, 1, 'Continue the handoff');
   ompSession(home, boto, COMPACTED, 30, 'Port the banner');
 
-  const [{ model }] = await cardsOf(home, [agent({ agent: 'omp', title: 'π - Port the banner - boto', path: projects })]);
+  const [{ card, view }] = await cardsOf(home, [agent({ agent: 'omp', title: 'π - Port the banner - boto', path: projects })]);
 
-  assert.equal(costOf(model), COMPACTED.cost);
-  assert.equal(model.groups[0].path.value, '~/projects/boto');
+  assert.equal(costOf(view), COMPACTED.cost);
+  assert.equal(formatHomePath(card.folder, home), '~/projects/boto');
 });
 
 test('Session of a look-alike folder is not taken', async () => {
@@ -143,10 +141,10 @@ test('Session of a look-alike folder is not taken', async () => {
   // omp's session folder of `projects-old` is named like that of a sub-folder `projects/old`
   ompSession(home, join(home, 'projects-old'), BASIC, 1, 'Port the banner');
 
-  const [{ card, model }] = await cardsOf(home, [agent({ agent: 'omp', title: 'π - Port the banner', path: projects })]);
+  const [{ card }] = await cardsOf(home, [agent({ agent: 'omp', title: 'π - Port the banner', path: projects })]);
 
   assert.deepEqual(STAT_FIELDS.filter((field: string) => card.stats[field] !== NA), []);
-  assert.equal(model.groups[0].path.value, '~/projects');
+  assert.equal(formatHomePath(card.folder, home), '~/projects');
 });
 
 test('omp agent that matches no session reads n/a', async () => {
@@ -156,10 +154,10 @@ test('omp agent that matches no session reads n/a', async () => {
   ompSession(home, path, COMPACTED, 30, 'Write the docs');
   const sessionId = '00000000-0000-7000-8000-0000000000ff';
 
-  const [{ card, model }] = await cardsOf(home, [agent({ agent: 'omp', sessionId, title: 'π - Review the pull request', path })]);
+  const [{ card, view }] = await cardsOf(home, [agent({ agent: 'omp', sessionId, title: 'π - Review the pull request', path })]);
 
   assert.deepEqual(STAT_FIELDS.filter((field: string) => card.stats[field] !== NA), []);
-  assert.equal(costOf(model), 'n/a');
+  assert.equal(costOf(view), 'n/a');
 });
 
 test('Two omp agents told apart by title', async () => {
@@ -174,7 +172,7 @@ test('Two omp agents told apart by title', async () => {
   ]);
 
   assert.deepEqual(
-    cards.map(({ card, model }) => [card.id, costOf(model)]),
+    cards.map(({ card, view }) => [card.id, costOf(view)]),
     [
       ['t1', COMPACTED.cost],
       ['t2', BASIC.cost],
@@ -193,8 +191,9 @@ test('Two agents on one session share a card', async () => {
   ]);
 
   assert.equal(cards.length, 1);
+  assert.deepEqual(cards[0].card.agents, ['t1', 't2']);
   // basic.jsonl, the newest, logs 181k tokens; no-usage.jsonl logs none
-  assert.equal(tokensOf(cards[0].model), '181k');
+  assert.equal(tokensOf(cards[0].card), '181k');
 });
 
 // A guard of the rule that agents share a card of a session within one Orca workspace only
@@ -213,26 +212,10 @@ test('Agents of nested workspaces on one session keep a card each', async () => 
   ]);
 
   assert.deepEqual(
-    cards.map(({ card, model }) => [card.id, costOf(model)]),
+    cards.map(({ card, view }) => [card.id, costOf(view), card.agents]),
     [
-      ['t1', BASIC.cost],
-      ['t2', BASIC.cost],
-    ],
-  );
-  // each workspace row draws its agent's card
-  const placed = (id: string, name: string, path: string) => {
-    const worktree = worktreeId('r1', path);
-    return { id, hostId: 'local', repo: 'projects', workspace: name, worktreeId: worktree, workspaceId: worktree };
-  };
-  const [host] = buildTree(
-    [placed('t1', 'projects', projects), placed('t2', 'boto', boto)],
-    cards.map(({ card }) => card),
-  );
-  assert.deepEqual(
-    host.projects[0].workspaces.map((row) => [row.name, row.cards.map((card) => card.id)]),
-    [
-      ['projects', ['t1']],
-      ['boto', ['t2']],
+      ['t1', BASIC.cost, ['t1']],
+      ['t2', BASIC.cost, ['t2']],
     ],
   );
 });
@@ -248,7 +231,7 @@ test('Two Claude Code agents told apart by session id', async () => {
   ]);
 
   assert.deepEqual(
-    cards.map(({ card, model }) => [card.id, tokensOf(model)]),
+    cards.map(({ card }) => [card.id, tokensOf(card)]),
     [
       ['t1', 'n/a'],
       ['t2', '181k'],
@@ -261,10 +244,10 @@ test('A session id that names no session links as without one', async () => {
   const path = workspace(home, 'app');
   claudeSessions(home, path);
 
-  const [{ model }] = await cardsOf(home, [agent({ agent: 'claude', sessionId: 'cccc', path })]);
+  const [{ card }] = await cardsOf(home, [agent({ agent: 'claude', sessionId: 'cccc', path })]);
 
   // the newest session, as for an agent without a session id
-  assert.equal(tokensOf(model), '181k');
+  assert.equal(tokensOf(card), '181k');
 });
 
 test('Claude Code session of a sub-folder found by session id', async () => {
@@ -275,10 +258,10 @@ test('Claude Code session of a sub-folder found by session id', async () => {
   mkdirSync(boto, { recursive: true });
   claudeSession(home, boto, 'aaaa', 'claude/basic.jsonl', 1);
 
-  const [{ model }] = await cardsOf(home, [agent({ agent: 'claude', sessionId: 'aaaa', path: projects })]);
+  const [{ card }] = await cardsOf(home, [agent({ agent: 'claude', sessionId: 'aaaa', path: projects })]);
 
-  assert.equal(tokensOf(model), '181k');
-  assert.equal(model.groups[0].path.value, '~/projects/boto');
+  assert.equal(tokensOf(card), '181k');
+  assert.equal(formatHomePath(card.folder, home), '~/projects/boto');
 });
 
 test('Harness without titles keeps the newest session of the workspace folder', async () => {
@@ -290,10 +273,10 @@ test('Harness without titles keeps the newest session of the workspace folder', 
   // the sub-folder's session is newer than both, and logs no tokens
   claudeSession(home, boto, 'cccc', 'claude/no-usage.jsonl', 0);
 
-  const [{ model }] = await cardsOf(home, [agent({ agent: 'claude', path: projects })]);
+  const [{ card }] = await cardsOf(home, [agent({ agent: 'claude', path: projects })]);
 
-  assert.equal(tokensOf(model), '181k');
-  assert.equal(model.groups[0].path.value, '~/projects');
+  assert.equal(tokensOf(card), '181k');
+  assert.equal(formatHomePath(card.folder, home), '~/projects');
 });
 
 test('Two opencode agents told apart by session id', async () => {
@@ -307,7 +290,7 @@ test('Two opencode agents told apart by session id', async () => {
   ]);
 
   assert.deepEqual(
-    cards.map(({ card, model }) => [card.id, costOf(model)]),
+    cards.map(({ card, view }) => [card.id, costOf(view)]),
     [
       ['t1', 'n/a'],
       ['t2', '$0.41'],
@@ -320,10 +303,10 @@ test('opencode session of another folder found by session id', async () => {
   opencodeDatabase(home);
 
   // ses_basic is a session of /work/demo and logs $0.41
-  const [{ model }] = await cardsOf(home, [agent({ agent: 'opencode', sessionId: 'ses_basic', path: '/work' })]);
+  const [{ card, view }] = await cardsOf(home, [agent({ agent: 'opencode', sessionId: 'ses_basic', path: '/work' })]);
 
-  assert.equal(costOf(model), '$0.41');
-  assert.equal(model.groups[0].path.value, '/work/demo');
+  assert.equal(costOf(view), '$0.41');
+  assert.equal(formatHomePath(card.folder, home), '/work/demo');
 });
 
 test('An agent without a session id never takes a named session', async () => {
@@ -349,7 +332,7 @@ test('An agent without a session id never takes a named session', async () => {
   assert.deepEqual(stats.c2, await byId('claude', 'bbbb', path));
   assert.deepEqual(stats.o2, await byId('opencode', 'ses_old', '/work/demo'));
   assert.deepEqual(
-    cards.map(({ card, model }) => [card.id, card.harness === 'claude' ? tokensOf(model) : costOf(model)]),
+    cards.map(({ card, view }) => [card.id, card.harness === 'claude' ? tokensOf(card) : costOf(view)]),
     [
       ['c1', '181k'],
       ['c2', 'n/a'],
@@ -373,7 +356,7 @@ test('An omp agent without a session id, every session of its folder named, read
 
   // t3 links to no session, and has a card of its own
   assert.deepEqual(
-    cards.map(({ card, model }) => [card.id, costOf(model)]),
+    cards.map(({ card, view }) => [card.id, costOf(view)]),
     [
       ['t1', BASIC.cost],
       ['t2', COMPACTED.cost],
@@ -431,8 +414,8 @@ test('A session older than the heads one refresh reads links after a later refre
   const costs = [];
   const runs = [];
   for (let i = 0; i < 3; i++) {
-    const [{ model }] = await refresh(idle);
-    costs.push(costOf(model));
+    const [{ view }] = await refresh(idle);
+    costs.push(costOf(view));
     runs.push(heads.runs);
   }
 
@@ -457,6 +440,6 @@ test('A session whose head could not be read links at the next refresh', async (
   chmodSync(file, 0o644);
   const [linked] = await refresh(agents);
 
-  assert.equal(costOf(failed.model), 'n/a');
-  assert.equal(costOf(linked.model), BASIC.cost);
+  assert.equal(costOf(failed.view), 'n/a');
+  assert.equal(costOf(linked.view), BASIC.cost);
 });
