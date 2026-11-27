@@ -1,13 +1,15 @@
 // The live panel end to end: the real worker, the controller (src/live/controller.ts) and its
 // screens, through the frame the tests play (`openLive`, test/helpers/live.ts), over an omp
 // session file under a temporary home read by the real programs; from the fleet to the session
-// screen, through one refresh, and back; and an omp session on the SSH target `devbox` with its
-// sub-agents, read over the stand-in `ssh` (test/helpers/stand-ins.ts). Time is node:test's mock
-// clock.
+// screen, through one refresh, and back; an omp session on the SSH target `devbox` with its
+// sub-agents, read over the stand-in `ssh` (test/helpers/stand-ins.ts); and an opencode session
+// in the current tables of opencode's database, with a child session and its model in opencode's
+// catalogue, read by the real sqlite3. Time is node:test's mock clock.
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import { mock, test } from 'node:test';
 import { REFRESH_INTERVAL_MS } from '../../src/core/refresh.js';
-import { NOW, workspace } from '../helpers/agent-cards.ts';
+import { NOW, opencodeCalls, opencodeCatalogue, sqlText, workspace } from '../helpers/agent-cards.ts';
 import { tempHome } from '../helpers/files.ts';
 import { FIX, folderOf, ompSession, ompSubAgent, ompWindow, type OmpCall, open, openOnFleet, spent, toolCalls, until } from '../helpers/live.ts';
 import { attr, figure, parts, text } from '../helpers/markup.ts';
@@ -106,4 +108,51 @@ test('a session with sub-agents end to end', async () => {
   const ran = opened.calls.ssh();
   assert.ok(ran.length > 0);
   assert.deepEqual(ran.filter((args) => args[0] !== 'devbox' || !readOnlyLine(args.at(-1)!)), []);
+});
+
+test('an opencode session end to end', async () => {
+  // the workspace `web`/`main` on this computer, with one working `opencode2` agent; its session
+  // `ses_window`, of the workspace's folder, logs four model calls of `github-copilot`'s
+  // `claude-haiku-5.5`, whose context rises to 160,000 tokens of the catalogue's 200,000, the last
+  // calling the tool `task`; its child session `ses_child`, `Explore the repo` of the kind
+  // `general`, logs one call at 0.05 USD
+  const web: HostWorkspace = { project: 'web', name: 'main', agents: ['working'], harness: 'opencode2' };
+  const opened = await openOnFleet([web], {
+    prepare: (home) => {
+      const folder = workspace(home, 'web-main');
+      const database = opencodeCalls(home, folder, { provider: 'github-copilot', model: 'claude-haiku-5.5', contexts: [40_000, 80_000, 120_000, 160_000] });
+      const model = { id: 'claude-haiku-5.5', providerID: 'github-copilot', variant: 'high' };
+      const call = { time: { created: NOW - 90_000, completed: NOW - 89_000 }, agent: 'general', model, content: [], finish: 'stop', cost: 0.05, tokens: { input: 100, output: 50, reasoning: 0, cache: { read: 0, write: 800 } } };
+      execFileSync('sqlite3', [
+        database,
+        `INSERT INTO session_v2 VALUES ('ses_child', 'prj', 'ses_window', 's', ${sqlText(folder)}, 'Explore the repo', '2.0.0', 0.05, 'general', ${sqlText(JSON.stringify(model))}, ${NOW - 100_000}, ${NOW - 89_000}, NULL);\n` +
+          `INSERT INTO session_message VALUES ('k1', 'ses_child', 'assistant', 1, ${NOW - 90_000}, ${NOW - 89_000}, ${sqlText(JSON.stringify(call))});\n` +
+          `UPDATE session_message SET data = json_set(data, '$.content', json('[{"type":"tool","id":"t1","name":"task","state":{"status":"completed"}}]')) WHERE id = 'w3';`,
+      ]);
+      opencodeCatalogue(home);
+    },
+  });
+
+  // the fleet card: the context's percent of the catalogue's window, its bar and its spark line
+  const [card] = parts(opened.html(), 'data-part', 'card');
+  assert.equal(figure(card, 'percent'), '80%');
+  assert.equal(parts(card, 'data-part', 'bar').length, 1);
+  assert.equal(attr(parts(card, 'data-chart', 'spark')[0], 'data-points'), '4');
+
+  opened.live.press(attr(card, 'data-press')!);
+  assert.equal(attr(opened.html(), 'data-screen'), 'session');
+  await until(() => parts(opened.html(), 'data-part', 'loading').length === 0);
+
+  // the session screen: the context and tokens charts of the four calls, the tools section, the
+  // Sub-agents section with the child session, and the models section
+  const html = opened.html();
+  assert.equal(parts(parts(html, 'data-chart', 'context')[0], 'data-v').length, 4);
+  assert.equal(parts(parts(html, 'data-chart', 'tokens')[0], 'data-bar').length, 4);
+  assert.equal(text(parts(parts(html, 'data-part', 'tools')[0], 'class', 'row head')[0]), 'Tools 1 tool call');
+  const [section] = parts(html, 'data-part', 'subagents');
+  assert.deepEqual(
+    parts(section, 'data-agent').map((bar) => text(parts(bar, 'class', 'row label')[0])),
+    ['Explore the repo · general · claude-haiku-5.5 · $0.05'],
+  );
+  assert.deepEqual(parts(parts(html, 'data-part', 'models')[0], 'class', 'row item').map((row) => text(row).split(' ')[0]), ['claude-haiku-5.5']);
 });

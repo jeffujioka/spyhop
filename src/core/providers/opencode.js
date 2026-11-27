@@ -7,23 +7,25 @@
 // estimates one.
 //
 // Pure: no Orca API, no database or file access, no runtime-specific API. `input` is
-// `{ messages, compactions }` (see `opencodeProvider`); the rows are read from the database by
-// src/core/providers/opencode-sources.js.
+// `{ messages, compactions, tools, loggedCost, sources }` (see `opencodeProvider`), in one shape
+// whichever generation of opencode's tables the rows are read from, by
+// src/core/providers/opencode-sources.js, which also reads the window from opencode's catalogue.
 //
 // Structure as omp.js: `parseSession` makes one `session` value; each entry of `FIGURES` is a
 // function `(session, now) => partial stats`. The rows are the whole session, so `detail` of
-// them always gives its series (src/core/series.js).
+// them always gives its series (src/core/series.js), once its tool calls are read too.
 
-import { burnRate, isNumber } from './shared.js';
-import { detailOf, pushRecent } from '../series.js';
+import { burnRate, isNumber, tokenCount } from './shared.js';
+import { addCall, addCost, detailOf, entryOf, newSeries, pushRecent } from '../series.js';
 
-function parseSession({ messages, compactions }) {
+function parseSession({ messages, compactions, tools, loggedCost, sources }) {
   const rows = Array.isArray(messages) ? messages : [];
   const assistants = rows.filter((row) => row?.role === 'assistant');
   // A compaction summary is an assistant message written by the compaction agent, with its own
   // model; the session's model, level, context and turn are those of the messages around it.
   const turns = assistants.filter((row) => row.summary !== 1);
-  return { rows, assistants, turns, compactions };
+  const window = isNumber(sources?.window) && sources.window > 0 ? sources.window : null;
+  return { rows, assistants, turns, compactions, tools: Array.isArray(tools) ? tools : null, loggedCost: isNumber(loggedCost) ? loggedCost : null, window };
 }
 
 // Sum of `pick(assistant message)` over the messages that have it; undefined when none has.
@@ -69,8 +71,11 @@ function tokens(session) {
   return totalTokens === undefined ? {} : { totalTokens };
 }
 
-// Cost the database logged per message (herdr-session-stats decision D5); no price table.
+// Cost the database logged (herdr-session-stats decision D5); no price table. A current
+// session's is the total opencode keeps for it, which can be above the sum of its messages'
+// costs; a legacy session's is that sum.
 function cost(session) {
+  if (session.loggedCost !== null) return { costUsd: session.loggedCost };
   const costUsd = sumAssistants(session, (row) => row.cost);
   return costUsd === undefined ? {} : { costUsd };
 }
@@ -99,16 +104,21 @@ function autocompactions({ compactions }) {
   return isNumber(compactions) ? { autocompactions: compactions } : {};
 }
 
-// Context usage is the prompt of the latest turn that sent one. The window comes from a
-// catalogue outside the database, so the maximum, the percentage and the headroom are not
-// figures of this provider.
-function context({ turns }) {
+// Context usage is the prompt of the latest turn that sent one; the maximum is the window of the
+// session's model in opencode's catalogue, and the percentage needs both. opencode knows no
+// compaction point to read, so the headroom is no figure of this provider.
+function context({ turns, window }) {
   const sizes = turns.map(promptTokens).filter((size) => size > 0);
-  return sizes.length ? { contextTokens: sizes.at(-1) } : {};
+  const figures = window === null ? {} : { contextMax: window };
+  if (!sizes.length) return figures;
+  figures.contextTokens = sizes.at(-1);
+  if (window !== null) figures.contextPercent = figures.contextTokens / window;
+  return figures;
 }
 
-// Burn rate from the session's own duration, cost and token figures.
-const burn = (session) => burnRate({ ...duration(session), ...cost(session), ...tokens(session) });
+// Burn rate from the session's own duration, token figures and the costs of its model calls, as
+// its cost chart adds them up.
+const burn = (session) => burnRate({ ...duration(session), costUsd: sumAssistants(session, (row) => row.cost), ...tokens(session) });
 
 function sinceActivity(session, now) {
   const range = span(session);
@@ -129,6 +139,13 @@ function thinking({ turns }) {
   return typeof latest?.variant === 'string' && latest.variant ? { thinkingLevel: latest.variant } : {};
 }
 
+// A message that sent and wrote nothing (an aborted or failed request) is no model call.
+const isCall = (row) => [row.input, row.cacheRead, row.cacheWrite, row.output].some((count) => tokenCount(count) > 0);
+
+// The session's own model calls (see isCall). A sub-agent with none, which logs no cost until
+// its first call, then spent nothing (card-view.ts `spentOf`).
+const modelCalls = ({ assistants }) => ({ calls: assistants.filter(isCall).length });
+
 const FIGURES = [
   model,
   duration,
@@ -142,21 +159,71 @@ const FIGURES = [
   sinceActivity,
   latency,
   thinking,
+  modelCalls,
 ];
 
 // The series of the session: the prompt of each assistant message that sent one, a compaction
-// summary's included, since each is a model call.
-function detail({ assistants }) {
+// summary's included, since each is a model call. Without its tool calls the session's series
+// is not whole, and only `recent` is given.
+function detail(session) {
+  const { assistants, tools } = session;
   const recent = [];
   for (const size of assistants.map(promptTokens)) if (size > 0) pushRecent(recent, size);
-  return detailOf({ recent });
+  if (!tools) return detailOf({ recent });
+  // opencode logs no cost of a call's cache writes, so the cold starts have no cost.
+  const series = newSeries();
+  const cold = { count: 0, tokens: 0, cost: null };
+  const models = {};
+  let calls = 0;
+  for (const row of assistants) {
+    if (!isCall(row)) continue;
+    const prompt = promptTokens(row);
+    const call = {
+      t: isNumber(row.completed) ? row.completed : row.created,
+      read: tokenCount(row.cacheRead),
+      write: tokenCount(row.cacheWrite),
+      uncached: tokenCount(row.input),
+      output: tokenCount(row.output),
+      cost: isNumber(row.cost) ? row.cost : null,
+      context: prompt > 0 ? prompt : null,
+    };
+    addCall(series, call);
+    // a cold start: a call after the first that read nothing from the prompt cache
+    if (calls > 0 && row.cacheRead === 0) {
+      cold.count += 1;
+      cold.tokens += call.write;
+    }
+    calls += 1;
+    if (typeof row.modelId === 'string' && row.modelId) {
+      const byModel = entryOf(models, row.modelId, () => ({ cost: 0, tokens: 0 }));
+      byModel.cost = addCost(byModel.cost, call.cost);
+      byModel.tokens += tokenCount(messageTotal(row));
+    }
+  }
+  const byTool = {};
+  for (const { name, status } of tools) {
+    if (typeof name !== 'string') continue;
+    const tool = entryOf(byTool, name, () => ({ calls: 0, failed: 0 }));
+    tool.calls += 1;
+    if (status === 'error') tool.failed += 1;
+  }
+  // a compaction is a summary that did not end with an error; opencode logs no context before
+  // or after it
+  const marks = assistants.filter((row) => row.summary === 1 && row.error == null).map((row) => ({ t: row.created, before: null, after: null }));
+  const range = span(session);
+  return detailOf({ recent, series, marks, cold, tools: byTool, models, firstEntry: range?.first, lastEntry: range?.last });
 }
 
-// `input` is `{ messages, compactions }`: `messages`, the session's message rows in order
-// (`{ id, role, parentId, created, completed, modelId, variant, summary, cost, total, input,
-// output, reasoning, cacheRead, cacheWrite }`, each a number, a string or null as the database
-// holds it; `summary` is 1 on a compaction summary), and `compactions`, the number of finished
-// automatic compactions of the session or null when the database does not record them.
+// `input` is `{ messages, compactions, tools, loggedCost, sources }`: `messages`, the session's
+// message rows in order (`{ id, role, parentId, created, completed, modelId, providerId,
+// variant, summary, cost, total, input, output, reasoning, cacheRead, cacheWrite, error }`, each
+// a number, a string or null as the database holds it; `summary` is 1 on a compaction summary,
+// `error` names the error a message ended with), `compactions`, the number of finished automatic
+// compactions of the session or null when the database does not record them, `tools`, the
+// session's tool calls in order (`{ name, status }`, `status` 'error' on one that failed), null
+// when they could not be read, `loggedCost`, the session's total cost as opencode keeps it
+// (current tables), null when it keeps none, and `sources.window`, the window opencode's model
+// catalogue holds for the provider and model of the session's latest turn, null when unknown.
 export const opencodeProvider = {
   readStats(input, now) {
     const session = parseSession(input ?? {});

@@ -8,10 +8,11 @@
 // `input` is whatever the provider reads from (omp and Claude Code: the jsonl text of the
 // session, or `{ text, sources, state }` with the files already read by the caller, `text`
 // being the tail window of a large file and `state` the provider's accumulator over the whole
-// file; opencode: `{ messages, compactions }`, the rows of the session read from its
-// database); the registry does not look inside it. A provider never reads a file itself: the
-// plugin does its I/O asynchronously and hands plain values in. `now` is epoch milliseconds; a
-// figure measured from the present (cacheLeftMs) reads it, the others ignore it.
+// file; opencode: `{ messages, compactions, tools, loggedCost, sources }`, the rows of the
+// session read from its database, the total cost opencode keeps for it and the window of its
+// model from opencode's catalogue); the registry does not look inside it. A provider never reads
+// a file itself: the plugin does its I/O asynchronously and hands plain values in. `now` is epoch
+// milliseconds; a figure measured from the present (cacheLeftMs) reads it, the others ignore it.
 //
 // A provider that reads a jsonl file also carries `fold(state, entries) -> state`, the
 // accumulator of the figures that need the whole file: it adds parsed entries to `state`
@@ -24,7 +25,8 @@
 // `src/core/providers/<harness>-sources.js`, so adding a harness touches only its provider, its
 // sources file and one registry line below. `execOn(machine)` and `readTextOn(machine)` run a
 // program and read a text file on an Orca host (null: this computer), through the plugin's
-// runner (src/exec.ts), read-only use only; `kept` is the scans of this provider's session
+// runner (src/exec.ts), read-only use only; `readTextOn` gives null for a file it cannot read
+// and rejects when ssh cannot reach the host; `kept` is the scans of this provider's session
 // files that an earlier run kept (see `sessionReaders`, session-files.js). `createSessions`
 // runs once per card builder and returns
 // (a session object a hook gives holds at least the fields its signature names here; a hook may
@@ -69,12 +71,13 @@
 //     its model and its task as the hook tells them without its transcript (null: not told;
 //     the builder then takes the kind and the model from its stats' `detail`), whether it
 //     runs (null: the harness does not tell), and `input`, the `input` of this provider's
-//     `readStats` for its transcript, or null when this call did not read it. A hook reads
-//     the transcripts as it reads session files, through the same `sessionReaders`, so their
-//     scans are kept with the others, and bounds how many it reads in one call (omp and Claude
-//     Code: `subAgentReads`, session-files.js). A session without sub-agents gives none;
-//     one whose sub-agents cannot be listed rejects, so that unknown never reads as none;
-//     `os` is the host's (`uname -s`);
+//     `readStats` for its transcript, or null when this call did not read it. A hook of
+//     transcript files reads them as it reads session files, through the same
+//     `sessionReaders`, so their scans are kept with the others, and bounds how many it reads in
+//     one call (omp and Claude Code: `subAgentReads`, session-files.js); opencode's sub-agents
+//     are child sessions in its database, all read by one query. A session without sub-agents
+//     gives none; one whose sub-agents cannot be listed rejects, so that unknown never reads as
+//     none; `os` is the host's (`uname -s`);
 //   scanned()                              -> { changed, scans }
 //     optional, for a provider that scans session files: the finished scans of the files read,
 //     to keep for a later run, and whether any changed since it was last asked.
@@ -130,7 +133,7 @@
 //   start     the time of the file's first entry of any type, a sub-agent's start (epoch ms),
 //             null where no entry carries a time
 //   end       the time of its last such entry, a sub-agent's end
-// (opencode gives `recent` alone.)
+// (opencode gives `recent` alone when the session's tool calls cannot be read.)
 
 import { ompProvider } from './omp.js';
 import { createOmpSessions } from './omp-sources.js';

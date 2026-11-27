@@ -125,10 +125,11 @@ export function toolAnswered(state, id, failed) {
 }
 
 // The `detail` of `readStats` from the series a provider kept over the whole session. A copy,
-// since a fold's state goes on folding what the file appends after this read. A provider that
-// keeps no series of its calls (opencode) gives `recent` alone. `kind` and `model` are those a
-// sub-agent's transcript records of itself (omp: its `session_init`), null when it records none;
-// `start` and `end` the times of the file's first and last entry, null without one.
+// since a fold's state goes on folding what the file appends after this read. A session whose
+// series is not whole (opencode's, when its tool calls cannot be read) gives `recent` alone.
+// `kind` and `model` are those a sub-agent's transcript records of itself (omp: its
+// `session_init`), null when it records none; `start` and `end` the times of the file's first
+// and last entry, null without one.
 export function detailOf({ recent, series, marks, cold, tools, models, kind = null, model = null, firstEntry, lastEntry }) {
   if (!series) return { recent: [...recent] };
   return structuredClone({ recent, points: series.points, marks, cold, tools, models, kind, model, start: firstEntry ?? null, end: lastEntry ?? null });

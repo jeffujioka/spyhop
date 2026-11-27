@@ -25,10 +25,11 @@ export function cacheRate({ input, cacheRead, cacheWrite }) {
   return total > 0 ? { cacheHitRate: cacheRead.sum / total } : {};
 }
 
-// Burn rate is derived from the session's own duration, cost and token figures (the values
-// the provider's `duration`, `cost` and `tokens` gave, any of them absent); a session that
-// has not lasted (duration 0) or lacks the input reads n/a. A provider that leaves out
-// `costUsd` has no cost per hour.
+// Burn rate is derived from the duration, cost and token figures the provider hands in, any of
+// them absent: its `duration` and `tokens` figures and the cost of its model calls (omp's `cost`
+// figure; opencode's sum of its calls' costs, as its own session total can sit above them). A
+// session that has not lasted (duration 0) or lacks the input reads n/a. A provider that leaves
+// out `costUsd` has no cost per hour.
 export function burnRate({ durationMs, costUsd, totalTokens }) {
   if (!(durationMs > 0)) return {};
   const figures = {};

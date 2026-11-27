@@ -77,6 +77,45 @@ export function opencodeDatabase(home: string, name = 'basic') {
   return database;
 }
 
+// The model calls of an opencode session: those of `model` of the provider `provider`, one per
+// context.
+export type OpencodeCalls = { provider: string; model: string; contexts: number[] };
+
+// The session `ses_window` of the folder `folder` in opencode's database under `home` (made from
+// current.sql), in the current tables: one model call of `model` of the provider `provider` per
+// context of `contexts` (each the prompt's tokens, read from the cache but for 100 sent fresh),
+// at 0.10 USD each, and opencode's own total of 0.40 USD; returns the database's path.
+export function opencodeCalls(home: string, folder: string, { provider, model, contexts }: OpencodeCalls) {
+  const at = (i: number) => NOW - 60_000 * (contexts.length - i);
+  const rows = contexts.map((context, i) => {
+    const data = {
+      time: { created: at(i), completed: at(i) + 1000 },
+      agent: 'build',
+      model: { id: model, providerID: provider, variant: 'high' },
+      content: [],
+      finish: 'stop',
+      cost: 0.1,
+      tokens: { input: 100, output: 50, reasoning: 0, cache: { read: context - 100, write: 0 } },
+    };
+    return `INSERT INTO session_message VALUES ('w${i}', 'ses_window', 'assistant', ${i + 1}, ${at(i)}, ${at(i) + 1000}, ${sqlText(JSON.stringify(data))});`;
+  });
+  const session = `INSERT INTO session_v2 VALUES ('ses_window', 'prj', NULL, 's', ${sqlText(folder)}, 't', '2.0.0', 0.40, NULL, NULL, ${at(0)}, ${at(contexts.length - 1) + 1000}, NULL);`;
+  const database = opencodeDatabase(home, 'current');
+  execFileSync('sqlite3', [database, [session, ...rows].join('\n')]);
+  return database;
+}
+
+// `text` as an SQL string literal.
+export const sqlText = (text: string) => `'${text.replaceAll("'", "''")}'`;
+
+// opencode's model catalogue under `home`: test/fixtures/opencode/models.json, which holds a
+// `limit.context` of 200,000 for `github-copilot`'s `claude-haiku-5.5`.
+export function opencodeCatalogue(home: string) {
+  const dir = join(home, '.cache/opencode');
+  mkdirSync(dir, { recursive: true });
+  copyFileSync(fixture('opencode/models.json'), join(dir, 'models.json'));
+}
+
 export const agent = (fields: Partial<OrcaAgent>): OrcaAgent => ({
   id: 't1',
   agent: 'omp',

@@ -24,7 +24,7 @@ import { fleetScreen } from '../../src/live/fleet.ts';
 import { sessionScreen } from '../../src/live/session.ts';
 import type { CardView, FleetAnswer, SessionAnswer } from '../../src/protocol.ts';
 import * as workerModule from '../../src/worker.ts';
-import { NOW, ompSessionDir, subAgentFile, workspace } from './agent-cards.ts';
+import { NOW, ompSessionDir, sqlText, subAgentFile, workspace } from './agent-cards.ts';
 import { atTestEnd, setEnv, useTempHome } from './env.ts';
 import { frameOf } from './frame.ts';
 import { attr, parts, text } from './markup.ts';
@@ -328,8 +328,8 @@ export function ompSubAgent(
 export function ompWindow(home: string, window: number, model = MODEL) {
   const dir = join(home, '.omp/agent');
   mkdirSync(dir, { recursive: true });
-  const models = JSON.stringify([{ id: model, contextWindow: window }]).replaceAll("'", "''");
-  const sql = `CREATE TABLE model_cache (provider_id TEXT, models TEXT, updated_at INTEGER); INSERT INTO model_cache VALUES ('${PROVIDER}:default', '${models}', 1);`;
+  const models = JSON.stringify([{ id: model, contextWindow: window }]);
+  const sql = `CREATE TABLE model_cache (provider_id TEXT, models TEXT, updated_at INTEGER); INSERT INTO model_cache VALUES (${sqlText(`${PROVIDER}:default`)}, ${sqlText(models)}, 1);`;
   execFileSync('sqlite3', [join(dir, 'models.db'), sql]);
 }
 

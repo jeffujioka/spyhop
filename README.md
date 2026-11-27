@@ -26,8 +26,8 @@ follows a change of theme without being loaded again. It opens on the fleet scre
   context: the percent of the model's window used, the tokens used and the window, a bar marking
   where the harness compacts on its own, and a spark line of the context after each of the last
   30 model calls. Its chips tell, from 75% of the window, the tokens left before compaction;
-  how many of its sub-agents run and how many there are (for Claude Code, which does not tell
-  which run, how many there are), none without a sub-agent; and its cache hit rate.
+  how many of its sub-agents run and how many there are (for Claude Code and opencode, which do
+  not tell which run, how many there are), none without a sub-agent; and its cache hit rate.
 - **A done agent's session on one folded line**: its title, folder, context and cost.
 
 Pressing a card or a folded line, by a click or by Enter or Space once it has the keyboard's
@@ -74,8 +74,8 @@ the agent has a pane (see Focus pane). Under it:
     to the cache again; the note gives how many, the tokens written again and their cost;
   - the cost over time, of the session's own model calls and of its sub-agents, with the total
     as the harness logged it and the cost per hour over the session's duration.
-- **Sub-agents**, for a session with any: how many run (not for Claude Code, which does not
-  tell), how many there are and their cost; a row for each running one, with its kind, name,
+- **Sub-agents**, for a session with any: how many run (not for Claude Code or opencode, which
+  do not tell), how many there are and their cost; a row for each running one, with its kind, name,
   task, how long it has run and its cost; and on one time axis a bar for each of the 8 that
   started last, in the order they started, from the time of its transcript's first entry to its
   last, coloured by its kind, under its name, kind, model and cost. With more, the section says
@@ -95,7 +95,12 @@ session without a model call, is not drawn.
 ## Harnesses
 
 Cards read the harnesses' own session files, read-only: omp, Claude Code and opencode (its
-database). An agent of any other harness gets a card whose figures all read `n/a`.
+database, whose Orca agents are of the kind `opencode` or `opencode2`: a session is read from its
+current tables, and from its legacy ones only when the current ones do not hold it). An
+opencode session's window is the `limit.context` opencode's own model catalogue,
+`~/.cache/opencode/models.json` on the session's host, holds for its provider and model, read
+again at most once an hour; without the catalogue or the model in it the window is not known. An
+agent of any other harness gets a card whose figures all read `n/a`.
 
 ## How an agent is tied to a session
 
@@ -234,7 +239,9 @@ plugin list` and runs `orca plugin open <key> --panel spyhop`.
   their transcripts that are new or changed since they were read, each refresh reads the 16
   newest, and the others at the next refreshes; a transcript once read is not read again until
   it changes. A running omp sub-agent's task is read from the first lines of its transcript
-  once, and a Claude Code sub-agent's meta file, which names it, is read once.
+  once, and a Claude Code sub-agent's meta file, which names it, is read once. An opencode
+  session's sub-agents are its child sessions in opencode's database, found by one query at each
+  refresh and all read at once, again only when one of them changed, at most every 10 seconds.
 - **A dead host slows every refresh.** ssh waits up to 5 seconds to connect to a host that does
   not answer. Once a command finds the host gone, spyhop asks it nothing more than its place
   (`uname -s`, `printenv HOME`), so each refresh still spends one 5-second attempt on it and the
@@ -243,6 +250,10 @@ plugin list` and runs `orca plugin open <key> --panel spyhop`.
 - **An unreachable paired server disappears.** When its agents cannot be listed, its group is
   not drawn.
 - **Claude Code and opencode on other hosts are untested.** Their cards there may read `n/a`.
+- **An opencode session's cost chart can end below its cost.** A session in opencode's current
+  tables shows the total cost opencode keeps for it, which for some sessions is above the sum of
+  the costs its model calls log; the cost chart, the Models section and the burn rate add up
+  those calls, so they end below that total.
 - **A Claude Code or opencode agent without a `sessionId` shows the newest session of the
   workspace folder.** With no title to tell sessions apart, such an agent (every one on a
   paired Orca server, which never gives a `sessionId`) shows the newest session of the

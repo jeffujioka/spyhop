@@ -50,8 +50,8 @@ export type SessionSeries = {
 
 // The stats of a card's session, as `readStats` (src/core/providers/index.js) gives them: every
 // field of STAT_FIELDS, n/a where it cannot be read, and `detail`, null unless the session file
-// was read whole: the contexts after its last model calls, and its series, but for a provider
-// that keeps none (opencode). The fields the panels' TypeScript reads are named.
+// was read whole: the contexts after its last model calls, and its series, but for an opencode
+// session whose tool calls cannot be read. The fields the panels' TypeScript reads are named.
 export type CardStats = {
   [field: string]: unknown;
   model: string;
@@ -125,9 +125,10 @@ export function sameButStates(before: OrcaAgent[], agents: OrcaAgent[]) {
 }
 
 // The core's provider of an Orca agent kind, and the name a card gives the harness; a kind
-// without a provider is named as Orca names it.
-const PROVIDERS: Record<string, string> = { omp: 'omp', claude: 'claude-code', opencode: 'opencode' };
-const HARNESS_NAMES: Record<string, string> = { omp: 'omp', claude: 'Claude Code', opencode: 'opencode' };
+// without a provider is named as Orca names it. Orca lists opencode's agents as `opencode` or,
+// since opencode's current tables, `opencode2`: both are opencode's.
+const PROVIDERS: Record<string, string> = { omp: 'omp', claude: 'claude-code', opencode: 'opencode', opencode2: 'opencode' };
+const HARNESS_NAMES: Record<string, string> = { omp: 'omp', claude: 'Claude Code', opencode: 'opencode', opencode2: 'opencode' };
 
 type Machine = string | null;
 
@@ -177,8 +178,12 @@ export function createAgentCards({ run, home, kept = [] }: { run: Run; home: str
     }
     return execs.get(machine)!;
   }
+  // A text file on a machine, or null when `cat` cannot read it (no such file, for one). An ssh
+  // failure (exit 255; `cat` itself never exits 255) rejects instead, so that a caller can tell a
+  // host it could not reach from a file that is not there.
   const readTextOn = (machine: Machine) => async (path: string) => {
     const read = await execOn(machine)('cat', ['--', path]);
+    if (read.code === 255) throw new Error(`cannot reach ${machine} to read ${path}`);
     return read.code === 0 ? read.stdout : null;
   };
 
@@ -254,10 +259,11 @@ export function createAgentCards({ run, home, kept = [] }: { run: Run; home: str
     // machine that link to one session sharing the card of the first of them. `now`: epoch
     // milliseconds.
     async build(agents: OrcaAgent[], now: number): Promise<BuiltCard[]> {
-      // harness, folder and machine -> its agents, in agent order
+      // harness, folder and machine -> its agents, in agent order; Orca's kinds of one provider
+      // (opencode's `opencode` and `opencode2`) are one harness
       const groups = new Map<string, OrcaAgent[]>();
       for (const agent of agents) {
-        const key = `${agent.agent}\0${agent.path}\0${agent.machine ?? ''}`;
+        const key = `${PROVIDERS[agent.agent ?? ''] ?? agent.agent}\0${agent.path}\0${agent.machine ?? ''}`;
         groups.set(key, [...(groups.get(key) ?? []), agent]);
       }
       const linked = new Map();
