@@ -3,11 +3,14 @@
 // through the real runner.
 import { execFileSync } from 'node:child_process';
 import { copyFileSync, mkdirSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
-import { createAgentCards, type OrcaAgent } from '../../src/agent-cards.ts';
-import { cardModel } from '../../src/core/card-model.js';
+import { dirname, join } from 'node:path';
+import { type BuiltCard, createAgentCards, type OrcaAgent } from '../../src/agent-cards.ts';
+import { cardView } from '../../src/card-view.ts';
+import { formatCost, formatTokens, orNa } from '../../src/core/format.js';
 import { sessionDirSlug as ompSlug } from '../../src/core/providers/omp-sources.js';
+import { TAIL_BYTES } from '../../src/core/refresh.js';
 import { run, type Run } from '../../src/exec.ts';
+import type { CardView } from '../../src/protocol.ts';
 import { fixture } from './files.ts';
 
 export const NOW = Date.parse('2026-11-25T12:00:00.000Z');
@@ -49,6 +52,20 @@ export function ompSessionOf(home: string, path: string, usd = 0.1, title?: stri
   return file;
 }
 
+// A sub-agent transcript of the omp session file `sessionFile`: `name` is its path in the folder
+// beside the session file, without `.jsonl` (`Impl1`, or `Impl1/Rev1` for a sub-agent that
+// `Impl1` started), and `lines` its lines, each ending in a newline. Returns the transcript's
+// path.
+export function subAgentFile(sessionFile: string, name: string, lines: string[]) {
+  const file = join(sessionFile.replace(/\.jsonl$/, ''), `${name}.jsonl`);
+  mkdirSync(dirname(file), { recursive: true });
+  writeFileSync(file, lines.join(''));
+  return file;
+}
+
+// Lines no figure reads, longer together than the window a refresh reads from a file's end.
+export const PADDING = `${JSON.stringify({ type: 'custom', note: 'x'.repeat(2000) })}\n`.repeat(Math.ceil((TAIL_BYTES * 1.5) / 2000));
+
 // opencode's database under `home`, made from opencode/<name>.sql with the sqlite3 CLI; returns
 // its path. basic.sql's sessions are of the folder /work/demo.
 export function opencodeDatabase(home: string, name = 'basic') {
@@ -57,6 +74,45 @@ export function opencodeDatabase(home: string, name = 'basic') {
   const database = join(dir, 'opencode.db');
   execFileSync('sh', ['-c', 'sqlite3 "$1" < "$2"', 'sh', database, fixture(`opencode/${name}.sql`)]);
   return database;
+}
+
+// The model calls of an opencode session: those of `model` of the provider `provider`, one per
+// context.
+export type OpencodeCalls = { provider: string; model: string; contexts: number[] };
+
+// The session `ses_window` of the folder `folder` in opencode's database under `home` (made from
+// current.sql), in the current tables: one model call of `model` of the provider `provider` per
+// context of `contexts` (each the prompt's tokens, read from the cache but for 100 sent fresh),
+// at 0.10 USD each, and opencode's own total of 0.40 USD; returns the database's path.
+export function opencodeCalls(home: string, folder: string, { provider, model, contexts }: OpencodeCalls) {
+  const at = (i: number) => NOW - 60_000 * (contexts.length - i);
+  const rows = contexts.map((context, i) => {
+    const data = {
+      time: { created: at(i), completed: at(i) + 1000 },
+      agent: 'build',
+      model: { id: model, providerID: provider, variant: 'high' },
+      content: [],
+      finish: 'stop',
+      cost: 0.1,
+      tokens: { input: 100, output: 50, reasoning: 0, cache: { read: context - 100, write: 0 } },
+    };
+    return `INSERT INTO session_message VALUES ('w${i}', 'ses_window', 'assistant', ${i + 1}, ${at(i)}, ${at(i) + 1000}, ${sqlText(JSON.stringify(data))});`;
+  });
+  const session = `INSERT INTO session_v2 VALUES ('ses_window', 'prj', NULL, 's', ${sqlText(folder)}, 't', '2.0.0', 0.40, NULL, NULL, ${at(0)}, ${at(contexts.length - 1) + 1000}, NULL);`;
+  const database = opencodeDatabase(home, 'current');
+  execFileSync('sqlite3', [database, [session, ...rows].join('\n')]);
+  return database;
+}
+
+// `text` as an SQL string literal.
+export const sqlText = (text: string) => `'${text.replaceAll("'", "''")}'`;
+
+// opencode's model catalogue under `home`: test/fixtures/opencode/models.json, which holds a
+// `limit.context` of 200,000 for `github-copilot`'s `claude-haiku-5.5`.
+export function opencodeCatalogue(home: string) {
+  const dir = join(home, '.cache/opencode');
+  mkdirSync(dir, { recursive: true });
+  copyFileSync(fixture('opencode/models.json'), join(dir, 'models.json'));
 }
 
 export const agent = (fields: Partial<OrcaAgent>): OrcaAgent => ({
@@ -74,16 +130,13 @@ export const agent = (fields: Partial<OrcaAgent>): OrcaAgent => ({
 // through, the real one unless a test wraps it.
 export function refreshing(home: string, exec: Run = run) {
   const cards = createAgentCards({ run: exec, home });
-  return async (agents: OrcaAgent[]) => (await cards.build(agents, NOW)).map((card) => ({ card, model: cardModel(card, { home }) }));
+  return async (agents: OrcaAgent[]) =>
+    (await cards.build(agents, NOW)).map((card) => ({ card, view: cardView(card, { home, pane: null, now: NOW }) }));
 }
 
 // The cards of a first refresh.
 export const cardsOf = (home: string, agents: OrcaAgent[], exec: Run = run) => refreshing(home, exec)(agents);
 
-// The cost and the Tokens figure of a card's spend group, of a card model or a card the worker
-// sends the panel.
-type Figure = { label: string; value: string };
-type Cardlike = { groups: ReadonlyArray<{ id: string; hero?: Figure | null; figures?: Figure[] }> };
-const spendOf = (card: Cardlike) => card.groups.find((group) => group.id === 'spend');
-export const costOf = (card: Cardlike) => spendOf(card)?.hero?.value;
-export const tokensOf = (card: Cardlike) => spendOf(card)?.figures?.find((figure) => figure.label === 'Tokens')?.value;
+// The cost of a card's view, and the tokens of a built card, as the panel writes them.
+export const costOf = (view: CardView): string => formatCost(view.cost);
+export const tokensOf = (card: BuiltCard): string => orNa(card.stats.totalTokens, formatTokens);

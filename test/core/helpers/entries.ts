@@ -29,10 +29,10 @@ export const claudeUsage = (input: number, output: number, cacheRead: number, ca
   ...(creation && { cache_creation: creation }),
 });
 
-// One Claude Code assistant entry of the response `id` at the ISO `timestamp`; `usage` is left
-// out when null.
-export const claudeAssistant = (timestamp: string, id: string, usage: object | null, model = 'claude-opus-4-6') =>
-  JSON.stringify({ type: 'assistant', timestamp, message: { id, role: 'assistant', model, content: [], ...(usage && { usage }) } });
+// One Claude Code assistant entry of the response `id` at the ISO `timestamp`, with the content
+// blocks `content`; `usage` is left out when null.
+export const claudeAssistant = (timestamp: string, id: string, usage: object | null, model = 'claude-opus-4-6', content: object[] = []) =>
+  JSON.stringify({ type: 'assistant', timestamp, message: { id, role: 'assistant', model, content, ...(usage && { usage }) } });
 
 // Claude Code's compaction boundary, with no trigger in its metadata when `trigger` is undefined.
 export const claudeBoundary = (timestamp: string, trigger?: string) =>

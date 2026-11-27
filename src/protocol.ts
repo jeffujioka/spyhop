@@ -1,59 +1,159 @@
-// The panel <-> worker contract, declared once: src/panel.tsx and src/worker.ts both read it.
-import type { HostRow } from './tree.ts';
-
-// A figure of a card: its text, its tone and, for some, a label (src/core/card-model.js).
-export type Figure = { value: string; tone: string; label?: string };
-
-// What a card shows of its agent and session (the identity group of src/core/card-model.js).
-export type CardIdentity = {
-  id: 'identity';
-  status: { tone: string; label: string };
-  name: Figure;
-  session: Figure | null;
-  path: Figure;
-  branch: string | null;
-  remote: string | null;
-  machine: string | null;
-  harness: Figure;
-  model: Figure;
-};
-
-// One group of figures of a card: context, spend, cache or activity.
-export type CardGroup = { id: string; title: string; hero: Figure | null; figures: Figure[] };
+// The panel <-> worker contract, declared once: the live panel (src/live/controller.ts) and
+// src/worker.ts read it.
 
 // The pane of a card's Orca agent, as the worker focuses it: on this computer or an SSH
 // workspace, the terminal Orca's `agents.list` names; on a paired Orca server, the handle of
 // the server's terminal (`orca terminal list`) and the server's environment name.
 export type Pane = { terminalId: string } | { environment: string; terminal: string };
 
-// A card as the panel draws it: the core's view model of the card (src/core/card-model.js),
-// with the pane of its agent, the first of the agents that share it; null when it has none.
-export type CardView = { id: string; focused: boolean; groups: [CardIdentity, ...CardGroup[]]; pane: Pane | null };
+// A figure of the live panel: a number, or n/a when it cannot be read. Times are epoch ms,
+// durations ms, costs USD and shares 0..1.
+export type Num = number | 'n/a';
 
-export type TreeAnswer = {
-  // The Orca hosts, with their Orca projects and workspaces that have an Orca agent (src/tree.ts).
-  hosts: HostRow<CardView>[];
-  // Orca's id of the focused Orca workspace, as `workspace.readContext` answers it; null when no
-  // workspace is focused. The panel finds its row by the rows' `workspaceIds`.
-  focused: string | null;
+// A card as the live panel draws it (src/card-view.ts). `stateSinceMs`: how long the agent has
+// been in its Orca state. `context.compactAt`: the share of the window where the harness
+// compacts on its own; `context.spark`: the contexts after the session's last model calls,
+// oldest first. `cost`: with the sub-agents' once every sub-agent transcript is read, the
+// session's own until then, while `reading` says how many of them are read (null once all are);
+// Claude Code's is the total it logs, which holds its sub-agents'. `subAgents`: how many there
+// are and how many run (n/a when the harness does not tell), null without any. `burnPerHour`: the
+// cost the session and its sub-agents logged in the last 10 minutes, per hour; n/a for a harness
+// that logs no cost per model call (Claude Code) and while sub-agents are being read.
+export type CardView = {
+  id: string;
+  state: string;
+  stateSinceMs: Num;
+  title: string;
+  folder: string;
+  branch: string | null;
+  harness: string;
+  model: string;
+  cost: Num;
+  reading: { read: number; total: number } | null;
+  context: { tokens: Num; window: Num; percent: Num; compactAt: Num; spark: number[] };
+  tokensLeft: Num;
+  cacheHitRate: Num;
+  subAgents: { running: Num; total: number } | null;
+  burnPerHour: Num;
+  pane: Pane | null;
 };
 
-// One Orca host's row, posted during a `spyhop.tree` request as soon as that host's cards are
-// built: the row as the answer will hold it, the number the panel gave the request, and the
-// answer's `focused`.
-export type HostRowPost = { request: number; host: HostRow<CardView>; focused: string | null };
+// The cards of one Orca host (src/fleet.ts): `name` as Orca names the host, `count` its cards.
+export type HostGroup = { id: string; name: string; count: number; cards: CardView[] };
+
+// The fleet's burn rate card (src/fleet.ts), over the sessions shown and their sub-agents:
+// `perHour` the cost of the last 10 minutes per hour, of the harnesses that log a cost per model
+// call (omp, opencode); `total` the whole cost of every linked session; `tokensPerMin` over the
+// last 10 minutes and `cacheHitRate` over the last 60; `running` the sub-agents that run now;
+// `leftOut` the linked sessions the rate cannot count (Claude Code's); `layers` the rate at each
+// of the last 60 minutes, oldest first, USD per hour, of the BURN_NAMED sessions of the highest
+// cost over them, by title, then of the others as one layer `others`. Each sum is n/a while a
+// session it counts has a sub-agent transcript not read yet.
+export type BurnCard = {
+  perHour: Num;
+  total: Num;
+  tokensPerMin: Num;
+  cacheHitRate: Num;
+  running: Num;
+  leftOut: number;
+  layers: { name: string; values: number[] }[] | 'n/a';
+};
+
+// A row of the fleet's attention list (src/fleet.ts), which opens the screen of the card `card`,
+// titled `title`. `state`: an Orca agent blocked or waiting, `sinceMs` how long it has been so
+// (absent when Orca gives no time). `context`: a session at ATTENTION_CONTEXT percent of its window
+// or over, `percent` its share of the window, `tokensLeft` before the harness compacts on its own.
+// `cache`: an agent not working whose session's prompt cache goes cold in `coldInMs`, when the next
+// model call writes `rewriteTokens` of context to it again.
+export type AttentionRow = {
+  kind: 'state' | 'context' | 'cache';
+  card: string;
+  title: string;
+  state?: 'blocked' | 'waiting';
+  sinceMs?: number;
+  percent?: number;
+  tokensLeft?: Num;
+  coldInMs?: number;
+  rewriteTokens?: Num;
+};
+
+// The fleet, its groups this computer's first, the number of agents in each Orca state that any
+// agent is in, the burn rate card and the attention list; `request`: the panel's number of the
+// request.
+export type FleetAnswer = {
+  request: number;
+  groups: HostGroup[];
+  counts: Partial<Record<'blocked' | 'waiting' | 'working' | 'done', number>>;
+  burn: BurnCard;
+  attention: AttentionRow[];
+};
+
+// One Orca host's group, posted during a fleet request as soon as that host's cards are built.
+export type GroupPost = { request: number; group: HostGroup };
+
+// One point of a session's series of model calls (src/core/series.js): `n` neighbouring calls as
+// one, dated by the last of them, with the prompt tokens they read from the cache, wrote to it
+// and sent uncached, their output tokens, their cost (null: one of them logged none) and the
+// context after the last that logged one (null: none did).
+export type Point = { t: number; n: number; read: number; write: number; uncached: number; output: number; cost: number | null; context: number | null };
+
+// A sub-agent of a session as the Sub-agents section draws it: its name, agent kind, model and
+// task (n/a: not told), whether it runs (null: the harness does not tell), the times of its
+// transcript's first and last entry and its cost (n/a on Claude Code, which logs none per
+// sub-agent).
+export type SubAgentView = { name: string; kind: string; model: string; task: string; running: boolean | null; startMs: Num; endMs: Num; cost: Num };
+
+// One card's session as the session screen draws it (src/session-detail.ts). `linked`: whether
+// the card links to a session; `path`: its folder for reading. `figures`: the figures row, its
+// cost and tokens as the card's cost is summed, `subShare` the sub-agents' share of the cost (n/a
+// on Claude Code, and while they are being read); `context`, `tokens`, `cost` and `tools`: the
+// series and tallies of the whole session file, null when it was not read whole or the card links
+// to none (`tools` too when the session made no tool call), `cost.sub` the sub-agents' cost over
+// time, `cost.noCall` what the harness logged of the session's own cost without a model call
+// (null when nothing); `subAgents`: the session's sub-agents, in the order they started, null
+// without any;
+// `models`: the models of the session and its sub-agents by what the harness logs of them;
+// `session`: the Session section, `host` the Orca host's name when it is not this computer.
+export type SessionView = {
+  card: CardView;
+  linked: boolean;
+  path: string;
+  figures: { cost: Num; subShare: Num; tokens: Num; cacheShare: Num; calls: Num; failedTools: Num; durationMs: Num; startMs: Num };
+  context: {
+    window: Num;
+    latest: Num;
+    peak: Num;
+    tokensLeft: Num;
+    compactions: number;
+    points: { t: number; v: number }[];
+    marks: { t: number; before: Num; after: Num }[];
+  } | null;
+  tokens: { points: Point[]; hitRate: Num; cold: { count: number; tokens: number; cost: Num } | null } | null;
+  cost: { harness: string; total: Num; perHour: Num; own: { t: number; v: number }[] | 'n/a'; noCall: number | null; sub: { t: number; v: number }[] | 'n/a' } | null;
+  subAgents: { running: Num; total: number; cost: Num; agents: SubAgentView[] } | null;
+  tools: { calls: number; failed: number; byTool: { name: string; calls: number; failed: number }[] } | null;
+  models: { by: 'cost' | 'tokens'; rows: { model: string; main: boolean; subAgents: number; value: Num }[] };
+  session: { startedMs: Num; thinking: string; latencyMs: Num; premium: Num; branch: string | null; remote: string | null; host: string | null };
+};
+
+// The session of the card a session request asks for, or null when Orca no longer lists its
+// agent.
+export type SessionAnswer = { request: number; session: SessionView | null };
 
 declare module 'orca' {
   interface PluginRequests {
-    /** The tree of this computer's Orca agents, built once per request. `request`: the panel's
-     *  number of the request, which the host rows posted during it carry (`spyhop.host`); asked
-     *  without one, the worker posts none. */
-    'spyhop.tree': { input: { request: number } | undefined; output: TreeAnswer };
+    /** The fleet of the Orca agents' cards on every Orca host, built once per request.
+     *  `request`: the panel's number of the request, which the groups posted during it carry
+     *  (`spyhop.group`). */
+    'spyhop.fleet': { input: { request: number }; output: FleetAnswer };
+    /** The session of one card, built as the fleet is, which posts nothing. `request`: the
+     *  panel's number of the request; `card`: the card's id. */
+    'spyhop.session': { input: { request: number; card: string }; output: SessionAnswer };
     /** Focuses the pane in this computer's Orca window; `focused` false when it could not, the
      *  reason in the worker's log. */
     'spyhop.focus': { input: Pane; output: { focused: boolean } };
   }
   interface PluginPanelEvents {
-    'spyhop.host': HostRowPost;
+    'spyhop.group': GroupPost;
   }
 }

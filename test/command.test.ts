@@ -21,19 +21,25 @@ test('Palette command and key', async () => {
   assert.deepEqual(manifest.contributes.keybindings, [{ command: 'spyhop.show', key: 'Mod+Alt+Shift+S' }]);
 
   // `orca plugin list`, shaped as Orca lists plugins (a panel as `{ id, title, … }`):
-  // a folder install of spyhop beside other plugins of that id, one with no such panel and one
-  // listed without `panels`
+  // a folder install of spyhop beside other plugins of that id, one with no such panel, one
+  // listed without `panels` and a Git install of spyhop listed first but disabled, which Orca
+  // refuses to open a panel of (it shares the key, so only one spyhop is enabled)
   const cli = standIns({
     homes: {},
     orca: {
       'plugin list --json': answer({
         plugins: [
+          {
+            pluginKey: 'jeffujioka.spyhop',
+            status: 'disabled',
+            panels: [{ id: 'spyhop', title: 'Spyhop' }],
+          },
           { pluginKey: 'stablyai.orca-excalidraw', status: 'idle', panels: [] },
           { pluginKey: 'other.spyhop', status: 'idle' },
           { pluginKey: 'acme.spyhop', status: 'idle', panels: [] },
           {
             pluginKey: 'local.spyhop',
-            status: 'idle',
+            status: 'running',
             panels: [{ id: 'spyhop', title: 'Spyhop' }],
           },
         ],

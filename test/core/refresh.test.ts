@@ -1,7 +1,7 @@
 import { describe, test } from 'node:test';
 import { NA, readStats } from '../../src/core/providers/index.js';
 import { ompProvider } from '../../src/core/providers/omp.js';
-import { REFRESH_INTERVAL_MS, SCAN_CHUNK_BYTES, TAIL_BYTES, createSessionReader, decodeScans, encodeScans } from '../../src/core/refresh.js';
+import { KEPT_TOTAL_BYTES, KEPT_VALUE_BYTES, REFRESH_INTERVAL_MS, SCAN_CHUNK_BYTES, TAIL_BYTES, createSessionReader, decodeScans, encodeScans, keptPartsOf } from '../../src/core/refresh.js';
 import { NOW, OMP_PATH as PATH, sessionFile } from './helpers/entries.ts';
 import { expect } from './helpers/expect.ts';
 import { localExec } from './helpers/local-exec.ts';
@@ -477,14 +477,50 @@ describe('refresh', () => {
       entries: 3,
       marks: { $: 'undefined' },
     };
+    // when each file was last asked for, and whether it is an ended sub-agent's, read back too,
+    // so that a later run drops by them (given in the order they are stored: ended ones first)
     const scans = [
-      { provider: 'claude-code', machine: null, path: PATH, pos: 12, state },
-      { provider: 'omp', machine: 'devbox', path: `${PATH}.2`, pos: 0, state: undefined },
+      { provider: 'omp', machine: 'devbox', path: `${PATH}.2`, pos: 0, readAt: NOW, ended: true, state: undefined },
+      { provider: 'claude-code', machine: null, path: PATH, pos: 12, readAt: NOW - 1, ended: false, state },
     ];
 
     // a stored value is JSON
     const stored = JSON.parse(JSON.stringify(encodeScans(scans)));
 
     expect(decodeScans(stored)).toEqual(scans);
+  });
+
+  test('kept scans over Orca\'s cap are split into values under it', () => {
+    // 40 scans of about 20 KB each: some 800 KB in all, more than one value of 262144 bytes
+    const scans = Array.from({ length: 40 }, (_, i) => ({ provider: 'omp', machine: null, path: `${PATH}.${i}`, pos: i, readAt: i, ended: false, state: { note: 'x'.repeat(20_000) } }));
+
+    const parts = JSON.parse(JSON.stringify(encodeScans(scans)));
+
+    expect(parts.length > 1).toBe(true);
+    // each part is one JSON text, so that Orca's pretty-printing of its file leaves it as it is
+    for (const part of parts) expect(typeof part).toBe('string');
+    for (const part of parts) expect(Buffer.byteLength(JSON.stringify(part)) <= KEPT_VALUE_BYTES).toBe(true);
+    expect(keptPartsOf(parts[0])).toBe(parts.length);
+    expect(decodeScans(parts)).toEqual(scans);
+    // a value missing makes none of them read back
+    expect(decodeScans(parts.slice(0, -1))).toEqual([]);
+  });
+
+  test('kept scans over the budget drop ended sub-agents first, then the oldest read', () => {
+    // 15 ended sub-agent transcripts and 50 session files of about 100 KB each, some 6.5 MB in
+    // all: 41 of them fit in KEPT_TOTAL_BYTES, 42 do not
+    const scanOf = (path, readAt, ended) => ({ provider: 'omp', machine: null, path, pos: 1, state: { note: 'x'.repeat(100_000) }, readAt, ended });
+    const ended = Array.from({ length: 15 }, (_, i) => scanOf(`${PATH}/Impl${i}.jsonl`, 100 + i, true));
+    // the session files given newest read first, so that the order read decides, not the order given
+    const sessions = Array.from({ length: 50 }, (_, i) => scanOf(`${PATH}.${i}`, i, false)).reverse();
+
+    const parts = JSON.parse(JSON.stringify(encodeScans([...ended, ...sessions])));
+
+    expect(parts.reduce((sum, part) => sum + Buffer.byteLength(JSON.stringify(part)), 0) <= KEPT_TOTAL_BYTES).toBe(true);
+    // every ended sub-agent and the 9 session files read first are dropped; the rest read back
+    // whole, without how they were ordered
+    const kept = decodeScans(parts);
+    expect(kept.map(({ path }) => path).sort()).toEqual(sessions.filter(({ readAt }) => readAt >= 9).map(({ path }) => path).sort());
+    expect(kept[0]).toEqual({ provider: 'omp', machine: null, path: kept[0].path, pos: 1, readAt: kept[0].readAt, ended: false, state: { note: 'x'.repeat(100_000) } });
   });
 });

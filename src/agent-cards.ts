@@ -1,6 +1,6 @@
 // The cards of Orca agents, on this computer and on other Orca hosts: one card per harness
 // session the agents of one workspace folder link to, and one per agent that links to none,
-// whatever its state, in the card shape of the core's card model (src/core/card-model.js).
+// whatever its state (BuiltCard, which src/card-view.ts turns into what the panel draws).
 // Each card holds what Orca says of the agent (its harness, state and title), the stats of the
 // harness session the agent links to, the folder that session records as its own (the folder
 // of the agent's workspace when it links to none, or its session tells none) and the git facts
@@ -8,15 +8,19 @@
 // host (`on`: its ssh alias); whatever cannot be read, an unreachable host included, shows as
 // n/a on the agent's card, and a build never rejects.
 
+import { withoutTitleMark } from './core/format.js';
 import { GIT_TTL_MS, readGit } from './core/git.js';
 import { NA, createSessions, readStats } from './core/providers/index.js';
 import { collapseBySession, linkAgents } from './core/session-link.js';
 import { createTtlCache } from './core/ttl-cache.js';
 import type { Run } from './exec.ts';
+import type { Num, Point } from './protocol.ts';
 
 // An agent as Orca reports it (`agents.list` of the worker host API, `orca agent list --json`),
 // with the path of its workspace folder; `id` is the one the caller names the agent by.
 // `machine`: the ssh alias of the Orca host it is on, null or absent for this computer.
+// `stateSince`: when the agent entered its state, epoch ms, as Orca gives it; null or absent
+// when Orca gives none.
 export type OrcaAgent = {
   id: string;
   agent: string | null;
@@ -25,11 +29,94 @@ export type OrcaAgent = {
   sessionId?: string | null;
   path: string | null;
   machine?: string | null;
+  stateSince?: number | null;
+};
+
+// The series and tallies a provider's fold keeps over a whole session file (src/core/series.js):
+// the bounded series of model calls, the compactions with their tokens before and after (null:
+// not logged), the cold starts, the tool calls by tool and the cost (null: not logged) and
+// tokens by model, the agent kind and the model a sub-agent's transcript records of itself
+// (null: none recorded), the times of the file's first and last entry (null: none), and the sums
+// of its newest minutes (a Minute of src/core/series.js each, oldest first).
+export type SessionSeries = {
+  points: Point[];
+  marks: { t: number; before: number | null; after: number | null }[];
+  cold: { count: number; tokens: number; cost: number | null };
+  tools: Record<string, { calls: number; failed: number }>;
+  models: Record<string, { cost: number | null; tokens: number }>;
+  kind: string | null;
+  model: string | null;
+  start: number | null;
+  end: number | null;
+  minutes: Minute[];
+};
+
+// The model calls of one epoch minute `m` (src/core/series.js): their cost (null once one logged
+// none), their tokens in all, and the prompt tokens they read from the cache, wrote to it and sent
+// uncached.
+export type Minute = { m: number; cost: number | null; tokens: number; read: number; write: number; uncached: number };
+
+// The stats of a card's session, as `readStats` (src/core/providers/index.js) gives them: every
+// field of STAT_FIELDS, n/a where it cannot be read, and `detail`, null unless the session file
+// was read whole: the contexts after its last model calls, and its series, but for an opencode
+// session whose tool calls cannot be read. The fields the panels' TypeScript reads are named.
+export type CardStats = {
+  [field: string]: unknown;
+  model: string;
+  durationMs: Num;
+  costUsd: Num;
+  totalTokens: Num;
+  premiumRequests: Num;
+  contextTokens: Num;
+  contextMax: Num;
+  contextPercent: Num;
+  headroomTokens: Num;
+  cacheLeftMs: Num;
+  cacheHitRate: Num;
+  latencyMs: Num;
+  thinkingLevel: string;
+  calls: Num;
+  firstMessageMs: Num;
+  detail: { recent: number[] } | ({ recent: number[] } & SessionSeries) | null;
+};
+
+// A sub-agent of a session as a provider's `subagents` hook gives it (src/core/providers/index.js):
+// its name, its agent kind, model and task (null: not told), whether it runs (null: the harness
+// does not tell), and the `input` of `readStats` for its transcript, null when it was not read.
+export type SubAgentInput = { name: string; kind: string | null; model: string | null; task: string | null; running: boolean | null; input: unknown | null };
+
+// A card as `build` returns it. `agents`: the ids of the agents that share it, in the order of
+// the agents, the first being the card's own `id`. `linked`: whether its agent links to a
+// session. `folder`: the one its session records, else its workspace's; `harness`: Orca's kind
+// of the agent, `harnessName` the name a card gives it; `status`: the agent's Orca state;
+// `stateSince`: the agent's. `subAgents`: the sub-agents of its session, null when the session
+// tells none (no session, a provider without sub-agents, a listing that failed with none
+// before it; a listing that failed after one that did not gives that one's): how many there
+// are, how many of their transcripts are read, and each with the stats of its transcript
+// (every figure n/a for one not read), its kind and model taken from those stats where the hook
+// told none, and its start and end, the times of its transcript's first and last entry (n/a for
+// one not read), in the order they started, those not read last.
+export type BuiltCard = {
+  id: string;
+  agents: string[];
+  linked: boolean;
+  folder: string | null;
+  branch: string | null;
+  origin: string | null;
+  harness: string | null;
+  harnessName: string;
+  title: string | null;
+  status: string;
+  machine: Machine;
+  stateSince: number | null;
+  stats: CardStats;
+  subAgents: { total: number; read: number; agents: (SubAgentInput & { stats: CardStats; start: Num; end: Num })[] } | null;
 };
 
 // Whether `agents` are the agents `before`, but for their states: the same ids in the same order,
 // each with the same harness, folder, machine, session id and title, so that both build the same
-// cards, but for the status of each.
+// cards, but for the status of each. Titles are compared without their mark (withoutTitleMark):
+// omp's spinner frame changes every 100 ms while the agent works and changes no card.
 export function sameButStates(before: OrcaAgent[], agents: OrcaAgent[]) {
   return (
     before.length === agents.length &&
@@ -41,22 +128,49 @@ export function sameButStates(before: OrcaAgent[], agents: OrcaAgent[]) {
         was.path === now.path &&
         (was.machine ?? null) === (now.machine ?? null) &&
         (was.sessionId ?? null) === (now.sessionId ?? null) &&
-        was.title === now.title
+        withoutTitleMark(was.title, was.agent) === withoutTitleMark(now.title, now.agent)
       );
     })
   );
 }
 
 // The core's provider of an Orca agent kind, and the name a card gives the harness; a kind
-// without a provider is named as Orca names it.
-const PROVIDERS: Record<string, string> = { omp: 'omp', claude: 'claude-code', opencode: 'opencode' };
-const HARNESS_NAMES: Record<string, string> = { omp: 'omp', claude: 'Claude Code', opencode: 'opencode' };
+// without a provider is named as Orca names it. Orca lists opencode's agents as `opencode` or,
+// since opencode's current tables, `opencode2`: both are opencode's.
+const PROVIDERS: Record<string, string> = { omp: 'omp', claude: 'claude-code', opencode: 'opencode', opencode2: 'opencode' };
+const HARNESS_NAMES: Record<string, string> = { omp: 'omp', claude: 'Claude Code', opencode: 'opencode', opencode2: 'opencode' };
 
 type Machine = string | null;
 
 // A finished scan of a session file, kept between runs of the worker (src/core/refresh.js): the
-// provider's totals `state` over the file's first `pos` bytes.
-export type KeptScan = { provider: string; machine: Machine; path: string; pos: number; state: unknown };
+// provider's totals `state` over the file's first `pos` bytes, when the file was last asked for
+// (epoch ms) and whether it is an ended sub-agent's.
+export type KeptScan = { provider: string; machine: Machine; path: string; pos: number; state: unknown; readAt?: number; ended?: boolean };
+
+// A session hook as the registry gives it: only what `subAgentsOf` asks of it is named.
+type SubAgentsHook = { subagents?: (file: unknown, where: object) => Promise<SubAgentInput[]> };
+
+// The `subAgents` of a card whose session is `file` (see BuiltCard), from its provider's hook;
+// null for a hook without `subagents`, and rejected when the hook rejects. Each transcript's
+// stats are read with `readStats` as a session's are; one not read has every figure n/a. The
+// order is by the start, so one whose start is unknown comes after those that started.
+async function subAgentsOf(hook: SubAgentsHook, provider: string, file: unknown, where: object, now: number): Promise<BuiltCard['subAgents']> {
+  if (!hook.subagents) return null;
+  const inputs = await hook.subagents(file, where);
+  const agents = inputs.map((sub) => {
+    // readStats is the core's JavaScript, whose result TypeScript reads as an open record:
+    // CardStats names its fields
+    const read: Record<string, unknown> = sub.input === null ? { ...readStats('', null, now), harness: provider } : readStats(provider, sub.input, now);
+    const stats = read as CardStats;
+    const detail = stats.detail as Partial<SessionSeries> | null;
+    const start: Num = detail?.start ?? NA;
+    const end: Num = detail?.end ?? NA;
+    return { ...sub, kind: sub.kind ?? detail?.kind ?? null, model: sub.model ?? detail?.model ?? null, stats, start, end };
+  });
+  // two unknown starts give NaN, which keeps their order
+  agents.sort((a, b) => (a.start === NA ? Infinity : a.start) - (b.start === NA ? Infinity : b.start) || 0);
+  return { total: agents.length, read: inputs.filter(({ input }) => input !== null).length, agents };
+}
 
 // `home`: this computer's home folder. `kept`: the scans an earlier run kept, which the session
 // reads of those files start from.
@@ -75,8 +189,12 @@ export function createAgentCards({ run, home, kept = [] }: { run: Run; home: str
     }
     return execs.get(machine)!;
   }
+  // A text file on a machine, or null when `cat` cannot read it (no such file, for one). An ssh
+  // failure (exit 255; `cat` itself never exits 255) rejects instead, so that a caller can tell a
+  // host it could not reach from a file that is not there.
   const readTextOn = (machine: Machine) => async (path: string) => {
     const read = await execOn(machine)('cat', ['--', path]);
+    if (read.code === 255) throw new Error(`cannot reach ${machine} to read ${path}`);
     return read.code === 0 ? read.stdout : null;
   };
 
@@ -84,6 +202,11 @@ export function createAgentCards({ run, home, kept = [] }: { run: Run; home: str
   // branch and origin, asked again only after GIT_TTL_MS, so a refresh of known folders runs
   // no git.
   const gits = createTtlCache(GIT_TTL_MS);
+
+  // machine and session path -> the session's sub-agents as its last listing that did not fail
+  // gave them: a refresh whose listing fails keeps them, since its sub-agents are then unknown,
+  // and none would read as a session without any
+  const listedSubAgents = new Map<string, BuiltCard['subAgents']>();
 
   // A machine's operating system, for the `stat` the session listing runs, and its home folder
   // (this computer's is given; another host's is asked): asked once, and again after a failed
@@ -125,7 +248,7 @@ export function createAgentCards({ run, home, kept = [] }: { run: Run; home: str
     const [{ agent: kind, path, machine = null }] = agents;
     const provider = PROVIDERS[kind ?? ''];
     const hook = provider ? hookOf(provider) : null;
-    const none = { home: null, files: agents.map(() => null) };
+    const none = { place: null, files: agents.map(() => null) };
     if (!hook || !path) return none;
     try {
       const place = await placeOn(machine);
@@ -133,10 +256,10 @@ export function createAgentCards({ run, home, kept = [] }: { run: Run; home: str
       const ids = agents.map((agent) => agent.sessionId ?? null);
       const named = ids.some(Boolean) ? await hook.named(where, ids) : ids.map(() => null);
       const except = named.filter(Boolean).map((file: { path: string }) => file.path);
-      if (named.every(Boolean)) return { home: place.home, files: named };
-      if (hook.list) return { home: place.home, files: linkAgents(named, await hook.list({ ...where, except }), agents) };
+      if (named.every(Boolean)) return { place, files: named };
+      if (hook.list) return { place, files: linkAgents(named, await hook.list({ ...where, except }), agents) };
       const newest = await hook.link({ ...where, except });
-      return { home: place.home, files: named.map((file: unknown) => file ?? newest) };
+      return { place, files: named.map((file: unknown) => file ?? newest) };
     } catch {
       return none;
     }
@@ -146,21 +269,22 @@ export function createAgentCards({ run, home, kept = [] }: { run: Run; home: str
     // The agents' cards, in the order of `agents`, agents of one harness, workspace folder and
     // machine that link to one session sharing the card of the first of them. `now`: epoch
     // milliseconds.
-    async build(agents: OrcaAgent[], now: number) {
-      // harness, folder and machine -> its agents, in agent order
+    async build(agents: OrcaAgent[], now: number): Promise<BuiltCard[]> {
+      // harness, folder and machine -> its agents, in agent order; Orca's kinds of one provider
+      // (opencode's `opencode` and `opencode2`) are one harness
       const groups = new Map<string, OrcaAgent[]>();
       for (const agent of agents) {
-        const key = `${agent.agent}\0${agent.path}\0${agent.machine ?? ''}`;
+        const key = `${PROVIDERS[agent.agent ?? ''] ?? agent.agent}\0${agent.path}\0${agent.machine ?? ''}`;
         groups.set(key, [...(groups.get(key) ?? []), agent]);
       }
       const linked = new Map();
       for (const group of groups.values()) {
         const links = linkAll(group);
-        group.forEach((agent, i) => linked.set(agent, links.then(({ home, files }) => files[i] && { file: files[i], home })));
+        group.forEach((agent, i) => linked.set(agent, links.then(({ place, files }) => files[i] && { file: files[i], place })));
       }
-      // machine and session path -> its stats and the folder it records (null: untold), read
-      // once for the agents that link to it; the machine is part of the key, since two machines
-      // can hold the same path
+      // machine and session path -> its stats, the folder it records (null: untold) and its
+      // sub-agents, read once for the agents that link to it; the machine is part of the key,
+      // since two machines can hold the same path
       const reads = new Map();
 
       const entries = await Promise.all(
@@ -180,20 +304,32 @@ export function createAgentCards({ run, home, kept = [] }: { run: Run; home: str
             reads.set(
               sessionPath,
               hook
-                .read(link.file, { machine, home: link.home, now })
+                .read(link.file, { machine, home: link.place.home, now })
                 .then(async (input: unknown) => {
                   const stats = readStats(provider, input, now);
-                  try {
-                    return { stats, cwd: (await hook.folder?.(link.file, { machine })) ?? null };
-                  } catch {
-                    // a folder that cannot be asked is untold, and the stats stay
-                    return { stats, cwd: null };
-                  }
+                  const folderOf = async () => {
+                    try {
+                      return (await hook.folder?.(link.file, { machine })) ?? null;
+                    } catch {
+                      // a folder that cannot be asked is untold, and the stats stay
+                      return null;
+                    }
+                  };
+                  const where = { machine, ...link.place, now };
+                  const subAgentsRead = subAgentsOf(hook, provider, link.file, where, now).then(
+                    (subAgents) => {
+                      listedSubAgents.set(sessionPath!, subAgents);
+                      return subAgents;
+                    },
+                    () => listedSubAgents.get(sessionPath!) ?? null,
+                  );
+                  const [cwd, subAgents] = await Promise.all([folderOf(), subAgentsRead]);
+                  return { stats, cwd, subAgents };
                 })
-                .catch(() => ({ stats: unlinked, cwd: null })),
+                .catch(() => ({ stats: unlinked, cwd: null, subAgents: null })),
             );
           }
-          const session = link ? await reads.get(sessionPath) : { stats: unlinked, cwd: null };
+          const session = link ? await reads.get(sessionPath) : { stats: unlinked, cwd: null, subAgents: null };
           const folder = session.cwd ?? agent.path;
           // asked only once the machine's place is known: a host that cannot be reached costs
           // the one place lookup, and no git runs there
@@ -203,8 +339,10 @@ export function createAgentCards({ run, home, kept = [] }: { run: Run; home: str
               () => ({ branch: null, origin: null }),
             );
           const git = await gits(`${machine ?? ''}\0${folder}`, now, readsGit);
-          const card = {
+          const card: BuiltCard = {
             id: agent.id,
+            agents: [agent.id],
+            linked: Boolean(link),
             folder,
             branch: git.branch,
             origin: git.origin,
@@ -213,7 +351,9 @@ export function createAgentCards({ run, home, kept = [] }: { run: Run; home: str
             title: agent.title,
             status: agent.state,
             machine,
+            stateSince: agent.stateSince ?? null,
             stats: session.stats,
+            subAgents: session.subAgents,
           };
           // Agents share a card within their workspace folder only: omp agents of nested
           // workspace folders can link one session by title, and each workspace row draws its
@@ -221,14 +361,23 @@ export function createAgentCards({ run, home, kept = [] }: { run: Run; home: str
           return { sessionPath: sessionPath && `${agent.path}\0${sessionPath}`, card };
         }),
       );
+      // the card of each session path, the first agent's, lists every agent that shares it
+      const first = new Map<string, BuiltCard>();
+      for (const { sessionPath, card } of entries) {
+        if (sessionPath === null) continue;
+        const shared = first.get(sessionPath);
+        if (shared) shared.agents.push(card.id);
+        else first.set(sessionPath, card);
+      }
       return collapseBySession(entries).map((entry: (typeof entries)[number]) => entry.card);
     },
 
-    // The finished scans of the session files read since this builder was made, to keep for a
-    // later run, and whether any changed since this was last asked. Their states are the
-    // readers' own, which a later build changes: encode them at once.
+    // The finished scans of the session files read since this builder was made, and the kept
+    // scans of the providers no build has asked for, as they were kept, to keep for a later run,
+    // and whether any changed since this was last asked. Their states are the readers' own,
+    // which a later build changes: encode them at once.
     scanned() {
-      const all: { changed: boolean; scans: KeptScan[] } = { changed: false, scans: [] };
+      const all: { changed: boolean; scans: KeptScan[] } = { changed: false, scans: kept.filter((scan) => !hooks.has(scan.provider)) };
       for (const [provider, hook] of hooks) {
         // a provider that reads no session file (opencode) has no scan
         const { changed, scans } = hook?.scanned?.() ?? { changed: false, scans: [] };

@@ -1,15 +1,15 @@
 // Copied from herdr-session-stats (src/providers/claude-sources.js).
 //
-// The Claude Code side of a card's I/O: where Claude Code keeps its sessions, the text of one
-// and the folder it started in (src/core/providers/claude.js reads only values handed in). It
-// is the Claude Code provider's `createSessions` hook (see the stats-shape header of
-// src/core/providers/index.js). Runtime-neutral: it takes the plugin's runner bound to an Orca
-// host, and runs only read-only programs there: `find` with `stat`, `head`, and `tail` and `dd`
-// (through the session reader).
+// The Claude Code side of a card's I/O: where Claude Code keeps its sessions, the text of one,
+// the folder it started in and its sub-agents (src/core/providers/claude.js reads only values
+// handed in). It is the Claude Code provider's `createSessions` hook (see the stats-shape header
+// of src/core/providers/index.js). Runtime-neutral: it takes the plugin's runner and text reader
+// bound to an Orca host, and runs only read-only programs there: `find` with `stat`, `head`,
+// `cat` (through the text reader), and `tail` and `dd` (through the session reader).
 
 import { claudeProvider } from './claude.js';
 import { parseEntries } from './jsonl.js';
-import { absoluteFolder, findNamedFiles, findSessionFile, sessionHeads, sessionReaders } from './session-files.js';
+import { absoluteFolder, findNamedFiles, findSessionFile, listFolder, readOnce, sessionHeads, sessionReaders, subAgentReads } from './session-files.js';
 
 // Name of Claude Code's session folder for a working folder (herdr-session-stats
 // docs/claude-session-format.md): the path with every character that is not a letter or a
@@ -42,11 +42,31 @@ function startFolder(text) {
   return null;
 }
 
-// `execOn(machine)`: the plugin's runner bound to an Orca host (null: this computer). `kept`:
-// the scans of Claude Code session files an earlier run kept (see `sessionReaders`).
-export function createClaudeSessions({ execOn, kept }) {
+// What the meta file of a sub-agent, `text`, tells: its name (the `description`), its kind (the
+// `agentType`) and its model, each null when the file holds no string for it. A text that is
+// not a JSON object throws: the file may not be written out yet, and is read again.
+function metaIn(text) {
+  const meta = JSON.parse(text);
+  if (meta === null || typeof meta !== 'object') throw new Error('no meta object');
+  const told = (value) => (typeof value === 'string' ? value : null);
+  return { name: told(meta.description), kind: told(meta.agentType), model: told(meta.model) };
+}
+
+// `execOn(machine)` and `readTextOn(machine)`: the plugin's runner and text reader bound to an
+// Orca host (null: this computer). `kept`: the scans of Claude Code session files an earlier run
+// kept (see `sessionReaders`).
+export function createClaudeSessions({ execOn, readTextOn, kept }) {
   // each machine's reader, which keeps that machine's per-file totals
   const readers = sessionReaders(execOn, claudeProvider.fold, kept);
+  // the sub-agent transcripts read through `readers` (see `subAgentReads`)
+  const subAgentInputs = subAgentReads(readers);
+  // What the meta file of each sub-agent told (see `metaIn`): Claude Code writes it once, when
+  // the sub-agent starts, so it is read once, and again only after a read that failed.
+  const metaOf = readOnce(async (machine, path) => {
+    const text = await readTextOn(machine)(path);
+    if (text === null) throw new Error(`cannot read ${path}`);
+    return metaIn(text);
+  });
   // What the start of each session file told (see `sessionHeads`): the folder it started in.
   const heads = sessionHeads(execOn, { head: ['-c', String(START_BYTES)], tells: (text) => ({ cwd: startFolder(text) }) });
 
@@ -84,6 +104,33 @@ export function createClaudeSessions({ execOn, kept }) {
     // read once, by one `head`, and again at the next call when that read failed.
     folder(file, { machine }) {
       return heads.folder(machine, file);
+    },
+
+    // The sub-agents of the session of a linked file, from one listing: Claude Code writes each
+    // one's transcript as `agent-<id>.jsonl` in the `subagents` folder of the folder named after
+    // the session's id, beside the session file, with `agent-<id>.meta.json` beside it, which
+    // names it (see `metaIn`). The listing names the meta files too, so only one that is there
+    // is read: one that is missing costs nothing. Each sub-agent has its `input` (see
+    // `subAgentReads`); one whose meta file is missing or cannot be read yet is named by its
+    // transcript's file name, and its kind and model are its transcript's. Claude Code does not
+    // tell whether a sub-agent runs, nor its task, so they are null. A session without the
+    // folder has none; a listing that fails otherwise rejects, since its sub-agents are then
+    // unknown, not none.
+    async subagents(file, { machine, os }) {
+      const folder = `${file.path.replace(/\.jsonl$/, '')}/subagents`;
+      const names = ['agent-*.jsonl', 'agent-*.meta.json'];
+      const listed = await listFolder(execOn(machine), { dir: folder, os, names, strict: true });
+      const metas = new Set(listed.map(({ path }) => path).filter((path) => path.endsWith('.meta.json')));
+      const transcripts = listed.filter(({ path }) => path.endsWith('.jsonl'));
+      const inputs = subAgentInputs.inputs(machine, transcripts);
+      return Promise.all(
+        transcripts.map(async ({ path }, i) => {
+          const metaPath = path.replace(/\.jsonl$/, '.meta.json');
+          const [input, meta] = await Promise.all([inputs[i], metas.has(metaPath) ? metaOf(machine, metaPath) : null]);
+          const name = meta?.name ?? path.slice(path.lastIndexOf('/') + 1, -'.jsonl'.length);
+          return { name, kind: meta?.kind ?? null, model: meta?.model ?? null, task: null, running: null, input };
+        }),
+      );
     },
 
     // The finished scans of the files read, to keep for a later run (see `sessionReaders`).

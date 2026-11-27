@@ -11,7 +11,8 @@ describe('provider interface', () => {
     for (const field of STAT_FIELDS) {
       expect(stats[field]).toBe(NA);
     }
-    expect(Object.keys(stats).sort()).toEqual(['harness', ...STAT_FIELDS].sort());
+    expect(stats.detail).toBeNull();
+    expect(Object.keys(stats).sort()).toEqual(['harness', 'detail', ...STAT_FIELDS].sort());
   });
 
   test('registered fake provider is used', () => {

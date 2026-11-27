@@ -1,14 +1,13 @@
 // The Orca hosts other than this computer, as the `orca` CLI tells of them: an SSH host (a
 // `workspace.list` hostId `ssh:<target id>`) and a paired Orca server (`runtime:<environment
-// id>`, every one `orca environment list` lists), each with the name its host row shows and the
+// id>`, every one `orca environment list` lists), each with the name its group shows and the
 // alias `ssh` reaches it by, and the Orca agents of a paired server with their panes. Only the
 // CLI's list commands run here, through `run` (src/exec.ts) on this computer; whatever cannot be
 // listed is left out or named by its id, never rejected. `orca` is also how the worker's palette
 // command asks Orca to show the panel, and how it switches to a paired server's terminal.
-import type { OrcaAgent } from './agent-cards.ts';
 import type { Run } from './exec.ts';
+import type { FleetAgent } from './fleet.ts';
 import type { Pane } from './protocol.ts';
-import type { TreeAgent } from './tree.ts';
 import { splitWorktreeId } from './worktree-id.ts';
 
 // An Orca host's name, as Orca names it, and the alias of its SSH target.
@@ -58,16 +57,21 @@ export function remoteHosts({ hosts, environments }: HostLists, hostIds: string[
   return remote;
 }
 
-// An Orca agent of a paired server, on the server's host row, with its pane, if any.
-export type ServerAgent = OrcaAgent & TreeAgent & { pane: Pane | null };
+// An Orca agent of a paired server, in the server's group, with its pane, if any.
+export type ServerAgent = FleetAgent & { pane: Pane | null };
 
-// The Orca agents of the paired server `hostId` (`orca agent list --environment <name>`), on its
-// host row and read over its alias; none when the server cannot be listed, or answers anything
+// The Orca agents of the paired server `hostId` (`orca agent list --environment <name>`), in its
+// group and read over its alias; none when the server cannot be listed, or answers anything
 // but a list of agents. The server reports them on its own `local` host, which is not this
 // computer's. An agent's pane (`tabId:leafId`, its paneKey) is the server's terminal `orca
 // terminal list` lists in that tab and leaf; none when no listed terminal is, or the terminals
 // cannot be listed. The server lists at most 200 terminals by default; a list it cut short is
-// written to `log`, and the terminals past it give no pane.
+// written to `log`, and the terminals past it give no pane and no title. An agent the server
+// lists without a title, as the paired server starfish-bs lists a live omp agent, takes the
+// title of its pane's terminal, which carries omp's session title: omp's link by title needs it
+// (src/core/session-link.js). An agent's `stateSince` is its `updatedAt`, which the server gives
+// as epoch ms or as an ISO text: none when it gives neither. An agent's folder is the path of its
+// worktreeId; none when that is no absolute path, which no folder is read at.
 export async function readServerAgents(
   run: Run,
   hostId: string,
@@ -76,30 +80,29 @@ export async function readServerAgents(
 ): Promise<ServerAgent[]> {
   const environment = ['--environment', host.name];
   try {
-    const [listed, handles] = await Promise.all([
+    const [listed, terminals] = await Promise.all([
       orca(run, ['agent', 'list', ...environment]).then(({ agents }) => (agents ?? []) as Listed[]),
       orca(run, ['terminal', 'list', ...environment])
         .then(({ terminals = [], truncated, totalCount }) => {
-          if (truncated) log(`spyhop: ${host.name} listed ${terminals.length} of ${totalCount} terminals: agents in the others show no Focus pane`);
-          return new Map((terminals as Listed[]).map((terminal) => [`${terminal.tabId}:${terminal.leafId}`, terminal.handle as string]));
+          if (truncated) log(`spyhop: ${host.name} listed ${terminals.length} of ${totalCount} terminals: agents in the others have no pane to focus`);
+          return new Map((terminals as Listed[]).map((terminal) => [`${terminal.tabId}:${terminal.leafId}`, terminal]));
         })
-        .catch(() => new Map<string, string>()),
+        .catch(() => new Map<string, Listed>()),
     ]);
     return listed.map((agent, n) => {
-      const handle = agent.paneKey && handles.get(agent.paneKey);
+      const terminal = agent.paneKey ? terminals.get(agent.paneKey) : undefined;
+      const handle = terminal?.handle as string | undefined;
       return {
         id: `${hostId}\0${agent.paneKey ?? n}`,
         agent: agent.agent ?? null,
         state: agent.state,
-        title: agent.title ?? null,
+        title: agent.title ?? terminal?.title ?? null,
+        stateSince: stateSinceOf(agent.updatedAt),
         // `orcaSessionId` is Orca's id, not the harness's
         sessionId: null,
-        path: splitWorktreeId(agent.worktreeId)?.path ?? null,
+        path: folderOf(agent.worktreeId),
         machine: host.alias,
         hostId,
-        repo: agent.repo,
-        workspace: agent.workspace,
-        worktreeId: agent.worktreeId,
         // Orca's id of a paired server's workspace is its worktreeId
         workspaceId: agent.worktreeId,
         pane: handle ? { environment: host.name, terminal: handle } : null,
@@ -108,4 +111,17 @@ export async function readServerAgents(
   } catch {
     return [];
   }
+}
+
+// The absolute path the worktreeId `id` holds, null when it holds none.
+function folderOf(id: string): string | null {
+  const path = splitWorktreeId(id)?.path;
+  return path?.startsWith('/') ? path : null;
+}
+
+// epoch ms of an `updatedAt` of `orca agent list`, null when it is neither a number nor a date text
+function stateSinceOf(updatedAt: unknown): number | null {
+  if (typeof updatedAt === 'number') return updatedAt;
+  const time = typeof updatedAt === 'string' ? Date.parse(updatedAt) : Number.NaN;
+  return Number.isNaN(time) ? null : time;
 }

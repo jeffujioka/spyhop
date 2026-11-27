@@ -1,0 +1,114 @@
+// The frame check `scripts/frame-check.sh`, which runs the Live panel in the Orca app on this
+// computer: with `--dry-run` it prints each of its `orca` command lines, in order, and runs none.
+// The stand-in `orca` (test/helpers/stand-ins.ts) logs every call, so a call would show; it fails
+// each command line it has no answer for, so the script stops at the first step it has none for.
+// The steps after the panel's refresh wait (the shots, the logs) are not run here, as no test
+// waits on a clock.
+import assert from 'node:assert/strict';
+import { execFileSync, spawnSync } from 'node:child_process';
+import { copyFileSync, mkdirSync } from 'node:fs';
+import { join } from 'node:path';
+import { test } from 'node:test';
+import { tempHome } from './helpers/files.ts';
+import { answer, standIns } from './helpers/stand-ins.ts';
+
+// The steps before the session step, answered as Orca does, with the fleet answer `fleet`.
+const answeredUpToFleet = (fleet: unknown) => ({
+  'plugin validate . --json': answer({}),
+  'plugin check . --json': answer({ panels: [] }),
+  'plugin dev watch . --json': JSON.stringify({ type: 'loaded' }),
+  'plugin open local.spyhop --panel spyhop': '',
+  'plugin dev request . spyhop.fleet --data {"request":1} --json': answer({ result: fleet }),
+});
+
+// A fleet answer with one group of the cards `ids`.
+const fleetListing = (ids: string[]) => ({
+  request: 1,
+  groups: [{ id: 'local', name: 'local', count: ids.length, cards: ids.map((id) => ({ id })) }],
+  counts: {},
+  burn: {},
+  attention: [],
+});
+
+// Runs the script from a copy in a temporary folder, so that what it records under
+// `.orca/shots/` stays out of this one.
+function frameCheck() {
+  const folder = tempHome();
+  mkdirSync(join(folder, 'scripts'));
+  copyFileSync(new URL('../scripts/frame-check.sh', import.meta.url), join(folder, 'scripts', 'frame-check.sh'));
+  return spawnSync('bash', [join(folder, 'scripts', 'frame-check.sh')], { encoding: 'utf8' });
+}
+
+test('the whole-panel steps are listed', () => {
+  const orca = standIns({ homes: {}, orca: {} });
+
+  // throws when the script exits with anything but 0
+  const out = execFileSync('bash', ['scripts/frame-check.sh', '--dry-run'], { cwd: new URL('..', import.meta.url), encoding: 'utf8' });
+
+  const step = `+ ${process.env.ORCA_CLI_COMMAND} `;
+  const steps = out
+    .split('\n')
+    .filter((line) => line.startsWith(step))
+    .map((line) => line.slice(step.length));
+  assert.deepEqual(steps, [
+    'plugin validate . --json',
+    'plugin check . --json',
+    'plugin dev watch . --json',
+    'plugin open local.spyhop --panel spyhop',
+    'plugin dev request . spyhop.fleet --data {"request":1} --json',
+    'plugin dev request . spyhop.session --data {"request":2,"card":"<id>"} --json',
+    'plugin shot local.spyhop --panel spyhop --width 300 --theme dark --json',
+    'plugin shot local.spyhop --panel spyhop --width 300 --theme light --json',
+    'plugin shot local.spyhop --panel spyhop --width 420 --theme dark --json',
+    'plugin shot local.spyhop --panel spyhop --width 420 --theme light --json',
+    'plugin logs local.spyhop --json',
+    'plugin dev unload . --json',
+  ]);
+  assert.deepEqual(orca.orca(), []);
+});
+
+test('a failing step prints its answer', () => {
+  // the stand-in answers no command line: each fails with its error envelope, as Orca's `orca` does
+  standIns({ homes: {}, orca: {} });
+
+  const run = spawnSync('bash', ['scripts/frame-check.sh'], { cwd: new URL('..', import.meta.url), encoding: 'utf8' });
+
+  assert.equal(run.status, 1);
+  assert.ok(run.stderr.includes('{"ok":false,"error":{"code":"not_found"}}'), run.stderr);
+});
+
+test('a card that left Orca is passed over', () => {
+  const orca = standIns({
+    homes: {},
+    orca: {
+      ...answeredUpToFleet(fleetListing(['gone', 'next'])),
+      'plugin dev request . spyhop.session --data {"request":2,"card":"gone"} --json': answer({ result: { request: 2, session: null } }),
+      'plugin dev request . spyhop.fleet --data {"request":3} --json': answer({ result: fleetListing(['next']) }),
+    },
+  });
+
+  const run = frameCheck();
+
+  assert.ok(run.stdout.includes('frame check: "gone" left Orca during the check'), run.stdout);
+  // the next card is asked for, and the stand-in has no answer for it
+  assert.ok(orca.orca().includes('plugin dev request . spyhop.session --data {"request":2,"card":"next"} --json'));
+  assert.equal(run.status, 1);
+});
+
+// A card's id joins its parts with NUL characters, as the worker makes it (src/agent-cards.ts).
+test('a null session of a card still listed fails', () => {
+  const orca = standIns({
+    homes: {},
+    orca: {
+      ...answeredUpToFleet(fleetListing(['kept\0/home/a.jsonl', 'next'])),
+      'plugin dev request . spyhop.session --data {"request":2,"card":"kept\\u0000/home/a.jsonl"} --json': answer({ result: { request: 2, session: null } }),
+      'plugin dev request . spyhop.fleet --data {"request":3} --json': answer({ result: fleetListing(['kept\0/home/a.jsonl', 'next']) }),
+    },
+  });
+
+  const run = frameCheck();
+
+  assert.equal(run.status, 1);
+  assert.ok(run.stderr.includes('frame check: the session answer of "kept\\u0000/home/a.jsonl" is null while the fleet still lists it'), run.stderr);
+  assert.ok(!orca.orca().some((line) => line.includes('"card":"next"')));
+});

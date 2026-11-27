@@ -2,8 +2,8 @@
   "manifestVersion": 2,
   "id": "spyhop",
   "name": "Spyhop",
-  "version": "0.1.0",
-  "description": "AI harness session stats (omp, Claude Code, opencode) for every Orca agent, by host, project and workspace.",
+  "version": "0.2.0",
+  "description": "AI harness session stats (omp, Claude Code, opencode) for every Orca agent: cost, context, cache and sub-agents, with charts.",
   "engines": {
     "orca": ">=1.4.259"
   },
@@ -16,8 +16,8 @@
         "id": "spyhop",
         "title": "Spyhop",
         "icon": "bar-chart-3",
-        "entry": "src/panel.tsx",
-        "ui": "components"
+        "entry": "src/panel.ts",
+        "ui": "html"
       }
     ],
     "commands": [

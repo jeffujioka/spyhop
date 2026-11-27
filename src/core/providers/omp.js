@@ -19,10 +19,14 @@
 // activity) come from the text, which is the tail: `parseTail` turns it into one `session`
 // value and each entry of `LATEST` is a function `(session, now) => partial stats` (`now` is
 // epoch ms; only a figure that measures from the present reads it). A later figure is one more
-// function in a list, so adding a figure never rewrites an earlier one.
+// function in a list, so adding a figure never rewrites an earlier one. Beside the stats,
+// `detailOf(state)` gives the series of the whole file (src/core/series.js), from the same state,
+// with the agent kind and the model a sub-agent's `session_init` entry records, and the times of
+// the file's first and last entry, a sub-agent's start and end.
 
 import { add, parseEntries, tally } from './jsonl.js';
-import { burnRate, cacheRate, isNumber } from './shared.js';
+import { burnRate, cacheRate, isNumber, tokenCount, wholeSession } from './shared.js';
+import { addCall, addCost, addMinute, detailOf, entryOf, newSeries, pushRecent, toolAnswered, toolCalled } from '../series.js';
 
 // A fresh accumulator. Sums are `tally`s: undefined until an entry carries the value.
 function emptyState() {
@@ -30,6 +34,10 @@ function emptyState() {
     // timestamps (epoch ms, NaN when unreadable) of the first and the latest message entry
     firstMessage: undefined,
     lastMessage: undefined,
+    // timestamps (epoch ms) of the first and the latest entry of any type that carries one: a
+    // sub-agent's start and end
+    firstEntry: undefined,
+    lastEntry: undefined,
     totalTokens: tally(),
     costUsd: tally(),
     premiumRequests: tally(),
@@ -45,19 +53,59 @@ function emptyState() {
     began: undefined,
     latencyMs: undefined,
     compactions: 0,
+    // the context of the session's last model calls, oldest first (see `pushRecent`)
+    recent: [],
+    // the session's own model calls: how many, their bounded series (src/core/series.js), the
+    // compactions with their tokens before and after, the cold starts (with the cost of their
+    // cache writes), the tool calls by tool with the ids of those not answered yet, and the
+    // cost and tokens by model, and the sums of the newest minutes (see `addMinute`)
+    calls: 0,
+    series: newSeries(),
+    marks: [],
+    cold: { count: 0, tokens: 0, cost: 0 },
+    tools: {},
+    pending: new Map(),
+    models: {},
+    minutes: [],
     // the `session` entry is the second line of a file, so a state that holds it starts at
     // the top of the file
     fromStart: false,
+    // the agent kind and the model of a sub-agent's transcript, as its `session_init` entry
+    // records them; null in a file without one, as the main agent's session file is
+    kind: null,
+    model: null,
+    // the time of the `session` entry, which opens a session file: the session's start
+    started: undefined,
+    // whether the newest entry that opens or ends a turn left it open: a `message` other than an
+    // assistant message that stopped (`stopReason` `stop` or `aborted`), or a `custom_message`;
+    // a `session_exit` ends it. Undefined before any such entry.
+    turnOpen: undefined,
   };
 }
+
+// The stop reasons of an assistant message that ends its turn: any other, such as a tool call's
+// `toolUse`, leaves the turn open.
+const TURN_ENDS = new Set(['stop', 'aborted']);
 
 // Adds `entries` (in file order, after those already in `state`) to `state`, which it changes
 // and returns; without a `state` it starts a new one. Entries that carry no figure are skipped.
 function fold(state, entries) {
   const s = state ?? emptyState();
   for (const e of entries) {
+    const at = Date.parse(e.timestamp);
+    if (isNumber(at)) {
+      s.firstEntry ??= at;
+      s.lastEntry = at;
+    }
+    if (e.type === 'message' && e.message) s.turnOpen = !(e.message.role === 'assistant' && TURN_ENDS.has(e.message.stopReason));
+    else if (e.type === 'custom_message') s.turnOpen = true;
+    else if (e.type === 'session_exit') s.turnOpen = false;
     if (e.type === 'session') {
       s.fromStart = true;
+      if (isNumber(at)) s.started = at;
+    } else if (e.type === 'session_init') {
+      if (typeof e.agent === 'string') s.kind = e.agent;
+      if (typeof e.resolvedModel === 'string') s.model = e.resolvedModel;
     } else if (e.type === 'message' && e.message) {
       const time = Date.parse(e.timestamp);
       s.firstMessage ??= time;
@@ -79,9 +127,52 @@ function fold(state, entries) {
           s.cacheReads += 1;
           if (usage.cacheRead > 0) s.cacheHits += 1;
         }
+        // A call omp aborted, or that failed before the model answered, logs a usage of all
+        // zeros (or none): it sent and wrote nothing, so it is no model call of the series, of
+        // the cold starts or of the spark line. One that logged usage counts, whatever its
+        // stop reason.
+        const kinds = [usage?.input, usage?.cacheRead, usage?.cacheWrite, usage?.output];
+        if (kinds.some((tokens) => tokenCount(tokens) > 0)) {
+          const prompt = e.message.contextSnapshot?.promptTokens;
+          if (isNumber(prompt)) pushRecent(s.recent, prompt);
+          const call = {
+            t: time,
+            read: tokenCount(usage.cacheRead),
+            write: tokenCount(usage.cacheWrite),
+            uncached: tokenCount(usage.input),
+            output: tokenCount(usage.output),
+            cost: isNumber(usage.cost?.total) ? usage.cost.total : null,
+            context: isNumber(prompt) ? prompt : null,
+          };
+          addCall(s.series, call);
+          addMinute(s.minutes, time, { ...call, tokens: tokenCount(usage.totalTokens) });
+          // a cold start: a call after the first that read nothing from the prompt cache, so it
+          // wrote the prompt to the cache again
+          if (s.calls > 0 && usage.cacheRead === 0) {
+            s.cold.count += 1;
+            s.cold.tokens += call.write;
+            s.cold.cost = addCost(s.cold.cost, isNumber(usage.cost?.cacheWrite) ? usage.cost.cacheWrite : null);
+          }
+          s.calls += 1;
+          if (typeof e.message.model === 'string') {
+            const byModel = entryOf(s.models, e.message.model, () => ({ cost: 0, tokens: 0 }));
+            byModel.cost = addCost(byModel.cost, call.cost);
+            byModel.tokens += tokenCount(usage.totalTokens);
+          }
+        }
+        for (const part of Array.isArray(e.message.content) ? e.message.content : []) {
+          if (part?.type === 'toolCall') toolCalled(s, part.id, part.name);
+        }
+      } else if (e.message.role === 'toolResult') {
+        toolAnswered(s, e.message.toolCallId, e.message.isError === true);
       }
     } else if (e.type === 'compaction') {
       s.compactions += 1;
+      s.marks.push({
+        t: Date.parse(e.timestamp),
+        before: isNumber(e.tokensBefore) ? e.tokensBefore : null,
+        after: isNumber(e.tokensAfter) ? e.tokensAfter : null,
+      });
     } else if (e.type === 'thinking_level_change' && typeof e.thinkingLevel === 'string') {
       // the latest change stands
       s.thinkingLevel = e.thinkingLevel;
@@ -271,9 +362,39 @@ export const ompProvider = {
     return Object.assign(
       {},
       ...(total ? TOTALS.map((figure) => figure(total)) : []),
-      ...(total ? [autocompactions(total, whole)] : []),
+      ...(total ? [autocompactions(total, whole), wholeSession(total, whole)] : []),
       ...LATEST.map((figure) => figure(tail, now)),
+      { detail: total && whole ? detailOf(total) : null },
     );
   },
 };
+
+// The fold state of the whole file an `input` (see `ompProvider`) is of: its kept `state`, or
+// its text folded when that is the whole file; null when neither is known.
+function wholeState({ text, sources, state }) {
+  if (state !== undefined) return state;
+  return sources?.wholeFile === true ? fold(undefined, parseEntries(text)) : null;
+}
+
+// The start of the session of an omp session file read as `input`: the time of its `session`
+// entry, from the kept state, or else from the first lines of a text that starts at the top of
+// the file (the `session` entry is the first or second line); null when neither tells it.
+export function sessionStart(input) {
+  if (input.state) return input.state.started ?? null;
+  return fold(undefined, parseEntries(input.text.split('\n', 2).join('\n'))).started ?? null;
+}
+
+// The turn of a sub-agent's transcript read as `input`: whether its newest entry that opens or
+// ends a turn left it open (see `turnOpen` of the state), and the time of its newest entry;
+// null when the whole transcript is not known.
+export function turnOf(input) {
+  const state = wholeState(input);
+  return state && { open: state.turnOpen === true, last: isNumber(state.lastEntry) ? state.lastEntry : null };
+}
+
+// Whether the fold `state` of a file is that of an ended sub-agent: a transcript (it records a
+// `session_init` kind) whose turn is not open.
+export function endedSubAgent(state) {
+  return typeof state?.kind === 'string' && state.turnOpen !== true;
+}
 
