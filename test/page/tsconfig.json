@@ -1,0 +1,17 @@
+{
+  // Compiles the panel's page (src/panel.ts) and what it imports into ES modules Chrome loads as
+  // they are, with no bundler: the page tests (test/page/helpers/page.ts) give the `outDir`. It
+  // only strips the types; `npm run typecheck` checks them.
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "allowJs": true,
+    "rewriteRelativeImportExtensions": true,
+    "isolatedModules": true,
+    "noCheck": true,
+    "rootDir": "../../src",
+    "types": []
+  },
+  "files": ["../../src/panel.ts"]
+}

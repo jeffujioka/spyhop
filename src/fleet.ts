@@ -10,7 +10,7 @@
 import type { BuiltCard, OrcaAgent } from './agent-cards.ts';
 import { burnAt, countsInBurn, isReading, minutesOf, sumOf, sumsOf, titleOf } from './card-view.ts';
 import { NA } from './core/providers/index.js';
-import { minuteOf, minuteSums } from './core/series.js';
+import { MINUTE_MS, minuteOf, minuteSums } from './core/series.js';
 import type { AttentionRow, BurnCard, CardView, FleetAnswer, HostGroup } from './protocol.ts';
 
 // An Orca agent with the Orca host it is on (`local` for this computer) and Orca's id of its
@@ -103,6 +103,7 @@ export function burnCard(cards: BuiltCard[], now: number): BurnCard {
     running: reading ? NA : linked.flatMap((card) => card.subAgents?.agents ?? []).filter((sub) => sub.running === true).length,
     leftOut: linked.filter((card) => card.harness === 'claude').length,
     layers: burnLayers(counted, nowM),
+    endMs: nowM * MINUTE_MS,
   };
 }
 

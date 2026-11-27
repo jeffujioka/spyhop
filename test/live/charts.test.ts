@@ -9,28 +9,8 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 import { contextChart, costChart, tokensChart } from '../../src/live/charts.ts';
 import type { SessionView } from '../../src/protocol.ts';
-import { claudeSession, ompAutocompacts, ompSession, ompWindow, sessionOf, type ClaudeCall, type Compaction, type OmpCall } from '../helpers/live.ts';
+import { at, claudeSession, ompView, sessionOf, type ClaudeCall, type Compaction } from '../helpers/live.ts';
 import { attr, figure, parts, text, textOutsideFigures } from '../helpers/markup.ts';
-
-// Epoch ms of `hhmm` on the day of the tests' clock (test/helpers/agent-cards.ts), in UTC, the
-// time zone the tests run in.
-const at = (hhmm: string) => Date.parse(`2026-11-25T${hhmm}:00.000Z`);
-
-// The session the worker answers for one working agent of the workspace `api`/`main`, linked to
-// an omp session of `calls` and `compactions`, on a window of 1,000,000 tokens when `window`,
-// with omp's default autocompaction when `autocompacts`; `now`: the clock's time.
-async function ompView({ calls, compactions, window = true, autocompacts = false, now }: { calls: OmpCall[]; compactions?: Compaction[]; window?: boolean; autocompacts?: boolean; now?: number }) {
-  const { answer } = await sessionOf([{ project: 'api', name: 'main', agents: ['working'], title: 'π - Draw the charts' }], {
-    now,
-    prepare: (home) => {
-      if (window) ompWindow(home, 1_000_000);
-      if (autocompacts) ompAutocompacts(home);
-      // in the folder Orca reports for the workspace `api`/`main` (test/helpers/orca-host.ts)
-      ompSession(home, join(home, 'work/api-main', 'charts'), { title: 'Draw the charts', calls, compactions });
-    },
-  });
-  return answer.session!;
-}
 
 // The session the worker answers for one working Claude Code agent of the workspace `web`/`main`,
 // linked to a session of `calls` and `compactions`.
@@ -209,6 +189,17 @@ test('Tokens of grouped calls add up', async () => {
     numbers(bars, 'data-read').reduce((sum, read) => sum + read, 0),
     400_000,
   );
+});
+
+test('Span of grouped calls from the bar before', async () => {
+  const calls = Array.from({ length: 400 }, (_, i) => ({ at: at('10:00') + i * 60_000, read: 1000, output: 10 }));
+  const session = await ompView({ calls });
+
+  const bars = parts(tokensChart(session.tokens!, 100), 'data-bar');
+  assert.equal(bars.length, 100);
+  assert.deepEqual(new Set(numbers(bars, 'data-calls')), new Set([4]));
+  assert.equal(attr(bars[0], 'data-span'), '4 calls up to 10:03');
+  assert.equal(attr(bars[1], 'data-span'), '4 calls between 10:03 and 10:07');
 });
 
 test('Context of grouped calls is their last value', async () => {

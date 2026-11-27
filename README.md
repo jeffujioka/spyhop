@@ -20,10 +20,11 @@ follows a change of theme without being loaded again. It opens on the fleet scre
   it `all sessions`, the whole cost of the shown sessions with their sub-agents (there is no
   figure per day). Its chart draws the burn rate at each of the last 60 minutes, stacked by
   session: the three sessions of the highest cost over that hour by title, each with its rate,
-  and every other one as `others`. Under it are the tokens per minute of the last 10 minutes,
-  the cache hit rate of the last 60 and how many sub-agents run now. Only omp and opencode log a
-  cost per model call, so only their sessions count in the rate and its chart; while a Claude
-  Code session is shown, the card says how many sessions the rate leaves out. Every sum reads
+  and every other one as `others`, with times of day under it (see Chart axes). Under it are
+  the tokens per minute of the last 10 minutes, the cache hit rate of the last 60 and how many
+  sub-agents run now. Only omp and opencode log a cost per model call, so only their sessions
+  count in the rate and its chart; while a Claude Code session is shown, the card says how many
+  sessions the rate leaves out. Every sum reads
   `n/a` while a session it counts has a sub-agent transcript not read yet, and `all sessions`
   too while a shown session's cost cannot be read. An agent that links to no session counts in
   no sum.
@@ -117,6 +118,44 @@ A model call is a call that logged usage. An omp call that logged none, or a usa
 (one omp aborted, or that failed before the model answered), is not counted: not in the model
 calls, the charts or the cold starts. A part with nothing to show, such as the charts of a
 session without a model call, is not drawn.
+
+### Chart axes
+
+The burn rate chart and the session screen's context, tokens and cost charts each have faint
+lines at zero, one step and two steps of a round scale, the step the smallest of 1, 2 or 5 × 10ⁿ
+whose double reaches the chart's highest value; the values of the lines at one and two steps are
+written inside the chart at its left. A context chart with a window keeps its scale to at least
+100%, and the tokens chart's lines are of its prompt tokens (its output tokens have a scale of
+their own, with no lines). Under the burn rate, context and cost charts are at most five times
+of day at round marks, at the smallest step of 1, 2, 5, 10, 15 or 30 minutes, 1, 2, 3, 6 or 12
+hours, or whole days, that keeps them to five; a span with no such mark gets its first and last
+times. Under the tokens chart, whose bars are spaced per model call, at most five bars are
+marked, the first and every n-th one after it, each with the time of its last call.
+
+### Chart hover
+
+While the pointer is over one of those four charts, a line crosses the chart at the point
+nearest the pointer, with a dot on each layer there, and a box at the top of the chart, in the
+half the line is not in, gives the point's values; the chart's key and headline stay as they
+are, and the line and the box go when the pointer leaves the chart. The burn rate chart's box
+gives the minute, the total cost per hour and each layer's; the context chart's the time, the
+percent when there is a window, the tokens and the compactions since the point before, each
+with its tokens before and after, the newest two and how many more; the tokens chart's the
+call's time, or for a bar of several calls how many and their span (`4 calls between 12:01 and
+12:09`, the first bar's `4 calls up to 12:09`), and the tokens read from the cache, written to
+it, not cached and output; the cost chart's the time, the session's own cost, its sub-agents'
+and their total. A value that cannot be read reads n/a. A box stays within its chart from the
+panel's narrowest, 300 px: the burn rate box cuts a name over 12 characters short with `…`, the
+key keeping it whole.
+
+Each of the four charts is one stop of the Tab key, named by its title. A chart that takes the
+keyboard's focus shows its line and box on its newest point; Left and Right move them one point,
+Home and End to the first and the last point, and Escape hides them until the next of those
+keys, which moves from the point they were on. They go when the focus leaves the chart.
+
+A refresh keeps the line and the box, of a hovered or a focused chart, on the point of the same
+time, or on the first point after it when that time is no longer a point, with the values the
+refresh gives it; a focused chart keeps the focus.
 
 ## Harnesses
 
@@ -270,6 +309,12 @@ listed) and runs `orca plugin open <key> --panel spyhop`.
   panel and `orca plugin shot --scenario` refuses one, so the panel has no check scenarios: the
   session screen's look is checked by eye. Orca asks for the dev plugin's approval again after
   every change to a file of the folder, and the check prints the command that gives it.
+- Page tests: `npm run test:page` runs the `test/page/**/*.page.ts` tests with Node's test runner
+  (`npm test` does not): they compile the panel's page with the project's TypeScript, with no
+  bundler, load it in headless Chrome, the Google Chrome installed in `/Applications` (Playwright
+  downloads no browser), with a stand-in for Orca that answers the page's requests, and drive it
+  with the pointer and the keyboard. Without Chrome the run fails and names Google Chrome; it
+  never passes by skipping its tests.
 
 ## Known limits
 

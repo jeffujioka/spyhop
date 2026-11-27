@@ -7,12 +7,13 @@
 // (src/live/controller.ts) on such a worker, through the frame the tests play
 // (test/helpers/frame.ts); `openOnFleet` waits for its fleet, and `open` opens a session's screen
 // from it; `FIX` is the workspace the screen tests open it on, and `folderOf` the folder of a
-// workspace's session. The writers put omp and Claude Code session files and their sub-agents'
-// transcripts, omp's model catalogue and its config under that home, read by the real read-only
-// programs.
+// workspace's session. `at` names a time of the tests' day; `ompView` and `burnOf` are the session
+// and the fleet the chart tests read, over omp sessions. The writers put omp and Claude Code
+// session files and their sub-agents' transcripts, omp's model catalogue and its config under that
+// home, read by the real read-only programs.
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { mock } from 'node:test';
 import { setImmediate } from 'node:timers/promises';
@@ -181,6 +182,68 @@ export const FIX: HostWorkspace = { project: 'api', name: 'main', agents: ['work
 
 // The folder of the session of `ws`'s agent under `home`.
 export const folderOf = (home: string, { project, name }: HostWorkspace) => join(workspace(home, `${project}-${name}`), 'session');
+
+// Epoch ms of `hhmm` on the day of the tests' clock (test/helpers/agent-cards.ts), in UTC, the
+// time zone the tests run in.
+export const at = (hhmm: string) => Date.parse(`2026-11-25T${hhmm}:00.000Z`);
+
+// The session the worker answers for one working agent of the workspace `api`/`main`, linked to
+// an omp session of `calls` and `compactions`, on a window of 1,000,000 tokens when `window`,
+// with omp's default autocompaction when `autocompacts`; `now`: the clock's time.
+export async function ompView({ calls, compactions, window = true, autocompacts = false, now }: { calls: OmpCall[]; compactions?: Compaction[]; window?: boolean; autocompacts?: boolean; now?: number }) {
+  const { answer } = await sessionOf([{ project: 'api', name: 'main', agents: ['working'], title: 'π - Draw the charts' }], {
+    now,
+    prepare: (home) => {
+      if (window) ompWindow(home, 1_000_000);
+      if (autocompacts) ompAutocompacts(home);
+      // in the folder Orca reports for the workspace `api`/`main` (test/helpers/orca-host.ts)
+      ompSession(home, join(home, 'work/api-main', 'charts'), { title: 'Draw the charts', calls, compactions });
+    },
+  });
+  return answer.session!;
+}
+
+// An omp session titled `title`: the model calls of its own and of each of its sub-agents.
+export type BurnSession = { title: string; calls: OmpCall[]; subAgents?: ({ name: string; calls: OmpCall[]; running?: boolean })[] };
+
+// This computer's workspace `<title>`/`main`, with one working omp agent of the session `title`.
+const ompWorkspace = (title: string): HostWorkspace => ({ project: title, name: 'main', agents: ['working'], title: `π - ${title}` });
+
+// Writes the omp sessions `sessions` under `home`, each in its own workspace; the transcripts of
+// their sub-agents, in their order.
+function writeOmp(home: string, sessions: BurnSession[]) {
+  return sessions.flatMap(({ title, calls, subAgents = [] }) => {
+    const path = folderOf(home, ompWorkspace(title));
+    ompSession(home, path, { title, calls });
+    return subAgents.map(({ name, ...sub }) => ompSubAgent(home, path, name, sub));
+  });
+}
+
+// The fleet of the omp sessions `sessions` and of the workspaces `others`, whose files `prepare`
+// writes; `unread`: the indexes of the sub-agent transcripts (Claude Code's first, then omp's)
+// that the read-only programs cannot read, so are not read yet; `now`: the clock's time. The
+// answer, the fleet screen and its burn rate card.
+export async function burnOf(
+  sessions: BurnSession[],
+  { others = [], prepare, unread = [], now }: { others?: HostWorkspace[]; prepare?: (home: string) => string[]; unread?: number[]; now?: number } = {},
+) {
+  const locked: string[] = [];
+  try {
+    const { answer, html } = await fleetOf([...sessions.map(({ title }) => ompWorkspace(title)), ...others], {
+      now,
+      prepare: (home) => {
+        const transcripts = [...(prepare?.(home) ?? []), ...writeOmp(home, sessions)];
+        for (const index of unread) {
+          locked.push(transcripts[index]);
+          chmodSync(transcripts[index], 0o000);
+        }
+      },
+    });
+    return { answer, html, burn: parts(html, 'data-part', 'burn')[0] };
+  } finally {
+    for (const file of locked) chmodSync(file, 0o644);
+  }
+}
 
 // The title of each session `html` draws: the session screen's header, or the fleet's cards and
 // folded lines.

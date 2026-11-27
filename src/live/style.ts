@@ -73,10 +73,19 @@ svg { display: block; }
 }
 .headline { align-items: baseline; margin: 4px 0 2px; }
 .hero { font-size: 22px; font-weight: 650; }
-.headline .muted, .axis, .marks, .key, [data-part="cold-note"] { font-size: 11px; }
-[data-chart="context"], [data-chart="tokens"] { height: 120px; margin-top: 4px; }
-[data-chart="cost"] { height: 100px; margin-top: 4px; }
-[data-chart="burn"] { height: 80px; margin-top: 4px; }
+.headline .muted, .axis, .times, .marks, .key, [data-part="cold-note"] { font-size: 11px; }
+/* A chart's plot holds its SVG and the values of its scale's lines, laid over it at its left,
+   each under its line; the times under it are each at the x of its point. */
+.plot { position: relative; margin-top: 4px; }
+.plot > [data-label] {
+  position: absolute; left: 3px; margin-top: 1px; font-size: 10px; line-height: 1;
+  color: var(--orca-muted-foreground); pointer-events: none;
+}
+.times { position: relative; height: 1.4em; margin-top: 2px; }
+.times > [data-time] { position: absolute; top: 0; width: max-content; }
+[data-chart="context"], [data-chart="tokens"] { height: 120px; }
+[data-chart="cost"] { height: 100px; }
+[data-chart="burn"] { height: 80px; }
 [data-chart] path, [data-chart] line, [data-chart] polyline { fill: none; vector-effect: non-scaling-stroke; stroke-linecap: round; }
 [data-chart="context"] path { stroke: var(--lvl); stroke-width: 2; }
 [data-chart="context"].plain path { stroke: var(--spy-s1); }
@@ -84,6 +93,7 @@ svg { display: block; }
 [data-ref="0.75"] { stroke: var(--spy-hot); }
 [data-ref="0.9"] { stroke: var(--spy-critical); }
 [data-mark] { stroke: var(--orca-muted-foreground); stroke-width: 1; stroke-dasharray: 2 2; }
+[data-scale] { stroke: var(--orca-muted-foreground); stroke-width: 1; opacity: .25; }
 /* the kinds of tokens, and the costs of a session's own model calls and of its sub-agents */
 .k-read { --k: var(--spy-s4); }
 .k-write { --k: var(--spy-s3); }
@@ -101,8 +111,23 @@ polyline[data-output], [data-layer] path { stroke: var(--k); stroke-width: 1.5; 
 .k-others { --k: var(--spy-others); }
 [data-chart="burn"] [data-layer] path { fill: var(--k); stroke: none; }
 .key { gap: 4px 10px; margin-top: 4px; }
-.key i { display: inline-block; width: 8px; height: 8px; margin-right: 4px; border-radius: 2px; background: var(--k); }
+.key i, [data-box] i { display: inline-block; width: 8px; height: 8px; margin-right: 4px; border-radius: 2px; background: var(--k, var(--lvl)); }
 .key i[class*="lvl-"] { background: var(--lvl); }
+/* A chart's crosshair and box, one per point, each hidden until the page shows the one at the
+   pointer (data-on): the line across the chart, a dot on each layer in the layer's colour, and
+   the box at the top of the chart, in the half (data-on="left|right") the line is not in. */
+[data-cross]:not([data-on]), [data-box]:not([data-on]) { display: none; }
+[data-cross] line { stroke: var(--orca-foreground); stroke-width: 1; opacity: .5; }
+[data-chart] [data-dot] { stroke: var(--k, var(--lvl, var(--spy-s1))); stroke-width: 7; }
+/* A box's lines wrap at their spaces, so that no label or value is cut off. */
+.plot > [data-box] {
+  position: absolute; top: 2px; z-index: 1; max-width: calc(50% - 4px); padding: 2px 5px;
+  font-size: 10px; line-height: 1.15; background: var(--orca-card);
+  color: var(--orca-card-foreground); border: 1px solid var(--orca-border); border-radius: var(--orca-radius);
+  pointer-events: none;
+}
+.plot > [data-box][data-on="left"] { left: 2px; }
+.plot > [data-box][data-on="right"] { right: 2px; }
 .marks { gap: 2px 10px; margin-top: 2px; }
 [data-part="cold-note"] { margin-top: 6px; }
 /* the session screen */
