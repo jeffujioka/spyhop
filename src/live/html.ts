@@ -1,6 +1,32 @@
 // Text put into the live panel's markup, escaped, so that a title or a folder name that holds
 // markup is shown as text and never read as tags; the same in an attribute's quoted value. And
-// the markup of a figure, which every screen writes alike, and of a range tab's titled figure.
+// the markup of a figure, which every screen writes alike, of a range tab's titled figure, of a
+// part of a cost that says where it comes from, and the rows a list names.
+
+import { formatCost } from '../core/format.js';
+import { NA } from '../core/providers/index.js';
+import type { Num } from '../protocol.ts';
+
+// The rows a list names, the first of its order; the rest are summed as `others`.
+export const NAMED_ROWS = 6;
+
+// A row of a list: its name and its values, such as a tool's calls and failed calls.
+export type Row = { name: string; values: Num[] };
+
+// The first `named` rows of `rows`, then the rest summed as the row `others`, each of its values
+// n/a when one it sums is; `rows` as they are when none is left.
+export function topRows(rows: Row[], named: number): Row[] {
+  const rest = rows.slice(named);
+  if (rest.length === 0) return rows;
+  const values = rest[0].values.map((_, i) => rest.reduce<Num>((sum, { values: own }) => (sum === NA || own[i] === NA ? NA : sum + own[i]), 0));
+  return [...rows.slice(0, named), { name: 'others', values }];
+}
+
+// The part `usd` of a cost (`data-figure` `name`) and the words of where it comes from, as a line
+// under the cost; '' when it is 0 (under half a cent) or not known.
+export function costPart(name: string, usd: Num, words: string): string {
+  return usd === NA || usd < 0.005 ? '' : `<div class="muted">${num(name, formatCost(usd))} ${words}</div>`;
+}
 
 const ESCAPES: Record<string, string> = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
 

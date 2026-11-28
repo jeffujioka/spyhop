@@ -57,7 +57,7 @@ const keptKey = (part: number) => (part === 0 ? KEPT_KEY : `${KEPT_KEY}.${part}`
 const KEPT_WRITE_MS = 30 * 1000;
 
 // The Spend tab's view when the history store cannot be opened or read.
-const SPEND_NA: SpendView = { cost: 'n/a', tokens: 'n/a', calls: 'n/a', chart: null };
+const SPEND_NA: SpendView = { cost: 'n/a', tokens: 'n/a', calls: 'n/a', chart: null, byRepo: [], byModel: [], byHarness: [], sideCost: 'n/a', sources: null };
 
 // A range ask runs a catch-up when the last one started this long ago or more: less than the
 // panel's RANGE_REFRESH_MS by a margin, since the panel times its asks from when it sends them and

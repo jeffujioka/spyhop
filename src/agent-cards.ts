@@ -147,7 +147,7 @@ export function sameButStates(before: OrcaAgent[], agents: OrcaAgent[]) {
 // without a provider is named as Orca names it. Orca lists opencode's agents as `opencode` or,
 // since opencode's current tables, `opencode2`: both are opencode's.
 const PROVIDERS: Record<string, string> = { omp: 'omp', claude: 'claude-code', opencode: 'opencode', opencode2: 'opencode' };
-const HARNESS_NAMES: Record<string, string> = { omp: 'omp', claude: 'Claude Code', opencode: 'opencode', opencode2: 'opencode' };
+export const HARNESS_NAMES: Record<string, string> = { omp: 'omp', claude: 'Claude Code', opencode: 'opencode', opencode2: 'opencode' };
 
 type Machine = string | null;
 

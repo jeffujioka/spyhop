@@ -8,15 +8,11 @@
 // Pure: an answer in, a markup string out (src/panel.ts draws it).
 
 import { formatAge, formatCost, formatCostPerHour, formatCount, formatDate, formatDay, formatDuration, formatPercent, formatSeconds, formatTokens, orNa } from '../core/format.js';
-import { NA } from '../core/providers/index.js';
-import type { CardView, Num, SessionView, SubAgentView } from '../protocol.ts';
+import type { CardView, SessionView, SubAgentView } from '../protocol.ts';
 import { agentBars, contextChart, costChart, tokensChart } from './charts.ts';
 import { readingNote } from './fleet.ts';
-import { esc, num } from './html.ts';
+import { costPart, esc, NAMED_ROWS, num, topRows } from './html.ts';
 import { tabBar } from './tabs.ts';
-
-// The tools the Tools section names, the most called first; the rest are summed as `others`.
-export const TOP_TOOLS = 6;
 
 // The sub-agents the Sub-agents section draws a bar of, those that started last, unless every
 // one is asked for.
@@ -61,12 +57,11 @@ function figures({ cost, subShare, tokens, cacheShare, calls, failedTools, durat
 // then, when the harness logged part of the session's cost without a model call, how much, which
 // the chart does not draw. The stylesheet puts them under the chart's title.
 function costCard(cost: NonNullable<SessionView['cost']>, { copilot, logged }: SessionView['costFrom']) {
-  const part = (name: string, usd: Num, words: string) => (usd === NA || usd < 0.005 ? '' : `<div class="muted">${num(name, formatCost(usd))} ${words}</div>`);
   const noCall = cost.noCall === null ? '' : `<div class="muted">${num('noCall', formatCost(cost.noCall))} logged without a model call</div>`;
   return (
     `<div class="cost-card">${costChart(cost)}<div class="row headline">${num('total', formatCost(cost.total))}` +
     `<span class="grow"></span>${num('perHour', formatCostPerHour(cost.perHour))}</div>` +
-    `${part('copilot', copilot, 'from tokens at GitHub prices')}${part('logged', logged, `as ${esc(cost.harness)} logged it`)}${noCall}</div>`
+    `${costPart('copilot', copilot, 'from tokens at GitHub prices')}${costPart('logged', logged, `as ${esc(cost.harness)} logged it`)}${noCall}</div>`
   );
 }
 
@@ -108,12 +103,11 @@ function subAgents({ running, total, cost, agents }: NonNullable<SessionView['su
   return `<section data-part="subagents" class="box">${heading('Sub-agents', counts.join(''))}${rows.join('')}<div class="agents">${subAgentBars(agents, showAll)}</div></section>`;
 }
 
-// The session's own tool calls: the TOP_TOOLS most called by name, the rest summed as `others`.
+// The session's own tool calls: the NAMED_ROWS most called by name, the rest summed as `others`.
 function tools({ calls, failed, byTool }: NonNullable<SessionView['tools']>) {
-  const rest = byTool.slice(TOP_TOOLS);
-  const others = { name: 'others', calls: rest.reduce((sum, tool) => sum + tool.calls, 0), failed: rest.reduce((sum, tool) => sum + tool.failed, 0) };
-  const shown = rest.length === 0 ? byTool : [...byTool.slice(0, TOP_TOOLS), others];
-  const items = shown.map((tool) => `<div class="row item"><span class="grow">${esc(tool.name)}</span><span class="num">${formatCount(tool.calls)}</span>${failedOf(tool.failed)}</div>`);
+  const rows = topRows(byTool.map((tool) => ({ name: tool.name, values: [tool.calls, tool.failed] })), NAMED_ROWS);
+  // a tool's counts are never n/a, so neither are their sums
+  const items = rows.map(({ name, values: [count, fails] }) => `<div class="row item"><span class="grow">${esc(name)}</span><span class="num">${formatCount(count)}</span>${failedOf(fails as number)}</div>`);
   return `<section data-part="tools" class="box">${heading('Tools', `${num('toolCalls', formatCount(calls))} tool call${calls === 1 ? '' : 's'}${failedOf(failed, ' · ')}`)}${items.join('')}</section>`;
 }
 

@@ -156,11 +156,27 @@ export type RangeTab = 'spend' | 'cache' | 'health';
 // its value there.
 export type RangePoint = { key: string; v: Num };
 
+// A row of a Spend tab's list: what it is of (a repo, a model, a harness) and its cost.
+export type SpendRow = { name: string; cost: Num };
+
 // The Spend tab of a range (src/history/views.ts), over every session the history store holds,
 // sub-agents included: its cost (n/a when a model call of it logged none), tokens and model calls,
-// and its cost by day or month, null for Day; every figure n/a, and no chart, when the store
-// cannot be opened.
-export type SpendView = { cost: Num; tokens: Num; calls: Num; chart: RangePoint[] | null };
+// and its cost by day or month, null for Day; its cost by repo, by model (with its provider where
+// the harness logs one) and by harness, each costliest first, a cost n/a last; the cost of omp's
+// side calls; and where the cost comes from, the Copilot calls' cost from the Copilot price table
+// and the rest as the harnesses logged it (both n/a when the cost is). Every figure n/a, the lists
+// empty, no chart and no sources when the store cannot be opened.
+export type SpendView = {
+  cost: Num;
+  tokens: Num;
+  calls: Num;
+  chart: RangePoint[] | null;
+  byRepo: SpendRow[];
+  byModel: SpendRow[];
+  byHarness: SpendRow[];
+  sideCost: Num;
+  sources: { copilot: Num; logged: Num } | null;
+};
 
 // The range tab `tab` over `range`, as the history store holds it: the Spend tab's view when it is
 // the Spend tab, else null; `request`: the panel's number of the request.
