@@ -1,6 +1,8 @@
 // The history store: the SQLite file under the home that keeps the daily lines of the session
 // files a catch-up read, for good. The store is the real one, on `node:sqlite`, in a temporary
 // home.
+import { spawn } from 'node:child_process';
+import { once } from 'node:events';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -118,5 +120,29 @@ describe('history store', () => {
     expect(s.meta('caughtUp')).toBeNull();
     s.setMeta('caughtUp', '2026-11-27');
     expect(s.meta('caughtUp')).toBe('2026-11-27');
+  });
+
+  test('a write waits for another process that holds the store', async () => {
+    const home = tempHome();
+    const s = open(home);
+    // another process, as the dev plugin beside a test run or `sqlite3`, writing for 300 ms: a
+    // real delay, as the store's write blocks in SQLite's own wait, which no mock clock drives
+    const other = spawn(process.execPath, [
+      '-e',
+      `const { DatabaseSync } = require('node:sqlite');
+      const db = new DatabaseSync(process.argv[1]);
+      db.exec('BEGIN IMMEDIATE');
+      db.exec("INSERT INTO meta (key, value) VALUES ('other', '1')");
+      console.log('locked');
+      setTimeout(() => { db.exec('COMMIT'); db.close(); }, 300);`,
+      join(home, STORE_FILE),
+    ]);
+    await once(other.stdout, 'data');
+
+    s.setMeta('caughtUp', '2026-11-27');
+
+    await once(other, 'exit');
+    expect(s.meta('caughtUp')).toBe('2026-11-27');
+    expect(s.meta('other')).toBe('1');
   });
 });

@@ -42,12 +42,17 @@ export type Store = {
 // The figure columns, quoted: `read` and `write` read as words of SQL otherwise.
 const COLUMNS = LINE_FIGURES.map((name) => `"${name}"`);
 
+// How long a statement waits for another process that holds the store.
+const BUSY_MS = 5000;
+
 // Opens the store of the home `home`, making its folder and file when missing, and adds each
-// figure column its lines lack, 0 in the lines it holds.
+// figure column its lines lack, 0 in the lines it holds. A statement waits up to BUSY_MS for
+// another process that holds the store, such as a test run beside the plugin or `sqlite3`.
 export function openStore(home: string): Store {
   const path = join(home, STORE_FILE);
   mkdirSync(dirname(path), { recursive: true });
   const db = new DatabaseSync(path);
+  db.exec(`PRAGMA busy_timeout=${BUSY_MS}`);
   db.exec('PRAGMA journal_mode=WAL');
   db.exec(`
     CREATE TABLE IF NOT EXISTS files (
