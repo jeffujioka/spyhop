@@ -212,6 +212,7 @@ for (const [name, over, message] of [
   ['a Year chart of 11 points', { [RANGE('cache', 'year')]: answer({ result: { cache: { chart: months(11) }, notRead: [] } }) }, 'the Cache chart over a year does not hold 12 points'],
   ['a Trace lane of 241 spans', { [TRACE_C1]: traceAnswer(241) }, 'the Trace answer of "c1" is not under 1048576 bytes with lanes of at most 240 spans'],
   ['a Trace without lanes of a card the fleet lists', { [TRACE_C1]: answer({ result: { request: 4, session: {} } }), [FLEET_AGAIN]: answer({ result: fleetListing(['c1']) }) }, 'the Trace answer of "c1" has no trace while the fleet still lists it'],
+  ['a linked card with a null Trace', { [TRACE_C1]: answer({ result: { request: 4, session: { linked: true, trace: null } } }), [FLEET_AGAIN]: answer({ result: fleetListing(['c1']) }) }, 'the Trace answer of "c1" has no trace while the fleet still lists it'],
 ] as [string, Record<string, string>, string][]) {
   test(`${name} stops the check`, async () => {
     const home = tempHome();
@@ -232,6 +233,45 @@ test('a host not read that the fleet does not reach passes and is printed', asyn
 
   assert.equal(run.status, 0, run.stderr);
   assert.ok(run.stdout.includes('frame check: not read, not reached by the fleet: maria'), run.stdout);
+});
+
+const WATCH = 'plugin dev watch . --json';
+const errored = JSON.stringify({ type: 'loaded', pluginKey: 'local.spyhop', added: true, status: 'errored', error: 'plugin local.spyhop changed or is no longer approved' });
+const running = JSON.stringify({ type: 'status', pluginKey: 'local.spyhop', status: 'running', previousStatus: 'errored' });
+
+test('a plugin loaded errored waits for the status line that says it runs', async () => {
+  const home = tempHome();
+  countCatchUps(home, 1);
+
+  const run = await wholeCheck(home, [], 2, { [WATCH]: `${errored}\n${running}\n` });
+
+  assert.equal(run.status, 0, run.stderr);
+});
+
+test('a plugin loaded errored that never runs fails with the watch output before the restart', () => {
+  const orca = standIns({ homes: {}, orca: { ...answeredUpToFleet(fleetListing(['c1'])), [WATCH]: `${errored}\n` } });
+
+  const run = frameCheck();
+
+  assert.equal(run.status, 1);
+  assert.ok(run.stderr.includes('frame check: plugin local.spyhop is still errored after the watch loaded it'), run.stderr);
+  assert.ok(run.stderr.includes('no longer approved'), run.stderr);
+  assert.ok(!orca.orca().includes(RESTART));
+});
+
+test('a card that is not linked has no Trace to check, and a linked one still does', async () => {
+  const home = tempHome();
+  countCatchUps(home, 1);
+  const over = {
+    'plugin dev request . spyhop.fleet --data {"request":1} --json': answer({ result: fleetListing(['c1', 'c2']) }),
+    [SESSION('{"request":2,"card":"c2"}')]: answer({ result: { request: 2, session: { card: { reading: null } } } }),
+    [SESSION('{"request":4,"card":"c2","trace":true}')]: answer({ result: { request: 4, session: { linked: false, trace: null } } }),
+  };
+
+  const run = await wholeCheck(home, [], 2, over);
+
+  assert.equal(run.status, 0, run.stderr);
+  assert.ok(run.stdout.includes('frame check: "c2" is not linked; its Trace is not checked'), run.stdout);
 });
 
 test('a computer without sqlite3 fails before any step', () => {

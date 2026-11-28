@@ -85,6 +85,17 @@ loaded() {
   node -e 'process.exit(require("fs").readFileSync(process.argv[1], "utf8").split("\n").some((line) => { try { return JSON.parse(line).type === "loaded"; } catch { return false; } }) ? 0 : 1)' "$1"
 }
 
+# Whether the watch's output `$1` holds a `loaded` event whose status is `errored`: a plugin Orca
+# loaded but has not approved again yet.
+loaded_errored() {
+  node -e 'process.exit(require("fs").readFileSync(process.argv[1], "utf8").split("\n").some((line) => { try { const a = JSON.parse(line); return a.type === "loaded" && a.status === "errored"; } catch { return false; } }) ? 0 : 1)' "$1"
+}
+
+# Whether the watch's output `$1` holds a `status` event of a status other than `errored`.
+recovered() {
+  node -e 'process.exit(require("fs").readFileSync(process.argv[1], "utf8").split("\n").some((line) => { try { const a = JSON.parse(line); return a.type === "status" && a.status !== "errored"; } catch { return false; } }) ? 0 : 1)' "$1"
+}
+
 # Records the answer `$1` of the command named `$2`, which exited with `$3`, as
 # .orca/shots/frame-check-$2.json, and prints whether it drew the panel: `$4` over the answer `a`.
 record() {
@@ -149,6 +160,24 @@ if [ -z "$dry" ]; then
     fi
     sleep 0.5
   done
+  # A plugin loaded `errored` runs again a few seconds later, when the watch has re-approved it,
+  # and a restart or an open before then fails: so the script waits for that status event.
+  if loaded_errored "$work/watch.jsonl"; then
+    deadline=$((SECONDS + 60))
+    until recovered "$work/watch.jsonl"; do
+      if ! kill -0 "$watch" 2>/dev/null; then
+        recovered "$work/watch.jsonl" && break
+        watch=
+        deadline=$SECONDS
+      fi
+      if [ "$SECONDS" -ge "$deadline" ]; then
+        echo "frame check: plugin $KEY is still errored after the watch loaded it" >&2
+        cat "$work/watch.jsonl" >&2
+        exit 1
+      fi
+      sleep 0.5
+    done
+  fi
 fi
 
 # A watch of a folder that is already loaded, as after `orca plugin dev load .`, keeps its worker
@@ -260,13 +289,18 @@ if [ -z "$dry" ]; then
   done
 fi
 # The Trace of each card, asked after the catch-up wait, as the Trace reads the history store: under
-# Orca's limit, every lane of at most TRACE_SPANS spans (src/core/trace.js). A card the fleet still
-# lists must have a Trace; one that left Orca is passed over.
+# Orca's limit, every lane of at most TRACE_SPANS spans (src/core/trace.js). A card whose session is
+# not linked has no history, so no Trace, and is passed over; a linked card the fleet still lists
+# must have a Trace; one that left Orca is passed over.
 while IFS= read -r card <&3; do
   [ -n "$card" ] || continue
   trace=$(node -e 'console.log(JSON.stringify({ request: 4, card: JSON.parse(process.argv[1]), trace: true }))' "$card")
   run "$work/trace.json" plugin dev request . spyhop.session --data "$trace" --json
   [ -z "$dry" ] || continue
+  if holds "$work/trace.json" 'a.result.result.session?.linked === false'; then
+    echo "frame check: $card is not linked; its Trace is not checked"
+    continue
+  fi
   if holds "$work/trace.json" 'a.result.result.session?.trace == null'; then
     if listed "$trace"; then
       echo "frame check: the Trace answer of $card has no trace while the fleet still lists it" >&2
