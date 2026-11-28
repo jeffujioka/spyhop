@@ -4,12 +4,13 @@
 # step's answer on stderr. It validates the folder, records `orca plugin check`, loads the folder
 # with `orca plugin dev watch` (stopped when the script exits), restarts its worker, opens the
 # panel, asks the worker
-# for the fleet, then for the session of each of its cards, waits for a catch-up of the dev
-# plugin's own to end on the history store, asks the worker for the Spend tab over a day and a
-# year, checks every answer's
+# for the fleet, then for the session of each of its cards and its Trace, waits for a catch-up of
+# the dev plugin's own to end on the history store, asks the worker for the Spend tab over a day
+# and a year and for the Cache and Health tabs over a week and a year, checks every answer's
 # bounds, shoots the fleet screen 300 and 420 pixels wide in Orca's dark and light themes, keeping
 # each PNG, and reads the logs. The themes take effect only while Orca's window is hidden or
-# minimized.
+# minimized. The shots show the Live screen only: an html panel takes no `--act`, so no shot can
+# press another tab, and the other tabs are read through the page harness (Task 6.4).
 # `plugin check` lists no HTML panel and `plugin shot --scenario` refuses one (Orca 1.4.273), so
 # the live shot of the dev plugin is the frame check and `plugin check` is only recorded.
 # Usage: bash scripts/frame-check.sh [--dry-run]; --dry-run prints each `orca` command line and
@@ -29,6 +30,10 @@ SHOTS=.orca/shots
 MAX_ANSWER_BYTES=1048576
 # The most points a series of a session answer holds (SERIES_POINTS, spec D45).
 SERIES_POINTS=120
+# The most spans a lane of a Trace holds (TRACE_SPANS, src/core/trace.js).
+TRACE_SPANS=240
+# The points of a Year chart: the 12 calendar months that end with this month.
+YEAR_POINTS=12
 # The refreshes within which every sub-agent of a session is read, at 16 a refresh.
 READ_REFRESHES=30
 # A little over the panel's refresh period of 2 s.
@@ -177,6 +182,7 @@ while IFS= read -r card <&3; do
   [ -n "$card" ] || continue
   data=$(node -e 'console.log(JSON.stringify({ request: 2, card: JSON.parse(process.argv[1]) }))' "$card")
   refresh=1
+  gone=
   while :; do
     run "$work/session.json" plugin dev request . spyhop.session --data "$data" --json
     [ -z "$dry" ] || break
@@ -190,6 +196,7 @@ while IFS= read -r card <&3; do
         exit 1
       fi
       echo "frame check: $card left Orca during the check; its session is not checked"
+      gone=1
       break
     fi
     expect "const s = a.result.result.session; Buffer.byteLength(JSON.stringify(a.result.result)) < $MAX_ANSWER_BYTES && [s.tokens?.points, s.context?.points, s.cost?.own, s.cost?.sub].every((series) => !Array.isArray(series) || series.length <= $SERIES_POINTS)" \
@@ -202,6 +209,13 @@ while IFS= read -r card <&3; do
     fi
     refresh=$((refresh + 1))
   done
+  [ -z "$gone" ] || continue
+  # The Trace of the card: under Orca's limit, every lane of at most TRACE_SPANS spans
+  # (src/core/trace.js); a Trace that cannot be read is null and has no lane to bound.
+  trace=$(node -e 'console.log(JSON.stringify({ request: 4, card: JSON.parse(process.argv[1]), trace: true }))' "$card")
+  run "$work/trace.json" plugin dev request . spyhop.session --data "$trace" --json
+  [ -n "$dry" ] || expect "Buffer.byteLength(JSON.stringify(a.result.result)) < $MAX_ANSWER_BYTES && (a.result.result.session?.trace?.lanes ?? []).every((lane) => lane.spans.length <= $TRACE_SPANS)" \
+    "the Trace answer of $card is not under $MAX_ANSWER_BYTES bytes with lanes of at most $TRACE_SPANS spans" "$work/trace.json"
 done 3<<EOF
 $cards
 EOF
@@ -230,6 +244,20 @@ for range in day year; do
   run "$work/range.json" plugin dev request . spyhop.range --data "{\"request\":3,\"tab\":\"spend\",\"range\":\"$range\"}" --json
   [ -n "$dry" ] || expect "Buffer.byteLength(JSON.stringify(a.result.result)) < $MAX_ANSWER_BYTES && (typeof a.result.result.spend.cost === 'number' || a.result.result.spend.cost === 'n/a')" \
     "the Spend answer over a $range is not under $MAX_ANSWER_BYTES bytes with a cost that is a number or n/a" "$work/range.json"
+  [ -n "$dry" ] || [ "$range" != year ] || expect "a.result.result.spend.chart?.length === $YEAR_POINTS" \
+    "the Spend chart over a year does not hold $YEAR_POINTS points" "$work/range.json"
+done
+# The Cache and Health tabs over a week and a year: each answer is under Orca's limit with its
+# tab's view an object, `notRead` empty (every Orca host the fleet reaches was read), and, over a
+# year, the Cache chart of YEAR_POINTS points; the Health tab has no chart.
+for tab in cache health; do
+  for range in week year; do
+    run "$work/range.json" plugin dev request . spyhop.range --data "{\"request\":3,\"tab\":\"$tab\",\"range\":\"$range\"}" --json
+    [ -n "$dry" ] || expect "Buffer.byteLength(JSON.stringify(a.result.result)) < $MAX_ANSWER_BYTES && typeof a.result.result.$tab === 'object' && a.result.result.$tab !== null && Array.isArray(a.result.result.notRead) && a.result.result.notRead.length === 0" \
+      "the $tab answer over a $range is not under $MAX_ANSWER_BYTES bytes with a $tab object and no host not read" "$work/range.json"
+    [ -n "$dry" ] || [ "$tab" != cache ] || [ "$range" != year ] || expect "a.result.result.cache.chart?.length === $YEAR_POINTS" \
+      "the Cache chart over a year does not hold $YEAR_POINTS points" "$work/range.json"
+  done
 done
 printf '+ test -s %s\n' "$STORE"
 [ -n "$dry" ] || test -s "$STORE" || { echo "frame check: the history store $STORE is missing or empty" >&2; exit 1; }

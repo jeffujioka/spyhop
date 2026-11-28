@@ -43,19 +43,32 @@ function frameCheck() {
 
 const RESTART = 'plugin restart local.spyhop --json';
 
-// Every step of a whole run answered as Orca does, a fleet without cards, a shot as the PNG
-// `png` and the log lines `lines`.
-function wholeRun(png: string, lines: string[]) {
+// Every step of a whole run answered as Orca does, a fleet with the card `c1`, a shot as the PNG
+// `png` and the log lines `lines`; `over` replaces answers, by command line.
+const RANGE = (tab: string, range: string) => `plugin dev request . spyhop.range --data {"request":3,"tab":"${tab}","range":"${range}"} --json`;
+const SESSION = (data: string) => `plugin dev request . spyhop.session --data ${data} --json`;
+const SESSION_C1 = SESSION('{"request":2,"card":"c1"}');
+const TRACE_C1 = SESSION('{"request":4,"card":"c1","trace":true}');
+const months = (n: number) => Array.from({ length: n }, (_, i) => ({ key: `2026-${i}`, v: 0 }));
+const lane = (lane: string, spans: number) => ({ lane, totalMs: 0, spans: Array.from({ length: spans }, (_, i) => [i, i + 1]) });
+const traceAnswer = (spans: number) => answer({ result: { request: 4, session: { trace: { startMs: 0, endMs: 1, lanes: [lane('thinking', spans), lane('tools', 1)], agents: [] } } } });
+function wholeRun(png: string, lines: string[], over: Record<string, string> = {}) {
   const shot = answer({ path: png, errors: [], settled: true, themeApplied: true });
   const answers: Record<string, string> = {
-    ...answeredUpToFleet(fleetListing([])),
+    ...answeredUpToFleet(fleetListing(['c1'])),
+    [SESSION_C1]: answer({ result: { request: 2, session: { card: { reading: null } } } }),
+    [TRACE_C1]: traceAnswer(240),
+    [RANGE('spend', 'day')]: answer({ result: { spend: { cost: 0 } } }),
+    [RANGE('spend', 'year')]: answer({ result: { spend: { cost: 0, chart: months(12) } } }),
+    [RANGE('cache', 'week')]: answer({ result: { cache: { chart: months(7) }, notRead: [] } }),
+    [RANGE('cache', 'year')]: answer({ result: { cache: { chart: months(12) }, notRead: [] } }),
+    [RANGE('health', 'week')]: answer({ result: { health: {}, notRead: [] } }),
+    [RANGE('health', 'year')]: answer({ result: { health: {}, notRead: [] } }),
     'plugin shot local.spyhop --panel spyhop --width 300 --json': answer({ path: png, errors: [], settled: true }),
     'plugin logs local.spyhop --json': answer({ pluginKey: 'local.spyhop', lines: lines.map((line) => ({ ts: 1, level: 'info', line })) }),
     'plugin dev unload . --json': answer({}),
+    ...over,
   };
-  for (const range of ['day', 'year']) {
-    answers[`plugin dev request . spyhop.range --data {"request":3,"tab":"spend","range":"${range}"} --json`] = answer({ result: { spend: { cost: 0 } } });
-  }
   for (const width of [300, 420]) for (const theme of ['dark', 'light']) answers[`plugin shot local.spyhop --panel spyhop --width ${width} --theme ${theme} --json`] = shot;
   return answers;
 }
@@ -73,8 +86,8 @@ function countCatchUps(home: string, count: number) {
 // Runs a copy of the script in the home `home`, `orca` answering a whole run (wholeRun) with the
 // log lines `lines` and holding the restart: once the script asks for it, the store counts `after`
 // catch-ups and the restart is answered. Its exit status and output, and the `orca` calls.
-async function wholeCheck(home: string, lines: string[], after: number) {
-  const orca = standIns({ homes: {}, orca: wholeRun(png(), lines), held: [RESTART] });
+async function wholeCheck(home: string, lines: string[], after: number, over: Record<string, string> = {}) {
+  const orca = standIns({ homes: {}, orca: wholeRun(png(), lines, over), held: [RESTART] });
   const folder = tempHome();
   mkdirSync(join(folder, 'scripts'));
   copyFileSync(new URL('../scripts/frame-check.sh', import.meta.url), join(folder, 'scripts', 'frame-check.sh'));
@@ -132,7 +145,7 @@ test('a catch-up that cannot read a file of this computer fails', async () => {
   assert.ok(run.stderr.includes('frame check: the logs hold a catch-up that cannot read a file of this computer'), run.stderr);
 });
 
-test('the whole-panel steps are listed', () => {
+test('the steps of every tab are listed', () => {
   const orca = standIns({ homes: {}, orca: {} });
 
   // throws when the script exits with anything but 0
@@ -151,8 +164,13 @@ test('the whole-panel steps are listed', () => {
     'plugin open local.spyhop --panel spyhop',
     'plugin dev request . spyhop.fleet --data {"request":1} --json',
     'plugin dev request . spyhop.session --data {"request":2,"card":"<id>"} --json',
+    'plugin dev request . spyhop.session --data {"request":4,"card":"<id>","trace":true} --json',
     'plugin dev request . spyhop.range --data {"request":3,"tab":"spend","range":"day"} --json',
     'plugin dev request . spyhop.range --data {"request":3,"tab":"spend","range":"year"} --json',
+    'plugin dev request . spyhop.range --data {"request":3,"tab":"cache","range":"week"} --json',
+    'plugin dev request . spyhop.range --data {"request":3,"tab":"cache","range":"year"} --json',
+    'plugin dev request . spyhop.range --data {"request":3,"tab":"health","range":"week"} --json',
+    'plugin dev request . spyhop.range --data {"request":3,"tab":"health","range":"year"} --json',
     'plugin shot local.spyhop --panel spyhop --width 300 --json',
     'plugin shot local.spyhop --panel spyhop --width 300 --theme dark --json',
     'plugin shot local.spyhop --panel spyhop --width 300 --theme light --json',
@@ -184,6 +202,24 @@ test('the insights steps are listed', () => {
   assert.ok(counted >= 0 && counted < lines.indexOf(`${step}plugin dev watch . --json`), out);
   assert.deepEqual(orca.orca(), []);
 });
+
+const big = 'x'.repeat(1048576);
+for (const [name, over, message] of [
+  ['an answer over 1 MiB', { [RANGE('health', 'week')]: answer({ result: { health: {}, notRead: [], big } }) }, 'the health answer over a week is not under 1048576 bytes'],
+  ['a host not read', { [RANGE('cache', 'week')]: answer({ result: { cache: {}, notRead: ['maria'] } }) }, 'the cache answer over a week is not under 1048576 bytes with a cache object and no host not read'],
+  ['a Year chart of 11 points', { [RANGE('cache', 'year')]: answer({ result: { cache: { chart: months(11) }, notRead: [] } }) }, 'the Cache chart over a year does not hold 12 points'],
+  ['a Trace lane of 241 spans', { [TRACE_C1]: traceAnswer(241) }, 'the Trace answer of "c1" is not under 1048576 bytes with lanes of at most 240 spans'],
+] as [string, Record<string, string>, string][]) {
+  test(`${name} stops the check`, async () => {
+    const home = tempHome();
+    countCatchUps(home, 1);
+
+    const run = await wholeCheck(home, [], 2, over);
+
+    assert.equal(run.status, 1);
+    assert.ok(run.stderr.includes(`frame check: ${message}`), run.stderr);
+  });
+}
 
 test('a computer without sqlite3 fails before any step', () => {
   const orca = standIns({ homes: {}, orca: {} });
