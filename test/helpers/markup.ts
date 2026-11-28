@@ -71,3 +71,7 @@ export function text(html: string): string {
 export function textOutsideFigures(html: string): string {
   return text(html.replace(/<span class="num[ "][^>]*>[^<]*<\/span>/g, ' '));
 }
+
+// The rows of the Spend tab's list `list` (`repo`, `model` or `harness`, its `data-list`) in
+// `html`, each as the text it shows.
+export const listOf = (html: string, list: string) => parts(parts(html, 'data-list', list)[0], 'class', 'row item').map(text);

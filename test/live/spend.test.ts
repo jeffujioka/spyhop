@@ -10,7 +10,7 @@ import { test } from 'node:test';
 import { setEnv } from '../helpers/env.ts';
 import { rangeOf } from '../helpers/history.ts';
 import { ompSession, spent, type OmpCall } from '../helpers/live.ts';
-import { attr, figure, parts, text } from '../helpers/markup.ts';
+import { attr, figure, listOf, parts, text } from '../helpers/markup.ts';
 import { withCopilotPrices } from '../helpers/prices.ts';
 
 // The clock of these tests: 2026-11-28 15:00, in UTC unless a test sets another time zone.
@@ -68,10 +68,6 @@ const reposSpent = (costs: Record<string, number>) => (home: string) =>
     execFileSync('git', ['init', '-q'], { cwd: folder });
     execFileSync('git', ['remote', 'add', 'origin', repo], { cwd: folder });
   });
-
-// The rows of the Spend tab's list `list` (`repo`, `model` or `harness`) in `html`, each as the
-// text it shows.
-const listOf = (html: string, list: string) => parts(parts(html, 'data-list', list)[0], 'class', 'row item').map(text);
 
 test('Eight repos', async () => {
   const costs = { r1: 8, r2: 7, r3: 6, r4: 5, r5: 4, r6: 3, r7: 2, r8: 1 };

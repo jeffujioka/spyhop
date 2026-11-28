@@ -10,7 +10,7 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 import { caughtUp } from '../helpers/history.ts';
 import { claudeSession, FIX, folderOf, ompSession, type OmpCall, open, openOnFleet } from '../helpers/live.ts';
-import { attr, figure, parts, text } from '../helpers/markup.ts';
+import { attr, figure, listOf, parts, text } from '../helpers/markup.ts';
 import { withCopilotPrices } from '../helpers/prices.ts';
 
 // The clock of this test: 2026-11-28 15:00 UTC.
@@ -18,10 +18,6 @@ const CLOCK = Date.parse('2026-11-28T15:00:00.000Z');
 
 // Epoch ms of `hhmm` UTC on `day` (YYYY-MM-DD).
 const on = (day: string, hhmm: string) => Date.parse(`${day}T${hhmm}:00.000Z`);
-
-// The rows of the Spend tab's list `list` (`repo`, `model` or `harness`) in `html`, each as the
-// text it shows.
-const listOf = (html: string, list: string) => parts(parts(html, 'data-list', list)[0], 'class', 'row item').map(text);
 
 test('costs end to end', async () => {
   withCopilotPrices({ 'claude-opus-5.5': { input: 500, cachedInput: 50, cacheWrite: 625, output: 2500, tiers: [] } });
@@ -38,8 +34,8 @@ test('costs end to end', async () => {
     prepare: (at) => {
       home = at;
       ompSession(home, folderOf(home, FIX), { title: 'Fix the login bug', calls });
-      // a Claude Code session whose `cost-state` of 27 November gives 1.00 USD and of 28 November
-      // 1.80 USD, each dated by the model call before it
+      // a Claude Code session whose `cost-state` of 27 November gives 1.00 USD in all and of 28
+      // November 1.80 USD in all, over two models, each dated by the model call before it
       claudeSession(home, join(home, 'web'), {
         model: 'claude-opus-5-5',
         calls: [{ at: on('2026-11-27', '12:00'), output: 1_000 }, { at: on('2026-11-28', '12:00'), output: 1_000 }],
