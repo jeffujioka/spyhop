@@ -3,6 +3,7 @@ import { NA, readStats } from '../../src/core/providers/index.js';
 import { fixtureText } from '../helpers/files.ts';
 import { ompMessage } from './helpers/entries.ts';
 import { expect } from './helpers/expect.ts';
+import { withCopilotPrices } from '../helpers/prices.ts';
 
 // One synthetic assistant message entry; `usage` is left out when null.
 const assistant = (isoTime, usage, model = 'm') => ompMessage('assistant', isoTime, usage, { model });
@@ -113,6 +114,22 @@ describe('omp session: the series of the whole session', () => {
     // each call after the first read from the cache: no cold start
     const warm = whole([assistant(at(1), usage(0, 300_000, 10, 1)), assistant(at(2), usage(300_000, 10, 10, 1))]);
     expect(warm.detail.cold).toEqual({ count: 0, tokens: 0, cost: 0 });
+  });
+
+  test('a Copilot cold start costs its cache write at the price table', () => {
+    withCopilotPrices({ m: { input: 100, cachedInput: 10, cacheWrite: 125, output: 500, tiers: [{ over: 500_000, input: 200, cachedInput: 20, cacheWrite: 250, output: 1000 }] } });
+    const copilot = (minute: number, u: object) => ompMessage('assistant', at(minute), u, { provider: 'github-copilot', model: 'm' });
+
+    const stats = whole([
+      copilot(1, usage(0, 300_000, 10, 1)),
+      copilot(2, usage(300_000, 10, 10, 1)),
+      copilot(3, usage(0, 600_000, 10, 1, 2.5, 2.25)),
+    ]);
+
+    // a prompt of 600,010 tokens, past the tier: 600,000 written at 250 credits per million, not
+    // the 2.25 USD omp logged
+    expect(stats.detail.cold.count).toBe(1);
+    expect(stats.detail.cold.cost).toBeCloseTo(1.5, 10);
   });
 
   test('an aborted call that logged no usage is no model call', () => {

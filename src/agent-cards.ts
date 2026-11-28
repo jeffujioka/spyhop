@@ -33,7 +33,8 @@ export type OrcaAgent = {
 };
 
 // The series and tallies a provider's fold keeps over a whole session file (src/core/series.js):
-// the bounded series of model calls, the compactions with their tokens before and after (null:
+// the bounded series of model calls, and of side calls (`sides`, omp's; none for another
+// harness), the compactions with their tokens before and after (null:
 // not logged), the cold starts, the tool calls by tool and the cost (null: not logged) and
 // tokens by model, with whether the file's own model calls (`main`) and its side calls (`side`)
 // used it (omp's; another harness's are its own model calls'), the agent kind and the model a
@@ -42,6 +43,7 @@ export type OrcaAgent = {
 // src/core/series.js each, oldest first).
 export type SessionSeries = {
   points: Point[];
+  sides: Point[];
   marks: { t: number; before: number | null; after: number | null }[];
   cold: { count: number; tokens: number; cost: number | null };
   tools: Record<string, { calls: number; failed: number }>;

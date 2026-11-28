@@ -72,6 +72,8 @@ function emptyState(opts) {
     // the cost and tokens by `<provider>/<model>`, each with whether the session's own model
     // calls (`main`) and its side calls (`side`) used it
     models: {},
+    // the bounded series of the side calls, apart from the model calls', for the cost over time
+    sides: newSeries(),
     minutes: [],
     // the `session` entry is the second line of a file, so a state that holds it starts at
     // the top of the file
@@ -162,11 +164,16 @@ function fold(state, entries, opts) {
       if (typeof e.resolvedModel === 'string') s.model = e.resolvedModel;
     } else if (e.type === 'model_usage') {
       // a side call (a title, a recap, a prediction of the next prompt): in the session's cost
-      // and tokens, but no model call of the series, the cold starts or the cache figures
+      // and tokens and its own series, but no model call of the series, the cold starts or the
+      // cache figures
       const spent = costOf(e);
       add(s.totalTokens, e.usage?.totalTokens);
       addSpent(s, e, spent);
-      if (spentTokens(e.usage)) addSpend(s, e, at, { t: at, read: 0, write: 0, uncached: 0, output: tokenCount(e.usage.output), cost: spent }, true);
+      if (spentTokens(e.usage)) {
+        const call = { t: at, read: 0, write: 0, uncached: 0, output: tokenCount(e.usage.output), cost: spent, context: null };
+        addCall(s.sides, call);
+        addSpend(s, e, at, call, true);
+      }
     } else if (e.type === 'message' && e.message) {
       const time = Date.parse(e.timestamp);
       s.firstMessage ??= time;

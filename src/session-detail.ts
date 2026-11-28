@@ -35,8 +35,8 @@ export function sessionDetail(card: BuiltCard, { home, host, view }: { home: str
   const reached = series
     ? [...series.points.flatMap((point) => (point.context === null ? [] : [point.context])), ...series.marks.flatMap((mark) => (mark.before === null ? [] : [mark.before]))]
     : [];
-  // the cost the session's own model calls logged, after each of them
-  const own = series ? cumulativeCost(series.points) : NA;
+  // the cost the session's own model calls and side calls logged, after each of them
+  const own = series ? cumulativeCost(spendsOf([series])) : NA;
   const cacheRead = sumOf([series, ...subSeries].map((kept) => (kept ? kept.points.reduce((sum, point) => sum + point.read, 0) : NA)));
   return {
     card: view,
@@ -72,11 +72,7 @@ export function sessionDetail(card: BuiltCard, { home, host, view }: { home: str
       perHour: cost !== NA && durationMs !== NA && durationMs > 0 ? cost / (durationMs / HOUR_MS) : NA,
       own,
       noCall: noCallCost(stats.costUsd, own),
-      // the sub-agents' model calls merged by time, as one series of at most SERIES_POINTS points
-      sub:
-        subCost === NA || subSeries.some((kept) => kept === null)
-          ? NA
-          : cumulativeCost(groupPoints(subSeries.flatMap((kept) => kept!.points).sort((a, b) => a.t - b.t), SERIES_POINTS)),
+      sub: subCost === NA || subSeries.some((kept) => kept === null) ? NA : cumulativeCost(spendsOf(subSeries as SessionSeries[])),
     },
     subAgents: view.subAgents && {
       ...view.subAgents,
@@ -95,6 +91,12 @@ export function sessionDetail(card: BuiltCard, { home, host, view }: { home: str
       host,
     },
   };
+}
+
+// The model calls and side calls of `kept` merged by time, as one series of at most SERIES_POINTS
+// points.
+function spendsOf(kept: SessionSeries[]): Point[] {
+  return groupPoints(kept.flatMap(({ points, sides }) => [...points, ...sides]).sort((a, b) => a.t - b.t), SERIES_POINTS);
 }
 
 // A sub-agent as the Sub-agents section draws it. Its start and end are the times of its

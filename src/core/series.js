@@ -186,8 +186,9 @@ export function toolAnswered(state, id, failed) {
 // series is not whole (opencode's, when its tool calls cannot be read) gives `recent` alone.
 // `kind` and `model` are those a sub-agent's transcript records of itself (omp: its
 // `session_init`), null when it records none; `start` and `end` the times of the file's first
-// and last entry, null without one; `minutes` the sums of its newest minutes (`addMinute`).
-export function detailOf({ recent, series, marks, cold, tools, models, minutes, kind = null, model = null, firstEntry, lastEntry }) {
+// and last entry, null without one; `minutes` the sums of its newest minutes (`addMinute`);
+// `sides` the points of the series of its side calls (omp's), none for a harness without.
+export function detailOf({ recent, series, sides = null, marks, cold, tools, models, minutes, kind = null, model = null, firstEntry, lastEntry }) {
   if (!series) return { recent: [...recent] };
-  return structuredClone({ recent, points: series.points, marks, cold, tools, models, minutes, kind, model, start: firstEntry ?? null, end: lastEntry ?? null });
+  return structuredClone({ recent, points: series.points, sides: sides?.points ?? [], marks, cold, tools, models, minutes, kind, model, start: firstEntry ?? null, end: lastEntry ?? null });
 }

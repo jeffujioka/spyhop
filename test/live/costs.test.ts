@@ -12,11 +12,8 @@ import { withCopilotPrices } from '../helpers/prices.ts';
 
 const MINUTE = 60_000;
 
-// The session screen of FIX's omp session, whose model calls are `calls`.
-async function screenOf(calls: OmpCall[]) {
-  const { html } = await sessionOf([FIX], { prepare: (home) => ompSession(home, folderOf(home, FIX), { title: 'Fix the login bug', calls }) });
-  return html;
-}
+// The session answer and the session screen of FIX's omp session, whose model calls are `calls`.
+const screenOf = (calls: OmpCall[]) => sessionOf([FIX], { prepare: (home) => ompSession(home, folderOf(home, FIX), { title: 'Fix the login bug', calls }) });
 
 // The rows of the Models section of `html`, each as the text it shows.
 const models = (html: string) => parts(parts(html, 'data-part', 'models')[0], 'class', 'row item').map(text);
@@ -31,7 +28,7 @@ const copilotCall: OmpCall = { at: NOW - 2 * MINUTE, provider: 'github-copilot',
 test('Session cost with side calls', async () => {
   const opus = { provider: 'anthropic', model: 'claude-opus-5.5', output: 100 };
   const haiku = { provider: 'anthropic', model: 'claude-haiku-5.5', output: 100 };
-  const html = await screenOf([
+  const { html, answer } = await screenOf([
     { ...opus, at: NOW - 5 * MINUTE, cost: 0.5 },
     { ...haiku, at: NOW - 5 * MINUTE + 1, side: 'title-fork', cost: 0.04 },
     { ...opus, at: NOW - 4 * MINUTE, cost: 0.75 },
@@ -42,12 +39,17 @@ test('Session cost with side calls', async () => {
   assert.equal(figure(html, 'cost'), '$2.06');
   assert.equal(figure(html, 'calls'), '3');
   assert.deepEqual(models(html), ['anthropic/claude-opus-5.5 · main agent · $2.00', 'anthropic/claude-haiku-5.5 · side calls · $0.06']);
+  // the cost chart's own layer ends at the whole cost, side calls included
+  const own = answer.session!.cost!.own;
+  assert.ok(own !== 'n/a');
+  assert.equal(own.at(-1)!.v.toFixed(2), '2.06');
+  assert.equal(figure(html, 'noCall'), undefined);
 });
 
 test('Copilot call priced from the table', async () => {
   withCopilotPrices(OPUS_PRICES);
 
-  const html = await screenOf([copilotCall]);
+  const { html } = await screenOf([copilotCall]);
 
   assert.equal(figure(html, 'cost'), '$0.25');
 });
@@ -55,7 +57,7 @@ test('Copilot call priced from the table', async () => {
 test('Model missing from the table', async () => {
   withCopilotPrices(OPUS_PRICES);
 
-  const html = await screenOf([copilotCall, { at: NOW - MINUTE, provider: 'github-copilot', model: 'kimi-k3', uncached: 1_000, output: 100, cost: 0.01 }]);
+  const { html } = await screenOf([copilotCall, { at: NOW - MINUTE, provider: 'github-copilot', model: 'kimi-k3', uncached: 1_000, output: 100, cost: 0.01 }]);
 
   assert.equal(figure(html, 'cost'), 'n/a');
   assert.deepEqual(models(html), ['github-copilot/claude-opus-5.5 · main agent · $0.25', 'github-copilot/kimi-k3 · main agent · n/a']);
@@ -64,7 +66,7 @@ test('Model missing from the table', async () => {
 test('Other provider keeps its logged cost', async () => {
   withCopilotPrices(OPUS_PRICES);
 
-  const html = await screenOf([{ ...copilotCall, provider: 'anthropic', cost: 0.4 }]);
+  const { html } = await screenOf([{ ...copilotCall, provider: 'anthropic', cost: 0.4 }]);
 
   assert.equal(figure(html, 'cost'), '$0.40');
 });
@@ -74,7 +76,7 @@ test('Other provider keeps its logged cost', async () => {
 test('a Copilot call without usage costs nothing', async () => {
   withCopilotPrices(OPUS_PRICES);
 
-  const html = await screenOf([copilotCall, { at: NOW - MINUTE, provider: 'github-copilot', model: 'kimi-k3', uncached: 0, read: 0, write: 0, output: 0, cost: 0 }]);
+  const { html } = await screenOf([copilotCall, { at: NOW - MINUTE, provider: 'github-copilot', model: 'kimi-k3', uncached: 0, read: 0, write: 0, output: 0, cost: 0 }]);
 
   assert.equal(figure(html, 'cost'), '$0.25');
   assert.equal(figure(html, 'calls'), '1');
