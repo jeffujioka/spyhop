@@ -178,10 +178,15 @@ export type SpendView = {
   sources: { copilot: Num; logged: Num } | null;
 };
 
+// What the running catch-up is reading (src/history/catch-up.ts): the Orca host's name, the
+// harness's and the share of its bytes read, from 0 to 1.
+export type ReadProgress = { host: string; harness: string; share: number };
+
 // The range tab `tab` over `range`, as the history store holds it: the Spend tab's view when it is
 // the Spend tab, else null; `notRead`: the names of the Orca hosts the last catch-up could not
-// read, whose figures are those read before; `request`: the panel's number of the request.
-export type RangeAnswer = { request: number; tab: RangeTab; range: Range; spend: SpendView | null; notRead: string[] };
+// read, whose figures are those read before; `progress`: what the running catch-up is reading of
+// a host and harness never read through, else null; `request`: the panel's number of the request.
+export type RangeAnswer = { request: number; tab: RangeTab; range: Range; spend: SpendView | null; notRead: string[]; progress: ReadProgress | null };
 
 declare module 'orca' {
   interface PluginRequests {

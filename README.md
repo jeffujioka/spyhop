@@ -187,6 +187,9 @@ refresh gives it; a focused chart keeps the focus.
 The Spend tab is a range tab: Day, Week, Month or Year. It reads the history store (see What
 spyhop stores) and shows:
 
+- **Reading history: `<host>, <harness>, <n>%`**, while a catch-up reads an Orca host's harness
+  that was never read through, such as on the first catch-up: the host, the harness and the share
+  of its bytes (opencode: its model calls) read so far.
 - **What the range cost**, of every harness session in the history store, sub-agents included;
   when part of it is from Copilot calls, the part `from tokens at GitHub prices` and the rest as
   the harnesses logged it (see Costs). Beside it, the range's tokens and model calls.
@@ -288,6 +291,10 @@ catch-up again the calls created in the last 10 days, whose counts replace those
 opencode can update a call in place. A day older than that keeps the counts it was read with. A
 call counts on the day it was created, in its root session (its sub-agents' calls included), and
 in the repo of its own session's folder.
+
+A catch-up reads in two phases: first, on every Orca host at once, the files and opencode calls
+of the last 30 days, then the older ones, each phase's files newest first, so that a first
+catch-up of a long history shows the recent days soon.
 
 ## What spyhop stores
 

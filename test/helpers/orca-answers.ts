@@ -1,6 +1,7 @@
 // Orca's ids and the recorded answers the tests give the `orca` stand-in
 // (test/helpers/stand-ins.ts), shaped on this Mac's Orca: `orca host list` and
-// `orca environment list` with the SSH target `devbox` and with the paired server `jeff`.
+// `orca environment list` with the SSH target `devbox`, with the SSH host `starfish-bs` and with
+// the paired server `jeff`.
 import { answer } from './stand-ins.ts';
 
 // Orca's ids, as `orca host list` and `orca environment list` give them on this Mac: of the SSH
@@ -20,6 +21,13 @@ export const environmentListOf = (...environments: object[]) => answer({ environ
 
 // The two lists when the SSH target `devbox` is the only other Orca host.
 export const DEVBOX_LISTS = { 'host list --json': hostListOf(DEVBOX_HOST), 'environment list --json': environmentListOf() };
+
+// The two lists when the SSH host `starfish-bs`, reached as the ssh alias `starfish-bs`, is the
+// only other Orca host.
+export const STARFISH_LISTS = {
+  'host list --json': hostListOf(LOCAL_HOST, { kind: 'ssh', id: 'starfish-bs', name: 'starfish-bs', selector: '--host ssh:starfish-bs', connected: true }),
+  'environment list --json': environmentListOf(),
+};
 
 // The two lists when the paired server `jeff`, reached as the ssh alias `jeff`, is the only other
 // Orca host, and the command lines that list its agents and its terminals.

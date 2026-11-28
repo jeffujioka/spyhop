@@ -24,7 +24,8 @@
 // and every CATCH_UP_MS after.
 // `spyhop.range` answers a range tab from the history store (src/history/views.ts): at once while
 // a catch-up runs, else after a catch-up when the last one started RANGE_CATCH_UP_MS ago or more;
-// it names the Orca hosts the last catch-up could not read.
+// it names the Orca hosts the last catch-up could not read, and what the running one is reading
+// of a host and harness never read through.
 // A history store that cannot be opened is logged once; no catch-up runs then, and each range
 // tab's figures are n/a, while the fleet and the sessions are answered as ever. A range the store
 // cannot read is logged and answered n/a.
@@ -307,16 +308,17 @@ export default function activate(orca: OrcaWorkerApi): void {
 
   orca.panels.handle('spyhop.range', async ({ request, tab, range }): Promise<RangeAnswer> => {
     const history = await opening;
-    if (!history) return { request, tab, range, spend: tab === 'spend' ? SPEND_NA : null, notRead: [] };
+    if (!history) return { request, tab, range, spend: tab === 'spend' ? SPEND_NA : null, notRead: [], progress: null };
     const { store, catchUp } = history;
     if (!catchUp.running() && Date.now() - (catchUp.startedMs() ?? -Infinity) >= RANGE_CATCH_UP_MS) await caughtUp(catchUp, log);
-    if (tab !== 'spend') return { request, tab, range, spend: null, notRead: catchUp.notRead() };
+    const read = { notRead: catchUp.notRead(), progress: catchUp.progress() };
+    if (tab !== 'spend') return { request, tab, range, spend: null, ...read };
     // a read that fails, such as a store held past its busy timeout, is n/a until one succeeds
     try {
-      return { request, tab, range, spend: spendView(store, range, Date.now()), notRead: catchUp.notRead() };
+      return { request, tab, range, spend: spendView(store, range, Date.now()), ...read };
     } catch (error) {
       log(`spyhop: cannot read the history store: ${(error as Error).message}`);
-      return { request, tab, range, spend: SPEND_NA, notRead: catchUp.notRead() };
+      return { request, tab, range, spend: SPEND_NA, ...read };
     }
   });
 

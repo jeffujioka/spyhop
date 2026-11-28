@@ -1,10 +1,11 @@
-// The Spend tab of the live panel, as markup: the Orca hosts the last catch-up could not read,
-// when there are any; the range's cost, with where it comes from when part of it is from GitHub
+// The Spend tab of the live panel, as markup: what the running catch-up is reading, of a host and
+// harness never read through, and the Orca hosts the last catch-up could not read, when there are
+// any; the range's cost, with where it comes from when part of it is from GitHub
 // prices, tokens, model calls and side calls' cost; for Week, Month and Year its cost over time;
 // and its cost by repo, model and harness, each under its title and the line of what it means.
 // Pure: an answer in, a markup string out.
 
-import { formatCost, formatCount, orNa } from '../core/format.js';
+import { formatCost, formatCount, formatPercent, orNa } from '../core/format.js';
 import type { RangeAnswer, SpendRow, SpendView } from '../protocol.ts';
 import { rangeChart, usdLabel } from './charts.ts';
 import { costPart, esc, NAMED_ROWS, num, titled, topRows } from './html.ts';
@@ -27,8 +28,11 @@ function list(key: string, title: string, meaning: string, rows: SpendRow[]) {
 }
 
 // The Spend tab of `answer`; '' when it holds no Spend tab.
-export function spendTab({ range, spend, notRead }: RangeAnswer): string {
+export function spendTab({ range, spend, notRead, progress }: RangeAnswer): string {
   if (!spend) return '';
+  const reading = progress
+    ? `<p data-part="progress" class="muted">Reading history: ${esc(progress.host)}, ${esc(progress.harness)}, ${formatPercent(progress.share)}</p>`
+    : '';
   const unread = notRead.length > 0 ? `<p data-part="not-read" class="muted">Not read this time: ${esc(notRead.join(', '))}. Their figures are those read before.</p>` : '';
   const { cost, tokens, calls, chart, byRepo, byModel, byHarness, sideCost, sources } = spend;
   const figures =
@@ -45,5 +49,5 @@ export function spendTab({ range, spend, notRead }: RangeAnswer): string {
     list('repo', 'By repo', 'What each repo cost, by its origin, else its folder', byRepo) +
     list('model', 'By model', 'What each model cost, with its provider where the harness logs one', byModel) +
     list('harness', 'By harness', 'What each harness cost', byHarness);
-  return `${unread}${figures}${over}${lists}`;
+  return `${reading}${unread}${figures}${over}${lists}`;
 }

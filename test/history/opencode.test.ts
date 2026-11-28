@@ -20,7 +20,7 @@ import { tempHome } from '../helpers/files.ts';
 import { rangeOf, storeOf } from '../helpers/history.ts';
 import { claudeSession, ompSession, ompSubAgent, type OmpCall } from '../helpers/live.ts';
 import { figure, listOf } from '../helpers/markup.ts';
-import { environmentListOf, hostListOf, LOCAL_HOST } from '../helpers/orca-answers.ts';
+import { STARFISH_LISTS } from '../helpers/orca-answers.ts';
 import { withCopilotPrices } from '../helpers/prices.ts';
 
 let store: Store | undefined;
@@ -199,10 +199,7 @@ test('Two harnesses on two Orca hosts', async () => {
     range: 'week',
     now: CLOCK,
     homes: { 'starfish-bs': remoteHome },
-    orca: {
-      'host list --json': hostListOf(LOCAL_HOST, { kind: 'ssh', id: 'starfish-bs', name: 'starfish-bs', selector: '--host ssh:starfish-bs', connected: true }),
-      'environment list --json': environmentListOf(),
-    },
+    orca: STARFISH_LISTS,
     prepare: (home) => {
       // 100 calls of the session and 20 of its sub-agent: 120 calls, 2,000,000 tokens, 3.00 USD
       const api = join(home, 'api');

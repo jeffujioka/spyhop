@@ -22,7 +22,7 @@ import { tempHome } from '../helpers/files.ts';
 import { caughtUp, rangeOf, storeOf } from '../helpers/history.ts';
 import { mountOn, ompSession, spent } from '../helpers/live.ts';
 import { figure, listOf, parts, text } from '../helpers/markup.ts';
-import { environmentListOf, hostListOf, LOCAL_HOST } from '../helpers/orca-answers.ts';
+import { STARFISH_LISTS } from '../helpers/orca-answers.ts';
 import { withCopilotPrices } from '../helpers/prices.ts';
 import { readOnlyLine } from '../helpers/read-only.ts';
 import { standIns } from '../helpers/stand-ins.ts';
@@ -32,13 +32,6 @@ afterEach(() => {
   store?.close();
   store = undefined;
 });
-
-// `orca host list` and `orca environment list` with the SSH host `starfish-bs` the only other
-// Orca host.
-const STARFISH_LISTS = {
-  'host list --json': hostListOf(LOCAL_HOST, { kind: 'ssh', id: 'starfish-bs', name: 'starfish-bs', selector: '--host ssh:starfish-bs', connected: true }),
-  'environment list --json': environmentListOf(),
-};
 
 const ORIGIN = 'git@github.com:jeffujioka/spyhop.git';
 
