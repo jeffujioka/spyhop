@@ -91,12 +91,13 @@ function callsCost(session) {
 
 // Adds the model calls (see isCall) of `rows`, `historyRowsQuery`'s rows of opencode-sources.js,
 // to the daily lines of `ins` (src/core/insights.js), each on the day it was created, under its
-// model with its provider, at the cost of costOf. A row that logs no model is in no daily line.
+// model with its provider, at the cost of costOf, with the tokens `tokens` counts of it (none for
+// a call that logs no total and not all its parts). A row that logs no model is in no line.
 export function opencodeInsights(rows, ins) {
   for (const row of rows) {
     if (!isCall(row) || typeof row.modelId !== 'string' || !isNumber(row.created)) continue;
     const [uncached, read, write, output] = [row.input, row.cacheRead, row.cacheWrite, row.output].map(tokenCount);
-    const tokens = messageTotal(row) ?? uncached + read + write + output + tokenCount(row.reasoning);
+    const tokens = tokenCount(messageTotal(row));
     noteCall(ins, { end: row.created, model: modelKey(row.providerId, row.modelId), tokens, uncached, read, write, output, cost: costOf(row), copilot: row.providerId === COPILOT });
   }
 }

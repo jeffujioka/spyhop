@@ -27,13 +27,17 @@
 // folder, else `n/a`.
 //
 // On each host, the run then reads opencode's database (`databaseOf`, src/core/providers/
-// opencode-sources.js), a `files` row of its own, with `sqlite3 -readonly`; a host without one,
-// or without sqlite3, has none to read. Its first read pages every model call, by the time it
-// was created, PAGE_ROWS at a time; each later run replaces the database's lines of the day
-// OPENCODE_OPEN_DAYS before today and after, from the calls created since that day's start, since
-// opencode updates a call in place: an older day stays as it was read. A call counts on the day
-// it was created, in its root session (its `parent_id` followed up), `<host>\0opencode\0<root
-// session id>`, and in the repo of its own session's folder, the git origin as above.
+// opencode-sources.js), a `files` row of its own, with `sqlite3 -readonly`; a host without one
+// has none to read, and one there that cannot be read (`stat` finds it) is logged. Its first read
+// pages every model call, by the time it was created, PAGE_ROWS at a time; each later run
+// replaces the database's lines of the day OPENCODE_OPEN_DAYS before today and after, from the
+// calls created since that day's start, since opencode updates a call in place: an older day
+// stays as it was read. opencode indexes no message by its time, so each page scans and sorts
+// the messages, and rebuilds the session tree, on the host: a first read of a large database
+// costs that once per page. A call counts on the day it was created, in its root session (its
+// `parent_id` followed up), `<host>\0opencode\0<root session id>`, and in the repo of its own
+// session's folder: the git origin as above, asked when a read first meets the folder and kept,
+// by folder, in the row's state.
 import { type } from 'node:os';
 import { zstdDecompressSync } from 'node:zlib';
 import { dayOf } from '../core/days.js';
@@ -67,6 +71,10 @@ const ZSTD_SCRIPT = 'exec 4>&1; s=$( { { "$@"; echo $? >&3; } | zstd -q -c >&4; 
 
 // The state a file's row keeps: its harness's fold state and the repo its lines count in.
 type Kept = { fold: { cwd: string | null; insights: object }; repo: string };
+
+// The state an opencode database's row keeps: the repo of each folder its calls are of (a
+// session without a folder is under null).
+type OpencodeKept = { repos: Map<string | null, string> };
 
 // Each harness the catch-up reads: its name in the store, its sessions folder under a home, how
 // many folders deep its files lie, its sub-agents' included, and its fold with daily lines.
@@ -155,7 +163,12 @@ export function createCatchUp({
     const { host, read } = place;
     const database = databaseOf(place.home);
     const tables = await select(read, database, SCHEMA_QUERY);
-    const sessions = tables && sessionsIn(tables);
+    if (!tables) {
+      // a missing database is no failure
+      if ((await place.exec('stat', [database])).code === 0) throw new Error(`cannot read ${database}`);
+      return;
+    }
+    const sessions = sessionsIn(tables);
     if (!sessions) return;
     const row = store.file(host, 'opencode', database);
     const first = row?.version !== HISTORY_VERSION;
@@ -177,7 +190,9 @@ export function createCatchUp({
       if (rows.length < PAGE_ROWS) break;
       ({ created: from, id: after } = rows.at(-1));
     }
-    const repos = new Map<string | null, string>();
+    const kept = first ? null : (store.state(row!.id) as OpencodeKept);
+    // each folder's repo as first asked
+    const repos = kept?.repos ?? new Map<string | null, string>();
     const lines: SessionLine[] = [];
     for (const { session, directory, insights } of groups.values()) {
       if (!repos.has(directory)) repos.set(directory, await repoOf(place.exec, directory));
@@ -185,12 +200,13 @@ export function createCatchUp({
       for (const line of takeLines(insights)) lines.push({ ...line, session: `${host}\0opencode\0${session}`, repo });
     }
     if (!place.reached()) throw new Error(`lost ${host} while reading ${database}`);
-    // the row is marked read whole (HISTORY_VERSION) only once its lines are saved
-    const file = (version: number) => ({ host, harness: 'opencode', path: database, pos: 0, size: 0, mtimeMs: 0, version, state: null });
+    // the row is marked read whole (HISTORY_VERSION), with its repos, only once its lines are saved
+    const state: OpencodeKept = { repos };
+    const file = (version: number) => ({ host, harness: 'opencode', path: database, pos: 0, size: 0, mtimeMs: 0, version, state });
     const none = { session: '', repo: '', lines: [], restarted: false };
     const id = row?.id ?? store.saveRead(file(0), none);
     store.replaceDays(id, first ? '' : dayOf(open), { lines });
-    if (first) store.saveRead(file(HISTORY_VERSION), none);
+    store.saveRead(file(HISTORY_VERSION), none);
   }
 
   // Reads the session files of the host of `place`, one program at a time, until `ssh` fails to

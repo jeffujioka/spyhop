@@ -282,14 +282,15 @@ export async function open({ live, html }: { live: Live; html: () => string }, t
 }
 
 // Resolves once `seen()` holds, asked again at each turn of the event loop, so after what the
-// last turn started has run; rejects when it does not within 10 s of real time. The bound only
+// last turn started has run; rejects when it does not within 30 s of real time. The bound only
 // turns a hang into a failure: while the whole suite runs, each call of the stand-in `ssh` takes
-// up to a few hundred milliseconds, and the first fleet of a session on another Orca host waits
-// on a dozen of them one after another, past 5 s at times.
+// up to a few hundred milliseconds, and the first fleet of a session on another Orca host, or a
+// first catch-up of it (each of its programs, and a `git` for each folder its opencode database
+// names, one after another), waits on a dozen or more of them, past 8 s at times.
 export async function until(seen: () => boolean) {
-  const end = performance.now() + 10_000;
+  const end = performance.now() + 30_000;
   while (!seen()) {
-    if (performance.now() > end) throw new Error(`not seen within 10 s: ${seen}`);
+    if (performance.now() > end) throw new Error(`not seen within 30 s: ${seen}`);
     await setImmediate();
   }
 }
