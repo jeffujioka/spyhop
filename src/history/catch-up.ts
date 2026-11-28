@@ -5,7 +5,10 @@
 // one at a time. Another host's system and home folder are asked first (`uname -s`, `printenv
 // HOME`); its harness folders lie under that home. A host whose `ssh` exits 255, as when it
 // cannot be reached, or whose place cannot be asked, is not read: its read stops there, it is
-// named in `notRead` until a later run reads it, and the lines kept of it stay.
+// named in `notRead` until a later run reads it, and the lines kept of it stay. Then `zstd -V`
+// is asked once: on a host where it exits 0, the programs that read a file's bytes (`dd`,
+// `tail`) run as `sh -c '"$@" | zstd -q -c' sh <program> <args…>` and their output is
+// decompressed here; on any other, they run raw.
 //
 // On each host, one run lists every `.jsonl` file under each harness's sessions folder, down to
 // the sub-agents (of sub-agents, for omp), with one `find` each; a listing that fails, but for a
@@ -22,6 +25,7 @@
 // host, of the folder the file itself records first (omp: its `session` entry), else that
 // folder, else `n/a`.
 import { type } from 'node:os';
+import { zstdDecompressSync } from 'node:zlib';
 import { readOrigin } from '../core/git.js';
 import { takeLines } from '../core/insights.js';
 import { claudeProvider } from '../core/providers/claude.js';
@@ -30,7 +34,7 @@ import { ompProvider } from '../core/providers/omp.js';
 import { ompSessionsDir } from '../core/providers/omp-sources.js';
 import { absoluteFolder, listFolder, mainSessionOf, SUBAGENT_DEPTH } from '../core/providers/session-files.js';
 import { scanFile } from '../core/refresh.js';
-import type { Run } from '../exec.ts';
+import { type Run, runBytes } from '../exec.ts';
 import { LOCAL } from '../fleet.ts';
 import { type HistoryHost, placeOf } from '../hosts.ts';
 import { HISTORY_VERSION, type Store } from './store.ts';
@@ -61,9 +65,10 @@ const HARNESSES = [
 
 type Harness = (typeof HARNESSES)[number];
 
-// The Orca host a read is of: its id in the store, the runner bound to it, its system (`uname
-// -s`) and home folder, and whether `ssh` has reached it so far.
-type Place = { host: string; exec: Run; os: string; home: string; reached: () => boolean };
+// The Orca host a read is of: its id in the store, the runner bound to it and the one that reads
+// its files' bytes, its system (`uname -s`) and home folder, and whether `ssh` has reached it so
+// far.
+type Place = { host: string; exec: Run; read: Run; os: string; home: string; reached: () => boolean };
 
 export type CatchUp = {
   // Runs a catch-up, or gives the one running.
@@ -108,7 +113,7 @@ export function createCatchUp({
     const usable = row?.version === HISTORY_VERSION ? row : null;
     if (usable && usable.size === file.size && usable.mtimeMs === file.mtimeMs) return;
     const kept = usable ? (store.state(usable.id) as Kept) : undefined;
-    const read = await scanFile(exec, fold, kept ? { state: kept.fold, pos: usable!.pos } : null, file.path, file.size);
+    const read = await scanFile(place.read, fold, kept ? { state: kept.fold, pos: usable!.pos } : null, file.path, file.size);
     const restarted = read.restarted || !kept;
     const repo = restarted ? await repoOf(exec, read.scan.state?.cwd ?? null) : kept!.repo;
     if (!place.reached()) throw new Error(`lost ${host} while reading ${file.path}`);
@@ -153,10 +158,15 @@ export function createCatchUp({
   // was read, and whether every listing succeeded.
   async function readRemote({ id, name, alias }: HistoryHost) {
     let reached = true;
-    const exec: Run = async (command, args, options) => {
-      const result = await run(command, args, { ...options, on: alias });
+    const noted = <Result extends { code: number }>(result: Result) => {
       if (result.code === 255) reached = false;
       return result;
+    };
+    const exec: Run = async (command, args, options) => noted(await run(command, args, { ...options, on: alias }));
+    // the line's exit code is zstd's; `dd` still prints its statistics on stderr
+    const compressed: Run = async (command, args, options) => {
+      const { code, stdout, stderr } = noted(await runBytes('sh', ['-c', '"$@" | zstd -q -c', 'sh', command, ...args], { ...options, on: alias }));
+      return { code, stdout: zstdDecompressSync(stdout).toString('utf8'), stderr };
     };
     // its programs one after the other, as every program of a host's read
     let place: { os: string; home: string } | null = null;
@@ -167,7 +177,9 @@ export function createCatchUp({
       log(`spyhop: catch-up cannot ask the place of ${name}: ${(error as Error).message}`);
     }
     if (place) {
-      const ended = await readHost({ host: id, exec, ...place, reached: () => reached });
+      // a `zstd -V` that fails, or cannot be run, reads the host raw
+      const zstd = await exec('zstd', ['-V']).catch(() => null);
+      const ended = await readHost({ host: id, exec, read: zstd?.code === 0 ? compressed : exec, ...place, reached: () => reached });
       if (reached) return { name, read: true, ended };
       log(`spyhop: catch-up cannot reach ${name}`);
     }
@@ -176,7 +188,7 @@ export function createCatchUp({
 
   async function runOnce() {
     const [ended, remotes] = await Promise.all([
-      readHost({ host: LOCAL, exec: run, os: type(), home, reached: () => true }),
+      readHost({ host: LOCAL, exec: run, read: run, os: type(), home, reached: () => true }),
       hosts().then((listed) => Promise.all(listed.map(readRemote))),
     ]);
     unread = remotes.filter(({ read }) => !read).map(({ name }) => name);

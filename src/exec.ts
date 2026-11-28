@@ -14,6 +14,7 @@
 // which ssh would read as an option, is refused as an unreachable host. A program that exits non-zero
 // (ssh too, as for an unreachable host) resolves with its code; one that cannot start, runs past
 // the timeout or prints past the output cap rejects, and the core reads n/a for what it asked.
+// `runBytes` runs a program the same way, its stdout given as the bytes it printed.
 
 import { execFile } from 'node:child_process';
 import { chmodSync, lstatSync, mkdirSync } from 'node:fs';
@@ -45,6 +46,7 @@ const REUSING = ['auto', 'true', 'ask', 'autoask'];
 export type RunResult = { code: number; stdout: string; stderr: string };
 export type RunOptions = { cwd?: string; on?: string | null };
 export type Run = (command: string, args: string[], options?: RunOptions) => Promise<RunResult>;
+export type BytesResult = { code: number; stdout: Buffer; stderr: string };
 
 // A word as the remote POSIX shell reads it back unchanged.
 const quote = (word: string) => `'${word.replaceAll("'", `'\\''`)}'`;
@@ -52,16 +54,16 @@ const quote = (word: string) => `'${word.replaceAll("'", `'\\''`)}'`;
 // alias, after `owned ` for its ssh calls with spyhop's options for reusing connections and
 // `shared ` for those without -> the limit those programs run under. An alias whose settings
 // change has its calls of either kind under that kind's own limit.
-const limits = new Map<string, (task: () => Promise<RunResult>) => Promise<RunResult>>();
+const limits = new Map<string, (task: () => Promise<BytesResult>) => Promise<BytesResult>>();
 
 // alias -> the options its ssh calls add for reusing connections, as its `ssh -G` settings ask
 const reuse = createTtlCache(SETTINGS_TTL_MS);
 
 function execute(program: string, argv: string[], cwd: string | undefined) {
-  const { promise, resolve, reject } = Promise.withResolvers<RunResult>();
-  execFile(program, argv, { cwd, timeout: RUN_TIMEOUT_MS, maxBuffer: MAX_OUTPUT_BYTES, encoding: 'utf8' }, (error, stdout, stderr) => {
-    if (!error) resolve({ code: 0, stdout, stderr });
-    else if (typeof error.code === 'number') resolve({ code: error.code, stdout, stderr });
+  const { promise, resolve, reject } = Promise.withResolvers<BytesResult>();
+  execFile(program, argv, { cwd, timeout: RUN_TIMEOUT_MS, maxBuffer: MAX_OUTPUT_BYTES, encoding: 'buffer' }, (error, stdout, stderr) => {
+    if (!error) resolve({ code: 0, stdout, stderr: stderr.toString('utf8') });
+    else if (typeof error.code === 'number') resolve({ code: error.code, stdout, stderr: stderr.toString('utf8') });
     else reject(error);
   });
   return promise;
@@ -73,7 +75,7 @@ function execute(program: string, argv: string[], cwd: string | undefined) {
 async function reuseOptions(alias: string): Promise<string[]> {
   const settings = await execute('ssh', ['-G', alias], undefined).catch(() => null);
   if (settings?.code !== 0) return [];
-  if (REUSING.includes(/^controlmaster (\S+)$/m.exec(settings.stdout)?.[1] ?? '')) return [];
+  if (REUSING.includes(/^controlmaster (\S+)$/m.exec(settings.stdout.toString('utf8'))?.[1] ?? '')) return [];
   const uid = process.getuid!();
   const folder = `/tmp/spyhop-${uid}`;
   try {
@@ -89,10 +91,10 @@ async function reuseOptions(alias: string): Promise<string[]> {
   return ['-o', 'ControlMaster=auto', '-o', `ControlPath=${folder}/%C`, '-o', 'ControlPersist=60'];
 }
 
-export const run: Run = async (command, args, options = {}) => {
+export async function runBytes(command: string, args: string[], options: RunOptions = {}): Promise<BytesResult> {
   const { on, cwd } = options;
   if (!on) return execute(command, args, cwd);
-  if (on.startsWith('-')) return { code: 255, stdout: '', stderr: `spyhop: alias ${on} reads as an ssh option` };
+  if (on.startsWith('-')) return { code: 255, stdout: Buffer.alloc(0), stderr: `spyhop: alias ${on} reads as an ssh option` };
   const line = [command, ...args].map(quote).join(' ');
   const reusing: string[] = await reuse(on, Date.now(), () => reuseOptions(on));
   // BatchMode: ssh never asks for a password or a host key, it fails instead
@@ -101,4 +103,9 @@ export const run: Run = async (command, args, options = {}) => {
   const key = `${owned ? 'owned' : 'shared'} ${on}`;
   if (!limits.has(key)) limits.set(key, createLimit(owned ? OWNED_AT_ONCE : SHARED_AT_ONCE));
   return limits.get(key)!(() => execute('ssh', argv, undefined));
+}
+
+export const run: Run = async (command, args, options) => {
+  const { code, stdout, stderr } = await runBytes(command, args, options);
+  return { code, stdout: stdout.toString('utf8'), stderr };
 };

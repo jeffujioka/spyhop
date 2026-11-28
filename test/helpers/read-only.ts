@@ -21,6 +21,11 @@ function readsOnly([program, ...args]: string[]): boolean {
     }
     case 'git':
       return (args[0] === 'branch' && args[1] === '--show-current') || (args[0] === 'remote' && args[1] === 'get-url');
+    case 'zstd':
+      return args.length === 1 && args[0] === '-V';
+    // a read-only program whose output the runner compresses (src/history/catch-up.ts)
+    case 'sh':
+      return args[0] === '-c' && args[1] === '"$@" | zstd -q -c' && args[2] === 'sh' && readsOnly(args.slice(3));
     case 'sqlite3':
       return args[0] === '-readonly';
     default:

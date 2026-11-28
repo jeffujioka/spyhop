@@ -155,8 +155,9 @@ test('Appended bytes only', async () => {
     .slice(mark)
     .map((args) => args.at(-1)!)
     .filter((line) => line.includes(file));
-  assert.ok(reads.includes(`'tail' '-c' '+${pos}' '--' '${file}'`), JSON.stringify(reads));
-  assert.deepEqual(reads.filter((line) => line.startsWith("'dd'")), []);
+  // the line itself, or that line under `zstd` (test/history/zstd.test.ts)
+  assert.ok(reads.some((line) => line.endsWith(`'tail' '-c' '+${pos}' '--' '${file}'`)), JSON.stringify(reads));
+  assert.deepEqual(reads.filter((line) => line.includes("'dd'")), []);
   assert.ok(Math.abs(costOf() - before - 0.1) < 1e-9, `${before} -> ${costOf()}`);
   db.close();
   assert.deepEqual(calls.ssh().filter((args) => args[0] !== 'starfish-bs' || !readOnlyLine(args.at(-1)!)), []);

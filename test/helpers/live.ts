@@ -57,18 +57,18 @@ atTestEnd(async () => {
 
 // What a test may give `fleetOf`, `sessionOf` and `rangeOf` (test/helpers/history.ts): `prepare`
 // runs first with the home, to put files under it; `now`: the mock clock's time, NOW when not
-// given; `homes` and `orca` go to the stand-ins (test/helpers/stand-ins.ts), so that a test may
-// list and reach another Orca host.
-export type Mounting = { prepare?: (home: string) => void; now?: number; homes?: Record<string, string>; orca?: Record<string, string> };
+// given; `homes`, `orca` and `noZstd` go to the stand-ins (test/helpers/stand-ins.ts), so that a
+// test may list and reach another Orca host.
+export type Mounting = { prepare?: (home: string) => void; now?: number; homes?: Record<string, string>; orca?: Record<string, string>; noZstd?: string[] };
 
 // The real worker mounted on this computer's Orca host with `workspaces`, its home, and the
 // stand-ins' calls.
-export async function mountOn(workspaces: HostWorkspace[], { prepare, now = NOW, homes = {}, orca = {} }: Mounting) {
+export async function mountOn(workspaces: HostWorkspace[], { prepare, now = NOW, homes = {}, orca = {}, noZstd = [] }: Mounting) {
   setEnv('TZ', 'UTC');
   mock.timers.enable({ apis: ['Date'], now });
   const home = useTempHome();
   prepare?.(home);
-  const calls = standIns({ homes, orca });
+  const calls = standIns({ homes, orca, noZstd });
   worker = await mountWorker(workerModule, { host: orcaHost(home, { workspaces }) });
   return { home, mounted: worker, calls };
 }

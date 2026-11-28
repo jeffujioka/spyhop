@@ -408,6 +408,12 @@ listed) and runs `orca plugin open <key> --panel spyhop`.
   at the start of each refresh, without waiting for it.
 - **An unreachable paired server disappears.** When its agents cannot be listed, its group is
   not drawn.
+- **Other hosts' history is read over ssh, compressed only where `zstd` is.** The catch-up of
+  the history store reads each other Orca host's session files with read-only commands (`dd`,
+  `tail`) and parses them on this computer; nothing is written on that host. Once per catch-up
+  it asks the host `zstd -V`: where that succeeds, the file bytes come through `zstd` and are
+  decompressed here, else they come raw, so a host without `zstd` sends its files uncompressed.
+  Through `zstd`, a `tail` that fails reads as empty and the file is read again from its start.
 - **Claude Code and opencode on other hosts are untested.** Their cards there may read `n/a`.
 - **An opencode session's cost chart can end below its cost.** A session in opencode's current
   tables shows the total cost opencode keeps for it, which for some sessions is above the sum of
