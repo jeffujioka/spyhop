@@ -17,6 +17,7 @@ const answeredUpToFleet = (fleet: unknown) => ({
   'plugin validate . --json': answer({}),
   'plugin check . --json': answer({ panels: [] }),
   'plugin dev watch . --json': JSON.stringify({ type: 'loaded' }),
+  'plugin restart local.spyhop --json': answer({}),
   'plugin open local.spyhop --panel spyhop': '',
   'plugin dev request . spyhop.fleet --data {"request":1} --json': answer({ result: fleet }),
 });
@@ -54,6 +55,7 @@ test('the whole-panel steps are listed', () => {
     'plugin validate . --json',
     'plugin check . --json',
     'plugin dev watch . --json',
+    'plugin restart local.spyhop --json',
     'plugin open local.spyhop --panel spyhop',
     'plugin dev request . spyhop.fleet --data {"request":1} --json',
     'plugin dev request . spyhop.session --data {"request":2,"card":"<id>"} --json',

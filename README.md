@@ -9,8 +9,13 @@ herdr mod; the session readers in `src/core/` are copied from it, while `src/cor
 
 ## What the panel shows
 
-The panel is the Live panel, an HTML panel drawn in Orca's own theme, light or dark, which
-follows a change of theme without being loaded again. It opens on the fleet screen:
+The panel is an HTML panel drawn in Orca's own theme, light or dark, which follows a change of
+theme without being loaded again. Its tab bar holds four tabs, Live, Spend, Cache and Health, in
+that order, and the panel opens on Live. Spend, Cache and Health are the range tabs: under the
+tabs they show one range control, Day, Week, Month and Year, set to Day when the panel opens and
+shared by the three, so that a range pressed on one holds on the others; Live shows no range
+control. Spend is described under Spend tab; Cache and Health show only the tab bar and the range
+control for now. Live opens on the fleet screen:
 
 - **The header**: `Spyhop`, a `live` mark, and the number of agents in each Orca state
   (blocked, waiting, working, done) that any agent is in. The counts are drawn once a whole
@@ -265,12 +270,16 @@ fails, or `/tmp/spyhop-<uid>` is a symlink or another user's folder, the plugin 
 ## Refresh
 
 While the panel is open it asks the worker for what its screen shows, the fleet or the open
-session, every 2 seconds: each request starts 2 seconds after the previous one started, or as
-soon as that one is answered when it took longer, and never while another is unanswered. While
+session every 2 seconds, a range tab over its range every 60 seconds: each request starts that
+long after the previous one started, or as soon as that one is answered when it took longer, and
+never while another is unanswered. While
 it is closed or hidden it asks for nothing: a refresh that was running when it closed runs to its
 end, and no other starts. A refresh that fails leaves the screen as it was, and the next one
-draws it again. Opening a session's screen, or going back to the fleet, asks at once, or as soon
-as the request out is answered.
+draws it again. Opening a session's screen, going back to the fleet, or pressing another tab or
+range asks at once, or as soon as the request out is answered. The worker answers a range tab
+after a catch-up (below) of its own when no catch-up runs and the last one started 58 seconds
+ago or more, so that each 60-second refresh of a shown range tab reads what the harnesses logged
+since the one before.
 
 During a refresh each host's group appears as soon as that host's cards are built, without
 waiting for another host: this computer's are not held up by a slow SSH host or paired server.
@@ -302,6 +311,13 @@ worker's log and tried again at the next catch-up.
 A catch-up reads in two phases: first, on every Orca host at once, the files and opencode calls
 of the last 30 days, then the older ones, each phase's files newest first, so that a first
 catch-up of a long history shows the recent days soon.
+
+On the Mac it was built on (2026-11-28), with about 1 GB of omp and 34 MB of Claude Code
+session files and a 2 GB opencode database, and Orca hosts of 2.8 GB and 27 MB of omp files,
+the first catch-up took 16.5 minutes with the panel open, this Mac's own files read in the first
+5 of them, and left a history store of 123 MB. Orca listed this Mac again as `localhost` and
+`127.0.0.1`, and each other host under two aliases, and each alias was read as a host of its
+own. A later catch-up of the same files took about 15 seconds.
 
 ## What spyhop stores
 
@@ -394,16 +410,26 @@ listed) and runs `orca plugin open <key> --panel spyhop`.
 - Test: `orca plugin test . --json` (`npm test`) runs the tests with Node's test runner and
   Orca's test kit; `orca plugin validate . --json` checks the manifest as Orca loads it.
 - Frame check: `bash scripts/frame-check.sh` runs the folder in the Orca app on this computer
-  as the dev plugin `local.spyhop`, opens the Live panel, asks the worker for the fleet and then
+  as the dev plugin `local.spyhop`. It needs `sqlite3`, and fails at once without it. It counts
+  the history store's catch-ups (its meta `catch-ups`, with `sqlite3 -readonly`), loads the
+  folder with `orca plugin dev watch` and restarts its worker (`orca plugin restart`: a watch of
+  a folder already loaded keeps the old worker, which starts no catch-up for up to 15 minutes),
+  opens the Live panel, asks the worker for the fleet and then
   for the session of each of its cards with `orca plugin dev request` (each answer under 1 MiB,
-  each series at most 120 points, every card's sub-agents read within 30 refreshes), then
+  each series at most 120 points, every card's sub-agents read within 30 refreshes), waits up
+  to 300 seconds for the restarted worker's own catch-up to end, asks it for the Spend tab over
+  a day and a year (each answer under 1 MiB, its cost a number or `n/a`) and checks that the
+  store is not empty, then
   shoots the fleet screen 300 and 420 pixels wide in Orca's dark and light themes on this
   computer's own agents (the PNGs go to `.orca/shots/`; a theme takes effect only while Orca's
-  window is hidden or minimized) and fails on a `[frame]` error in
+  window is hidden or minimized) and fails on a `[frame]` error, a `node:sqlite` error or a
+  catch-up that cannot read or list a file of this computer in
   `orca plugin logs`; it unloads the folder when it exits. `orca plugin check` lists no HTML
-  panel and `orca plugin shot --scenario` refuses one, so the panel has no check scenarios: the
-  session screen's look is checked by eye. Orca asks for the dev plugin's approval again after
-  every change to a file of the folder, and the check prints the command that gives it.
+  panel, `orca plugin shot --scenario` refuses one and `orca plugin shot --act` presses only in
+  a components panel, so the panel has no check scenarios and no shot of a tab other than Live:
+  the session screen and the Spend tab are checked by eye. Orca asks for the dev plugin's
+  approval again after every change to a file of the folder, and the check prints the command
+  that gives it.
 - Page tests: `npm run test:page` runs the `test/page/**/*.page.ts` tests with Node's test runner
   (`npm test` does not): they compile the panel's page with the project's TypeScript, with no
   bundler, load it in headless Chrome, the Google Chrome installed in `/Applications` (Playwright

@@ -2,7 +2,8 @@
 # The frame check of the Live panel: runs the plugin of this folder in the Orca app on this
 # computer, as the dev plugin `local.spyhop`, and stops at the first step that fails, with the
 # step's answer on stderr. It validates the folder, records `orca plugin check`, loads the folder
-# with `orca plugin dev watch` (stopped when the script exits), opens the panel, asks the worker
+# with `orca plugin dev watch` (stopped when the script exits), restarts its worker, opens the
+# panel, asks the worker
 # for the fleet, then for the session of each of its cards, waits for a catch-up of the dev
 # plugin's own to end on the history store, asks the worker for the Spend tab over a day and a
 # year, checks every answer's
@@ -127,6 +128,11 @@ if [ -z "$dry" ]; then
   done
 fi
 
+# A watch of a folder that is already loaded, as after `orca plugin dev load .`, keeps its worker
+# running, which then starts no catch-up for up to 15 minutes: the worker is stopped, so that the
+# next request starts it fresh, with a catch-up of its own.
+run "$work/restart.json" plugin restart "$KEY" --json
+
 run "$work/open.txt" plugin open "$KEY" --panel spyhop
 
 # A shot settles once the panel's page has loaded, not once the worker has answered, and no answer
@@ -236,6 +242,8 @@ run "$work/logs.json" plugin logs "$KEY" --json
 # the whole answer as text, so that a `[frame]` line is found in whichever field holds it
 [ -n "$dry" ] || expect '!JSON.stringify(a).includes("[frame]")' 'the logs hold a [frame] error' "$work/logs.json"
 [ -n "$dry" ] || expect '!JSON.stringify(a).includes("node:sqlite")' 'the logs hold a node:sqlite error' "$work/logs.json"
-[ -n "$dry" ] || expect '!JSON.stringify(a).includes("catch-up cannot")' 'the logs hold a catch-up that cannot read a file of this computer' "$work/logs.json"
+# a file of this computer, under its home; another host that cannot be asked or reached is logged
+# too (src/history/catch-up.ts), and is not this check's
+[ -n "$dry" ] || expect '!new RegExp(`catch-up cannot (read|list) [^"]*${process.env.HOME}/`).test(JSON.stringify(a))' 'the logs hold a catch-up that cannot read a file of this computer' "$work/logs.json"
 
 [ -n "$dry" ] || echo 'frame check: passed'
