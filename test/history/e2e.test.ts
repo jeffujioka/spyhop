@@ -155,7 +155,7 @@ test('every Orca host end to end', async () => {
 test("a session's Trace end to end", async () => {
   assert.doesNotThrow(() => execFileSync('zstd', ['-V'], { stdio: 'ignore' }), 'this Mac has no zstd');
   const devboxHome = tempHome();
-  const infra: HostWorkspace = { project: 'infra', name: 'main', agents: ['working'], hostId: `ssh:${DEVBOX}`, sessionId: 's1' };
+  const infra: HostWorkspace = { project: 'infra', name: 'main', agents: ['working'], hostId: `ssh:${DEVBOX}`, sessionId: 's1', title: 'π - Deploy it' };
   let home = '';
   const opened = await openLive([infra], {
     now: CLOCK,
@@ -193,8 +193,12 @@ test("a session's Trace end to end", async () => {
   await caughtUp(home);
   const loaded = () => parts(opened.html(), 'data-part', 'loading').length === 0;
 
+  // the only Live card is the omp session's: the past Claude Code session has none
+  const cards = parts(opened.html(), 'data-part', 'card');
+  assert.equal(cards.length, 1);
+  assert.equal(text(parts(cards[0], 'class', 'title grow')[0]), 'Deploy it');
   // the shown session's Trace: four lanes and both sub-agent rows
-  opened.live.press(attr(parts(opened.html(), 'data-part', 'card')[0], 'data-press')!);
+  opened.live.press(attr(cards[0], 'data-press')!);
   await until(loaded);
   opened.live.press('view:trace');
   await until(() => parts(opened.html(), 'data-lane').length === 4);
@@ -216,13 +220,17 @@ test("a session's Trace end to end", async () => {
   opened.live.press(attr(past, 'data-press')!);
   await until(() => attr(opened.html(), 'data-screen') === 'past' && loaded());
   assert.equal(text(parts(opened.html(), 'class', 'title grow')[0]), 'Past Claude job');
-  assert.equal(figure(opened.html(), 'harness'), 'Claude Code');
-  assert.equal(figure(opened.html(), 'cost'), '$0.50');
+  assert.deepEqual(
+    ['repo', 'harness', 'models', 'cost', 'tokens', 'duration'].map((name) => figure(opened.html(), name)),
+    [join(home, 'web'), 'Claude Code', 'claude-opus-5-5', '$0.50', '1k', '10s'],
+  );
   assert.equal(parts(opened.html(), 'data-lane').length, 4);
   assert.equal(parts(opened.html(), 'data-part', 'switch').length, 0);
   opened.live.press('back');
   await until(() => attr(opened.html(), 'data-screen') === 'range' && loaded());
   assert.equal(attr(opened.html(), 'data-tab'), 'spend');
   assert.equal(attr(parts(opened.html(), 'data-press', 'range:month')[0], 'aria-pressed'), 'true');
+  const devbox = opened.calls.ssh().filter(([alias]) => alias === 'devbox');
+  assert.ok(devbox.some((args) => args.at(-1)!.startsWith(`${ZSTD_PIPE} 'dd'`)), JSON.stringify(devbox));
   assert.deepEqual(opened.calls.ssh().filter((args) => !readOnlyLine(args.at(-1)!)), []);
 });
