@@ -8,10 +8,12 @@
 // log their calls. Time is node:test's mock clock, which no test moves: the calls after a press
 // are the press's own.
 import assert from 'node:assert/strict';
+import { homedir } from 'node:os';
 import { test } from 'node:test';
 import type { MockHost, TestWorker } from 'orca/testing';
 import type { Live } from '../../src/live/controller.ts';
 import { tempHome } from '../helpers/files.ts';
+import { caughtUp } from '../helpers/history.ts';
 import { open, openOnFleet, until } from '../helpers/live.ts';
 import { parts } from '../helpers/markup.ts';
 import { DEVBOX, DEVBOX_LISTS, JEFF_AGENT_LIST, JEFF_LISTS, JEFF_TERMINAL_LIST } from '../helpers/orca-answers.ts';
@@ -65,6 +67,9 @@ async function pressFocus({
   settled,
 }: Shown & { host: MockHost; calls: { ssh(): string[][]; orca(): string[] }; settled: (name: string) => number }) {
   assert.ok(hasFocus(html()), html());
+  // the worker's first catch-up, which reads every listed host, has ended: the calls after the
+  // press are the press's own
+  await caughtUp(homedir());
   const [ssh, orca, focused, before] = [calls.ssh().length, calls.orca().length, host.callsOf('terminal.focus').length, html()];
 
   live.press('focus');

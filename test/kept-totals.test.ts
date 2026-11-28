@@ -22,6 +22,7 @@ import { claudeAssistant, claudeUsage } from './core/helpers/entries.ts';
 import { NOW, PADDING, agent, costOf, costTurn, ompSessionOf as ompSession, tokensOf } from './helpers/agent-cards.ts';
 import { useTempHome } from './helpers/env.ts';
 import { tempHome } from './helpers/files.ts';
+import { caughtUp } from './helpers/history.ts';
 import { ompCalls } from './helpers/live.ts';
 import { DEVBOX, DEVBOX_HOST, LOCAL_HOST, environmentListOf, hostListOf } from './helpers/orca-answers.ts';
 import { orcaHost, type HostWorkspace } from './helpers/orca-host.ts';
@@ -30,10 +31,19 @@ import { standIns } from './helpers/stand-ins.ts';
 type Storage = NonNullable<MockHostOptions['storage']>;
 
 let worker: TestWorker | undefined;
+// The calls of the `ssh` stand-in, and the spans of them each worker's first catch-up ran, which
+// read every listed host's session files too: what a test counts is the card builder's alone.
+let sshCalls: () => string[][] = () => [];
+let catchUpSpans: [number, number][] = [];
+// how many workers the test has started, each of which ends one catch-up
+let started = 0;
 afterEach(async () => {
   await worker?.deactivate();
   worker = undefined;
   mock.timers.reset();
+  sshCalls = () => [];
+  catchUpSpans = [];
+  started = 0;
 });
 
 // An omp Orca agent on the SSH target `devbox`, whose session file, larger than the window, has
@@ -50,8 +60,13 @@ function devboxAgent() {
     homes: { devbox: remoteHome },
     orca: { 'host list --json': hostListOf(LOCAL_HOST, DEVBOX_HOST), 'environment list --json': environmentListOf() },
   });
-  // the command lines `ssh devbox` has run so far
-  const lines = () => calls.ssh().filter(([alias]) => alias === 'devbox').map((args) => args.at(-1)!);
+  sshCalls = calls.ssh;
+  // the command lines `ssh devbox` has run so far, but the catch-ups'
+  const lines = () =>
+    calls
+      .ssh()
+      .filter(([alias], i) => alias === 'devbox' && !catchUpSpans.some(([from, to]) => i >= from && i < to))
+      .map((args) => args.at(-1)!);
   return {
     file,
     remoteHome,
@@ -61,11 +76,15 @@ function devboxAgent() {
 }
 
 // Ends the worker of the test, if any, and mounts a new one on an Orca host with `workspace`
-// that holds `storage`, grants `capabilities` and answers `results`.
+// that holds `storage`, grants `capabilities` and answers `results`, once its first catch-up has
+// ended.
 async function start(home: string, workspace: HostWorkspace, storage?: Storage, capabilities?: string[], results?: MockHostOptions['results']) {
   await worker?.deactivate();
   const host = orcaHost(home, { workspaces: [workspace], storage, capabilities, results });
+  const from = sshCalls().length;
   worker = await mountWorker(workerModule, { host });
+  await caughtUp(homedir(), (started += 1));
+  catchUpSpans.push([from, sshCalls().length]);
   return host;
 }
 

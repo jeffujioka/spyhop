@@ -95,6 +95,7 @@ export function answersOf(fleet: () => Fleet, spend: Partial<Record<Range, Spend
       tab: tab as RangeTab,
       range: range as Range,
       spend: tab === 'spend' ? (spend[range as Range] ?? null) : null,
+      notRead: [],
     }),
   };
 }

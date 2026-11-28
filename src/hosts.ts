@@ -57,6 +57,16 @@ export function remoteHosts({ hosts, environments }: HostLists, hostIds: string[
   return remote;
 }
 
+// An Orca host whose harness sessions the catch-up reads (src/history/catch-up.ts): its hostId,
+// its name and its alias, as `remoteHosts` gives them.
+export type HistoryHost = { id: string; name: string; alias: string };
+
+// Every SSH host `lists` names (`ssh:<Orca id>`) and every paired Orca server (`runtime:<env id>`).
+export function historyHosts(lists: HostLists): HistoryHost[] {
+  const sshIds = lists.hosts.filter((host) => host.kind === 'ssh').map((host) => `ssh:${host.id}`);
+  return [...remoteHosts(lists, sshIds)].map(([id, { name, alias }]) => ({ id, name, alias }));
+}
+
 // An Orca agent of a paired server, in the server's group, with its pane, if any.
 export type ServerAgent = FleetAgent & { pane: Pane | null };
 

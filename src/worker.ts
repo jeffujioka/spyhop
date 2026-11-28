@@ -19,10 +19,12 @@
 // again from its start. Orca stores no value over 256 KiB, so they are split over the keys
 // `session-totals`, `session-totals.1` and on. The CLI runs on each request, so only while the
 // panel is open, and for the palette command `spyhop.show`, which shows the panel. Apart from
-// them, a catch-up reads this computer's omp session files into the history store
-// (src/history/catch-up.ts) when the worker starts and every CATCH_UP_MS after.
+// them, a catch-up reads the omp and Claude Code session files of this computer and of every
+// Orca host Orca lists into the history store (src/history/catch-up.ts) when the worker starts
+// and every CATCH_UP_MS after.
 // `spyhop.range` answers a range tab from the history store (src/history/views.ts): at once while
-// a catch-up runs, else after a catch-up when the last one started RANGE_CATCH_UP_MS ago or more.
+// a catch-up runs, else after a catch-up when the last one started RANGE_CATCH_UP_MS ago or more;
+// it names the Orca hosts the last catch-up could not read.
 // A history store that cannot be opened is logged once; no catch-up runs then, and each range
 // tab's figures are n/a, while the fleet and the sessions are answered as ever. A range the store
 // cannot read is logged and answered n/a.
@@ -39,7 +41,7 @@ import { CATCH_UP_MS, decodeScans, encodeScans, keptPartsOf, RANGE_REFRESH_MS, R
 import { createTtlCache } from './core/ttl-cache.js';
 import { run } from './exec.ts';
 import { attentionRows, burnCard, type FleetAgent, groupCards, LOCAL, stateCounts } from './fleet.ts';
-import { orca as cli, type HostLists, listHosts, readServerAgents, type RemoteHost, remoteHosts, type ServerAgent } from './hosts.ts';
+import { orca as cli, historyHosts, type HostLists, listHosts, readServerAgents, type RemoteHost, remoteHosts, type ServerAgent } from './hosts.ts';
 import type { CardView, FleetAnswer, HostGroup, Pane, RangeAnswer, SessionAnswer, SpendView } from './protocol.ts';
 import { type CatchUp, createCatchUp } from './history/catch-up.ts';
 import { openStore } from './history/store.ts';
@@ -96,11 +98,14 @@ export async function deactivate() {
 export default function activate(orca: OrcaWorkerApi): void {
   const home = homedir();
   const log = (message: string) => orca.log(message);
+  // Orca's lists of hosts and paired servers, which the catch-ups and the requests share.
+  const hostLists = createTtlCache(HOST_LISTS_TTL_MS);
+  const listsNow = () => hostLists('hosts', Date.now(), () => listHosts(run)) as Promise<HostLists>;
   // The history store, which the catch-ups fill from the worker's start (src/history/catch-up.ts),
   // and its catch-up; null when it cannot be opened, `node:sqlite` not loaded included.
   const opening = openStore(home).then(
     (store) => {
-      const catchUp = createCatchUp({ run, store, home, log });
+      const catchUp = createCatchUp({ run, store, home, log, hosts: async () => historyHosts(await listsNow()) });
       const stopCatchUps = scheduleCatchUps(catchUp, log);
       return { store, catchUp, stopCatchUps };
     },
@@ -130,7 +135,6 @@ export default function activate(orca: OrcaWorkerApi): void {
   // write holds yet
   let keptAt = -Infinity;
   let unkept = false;
-  const hostLists = createTtlCache(HOST_LISTS_TTL_MS);
   // hostId of a paired server -> the agents it listed at the previous refresh
   const listedBefore = new Map<string, ServerAgent[]>();
 
@@ -182,10 +186,7 @@ export default function activate(orca: OrcaWorkerApi): void {
   // has no group. The kept scans are written at the end of it.
   async function build(post: ((group: HostGroup) => void) | null) {
     const cards = await starting;
-    const [{ workspaces }, listed] = await Promise.all([
-      orca.host.call('workspace.list'),
-      hostLists('hosts', Date.now(), () => listHosts(run)) as Promise<HostLists>,
-    ]);
+    const [{ workspaces }, listed] = await Promise.all([orca.host.call('workspace.list'), listsNow()]);
     const hostOf = (workspace: (typeof workspaces)[number]) => workspace.hostId ?? LOCAL;
     // A paired server's agents come from its own `orca agent list`; the others' workspaces are
     // asked here. `agents.list` lists one workspace's agents. Its `sessionId` is the harness's
@@ -306,16 +307,16 @@ export default function activate(orca: OrcaWorkerApi): void {
 
   orca.panels.handle('spyhop.range', async ({ request, tab, range }): Promise<RangeAnswer> => {
     const history = await opening;
-    if (!history) return { request, tab, range, spend: tab === 'spend' ? SPEND_NA : null };
+    if (!history) return { request, tab, range, spend: tab === 'spend' ? SPEND_NA : null, notRead: [] };
     const { store, catchUp } = history;
     if (!catchUp.running() && Date.now() - (catchUp.startedMs() ?? -Infinity) >= RANGE_CATCH_UP_MS) await caughtUp(catchUp, log);
-    if (tab !== 'spend') return { request, tab, range, spend: null };
+    if (tab !== 'spend') return { request, tab, range, spend: null, notRead: catchUp.notRead() };
     // a read that fails, such as a store held past its busy timeout, is n/a until one succeeds
     try {
-      return { request, tab, range, spend: spendView(store, range, Date.now()) };
+      return { request, tab, range, spend: spendView(store, range, Date.now()), notRead: catchUp.notRead() };
     } catch (error) {
       log(`spyhop: cannot read the history store: ${(error as Error).message}`);
-      return { request, tab, range, spend: SPEND_NA };
+      return { request, tab, range, spend: SPEND_NA, notRead: catchUp.notRead() };
     }
   });
 

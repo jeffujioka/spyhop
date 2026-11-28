@@ -94,8 +94,9 @@ test('Agent on an SSH workspace', async () => {
   assert.ok(card, JSON.stringify(fleet.groups.map((group) => group.name)));
   assert.equal(costOf(card), '$0.10');
   const ssh = calls.ssh();
-  assert.ok(ssh.length > 0);
-  assert.deepEqual(ssh.filter((args) => args[0] !== 'devbox' || !readOnlyLine(args.at(-1)!)), []);
+  // the card's sessions are read over `devbox`; the catch-up asks every listed host, `jeff` too
+  assert.ok(ssh.some(([alias]) => alias === 'devbox'));
+  assert.deepEqual(ssh.filter((args) => !readOnlyLine(args.at(-1)!)), []);
   assert.deepEqual(calls.orca().filter((args) => !/^(host|environment) list --json$/.test(args)), []);
 });
 
@@ -120,8 +121,8 @@ test('Session of a sub-folder on an SSH workspace', async () => {
   assert.ok(card, JSON.stringify(fleet.groups.map((group) => group.name)));
   assert.deepEqual([costOf(card), card.folder, card.branch], ['$0.10', 'tools', 'feat/deploy']);
   const ssh = calls.ssh();
-  assert.ok(ssh.length > 0);
-  assert.deepEqual(ssh.filter((args) => args[0] !== 'devbox' || !readOnlyLine(args.at(-1)!)), []);
+  assert.ok(ssh.some(([alias]) => alias === 'devbox'));
+  assert.deepEqual(ssh.filter((args) => !readOnlyLine(args.at(-1)!)), []);
 });
 
 // The paired Orca server `jeff-server`, reached as `jeff`, with one omp agent in its workspace
@@ -194,8 +195,9 @@ test('Agent on a paired Orca server', async () => {
   assert.ok(card);
   assert.equal(costOf(card), '$0.10');
   const ssh = calls.ssh();
-  assert.ok(ssh.length > 0);
-  assert.deepEqual(ssh.filter((args) => args[0] !== 'jeff' || !readOnlyLine(args.at(-1)!)), []);
+  // the card's sessions are read over `jeff`; the catch-up asks every listed host, `devbox` too
+  assert.ok(ssh.some(([alias]) => alias === 'jeff'));
+  assert.deepEqual(ssh.filter((args) => !readOnlyLine(args.at(-1)!)), []);
   assert.deepEqual(calls.orca().filter((args) => !/^((host|environment) list|(agent|terminal) list --environment jeff-server) --json$/.test(args)), []);
   // and one terminal list of the server per refresh, for the panes of its agents
   assert.deepEqual(

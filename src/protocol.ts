@@ -179,8 +179,9 @@ export type SpendView = {
 };
 
 // The range tab `tab` over `range`, as the history store holds it: the Spend tab's view when it is
-// the Spend tab, else null; `request`: the panel's number of the request.
-export type RangeAnswer = { request: number; tab: RangeTab; range: Range; spend: SpendView | null };
+// the Spend tab, else null; `notRead`: the names of the Orca hosts the last catch-up could not
+// read, whose figures are those read before; `request`: the panel's number of the request.
+export type RangeAnswer = { request: number; tab: RangeTab; range: Range; spend: SpendView | null; notRead: string[] };
 
 declare module 'orca' {
   interface PluginRequests {

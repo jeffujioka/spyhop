@@ -56,7 +56,8 @@ test('Palette command and key', async () => {
 
   await worker.command(command.id);
 
-  assert.deepEqual(cli.orca(), ['plugin list --json', 'plugin open local.spyhop --panel spyhop --json']);
+  // the catch-up lists Orca's hosts at the worker's start
+  assert.deepEqual(cli.orca().filter((args) => !/^(host|environment) list --json$/.test(args)), ['plugin list --json', 'plugin open local.spyhop --panel spyhop --json']);
   assert.deepEqual(worker.refusals, []);
   // the worker's history store is the test's home's, once its catch-up has ended
   await worker.deactivate();
