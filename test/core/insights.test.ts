@@ -5,6 +5,7 @@ import { ompProvider } from '../../src/core/providers/omp.js';
 import { setEnv } from '../helpers/env.ts';
 import { ompMessage } from './helpers/entries.ts';
 import { expect } from './helpers/expect.ts';
+import { withCopilotPrices } from '../helpers/prices.ts';
 
 // One omp model call ending at the ISO `timestamp`, of `cost` USD (none logged when null).
 const call = (timestamp: string, cost: number | null = 1, extra: object = {}) =>
@@ -24,7 +25,7 @@ describe('insights: day buckets of model calls', () => {
       {
         day: '2026-11-28',
         model: 'p/m',
-        figures: { calls: 1, tokens: 100, uncached: 10, read: 20, write: 30, output: 40, cost: 1, costNa: 0 },
+        figures: { calls: 1, tokens: 100, uncached: 10, read: 20, write: 30, output: 40, cost: 1, costNa: 0, sideCost: 0, sideTokens: 0, copilotCost: 0 },
       },
     ]);
   });
@@ -62,6 +63,26 @@ describe('insights: day buckets of model calls', () => {
     expect(line.figures.calls).toBe(2);
     expect(line.figures.cost).toBe(2);
     expect(line.figures.costNa).toBe(1);
+  });
+
+  test('a side call adds its cost and tokens but no model call, and a Copilot call its cost', () => {
+    withCopilotPrices({ 'claude-opus-5.5': { input: 500, cachedInput: 50, cacheWrite: 625, output: 2500, tiers: [] } });
+    const side = {
+      type: 'model_usage',
+      timestamp: '2026-11-27T12:01:00.000Z',
+      purpose: 'recap',
+      provider: 'p',
+      model: 'm',
+      usage: { input: 1, cacheRead: 2, cacheWrite: 3, output: 4, totalTokens: 10, cost: { total: 0.5 } },
+    };
+    const copilot = call('2026-11-27T12:02:00.000Z', 9, { provider: 'github-copilot', model: 'claude-opus-5.5' });
+    const state = fold([call('2026-11-27T12:00:00.000Z', 2), side, copilot]);
+    const [line, copilotLine] = takeLines(state.insights);
+
+    expect(line.figures).toEqual({ calls: 1, tokens: 110, uncached: 10, read: 20, write: 30, output: 40, cost: 2.5, costNa: 0, sideCost: 0.5, sideTokens: 10, copilotCost: 0 });
+    // 10 x 500 + 20 x 50 + 30 x 625 + 40 x 2,500 credits per million, at 0.01 USD a credit
+    expect(copilotLine.figures.cost).toBeCloseTo(0.0012475, 9);
+    expect(copilotLine.figures.copilotCost).toBe(copilotLine.figures.cost);
   });
 
   test('lines are taken once', () => {

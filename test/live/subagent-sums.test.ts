@@ -160,16 +160,16 @@ test('Cost by model', async () => {
   );
 
   assert.deepEqual(rows(html, 'models'), [
-    'claude-fable-5.2 · main agent · $1.00',
-    'claude-opus-5.5-1m · 2 sub-agents · $1.00',
-    'claude-haiku-5.5 · 1 sub-agent · $0.10',
+    'anthropic/claude-fable-5.2 · main agent · $1.00',
+    'anthropic/claude-opus-5.5-1m · 2 sub-agents · $1.00',
+    'anthropic/claude-haiku-5.5 · 1 sub-agent · $0.10',
   ]);
 });
 
 test('Main agent and a sub-agent on one model', async () => {
   const { html } = await withSubAgents([spent(1)], { Impl1: { calls: [spent(0.5)], model: 'claude-opus-5.5-1m' } }, { model: 'claude-opus-5.5-1m' });
 
-  assert.deepEqual(rows(html, 'models'), ['claude-opus-5.5-1m · main agent and 1 sub-agent · $1.50']);
+  assert.deepEqual(rows(html, 'models'), ['anthropic/claude-opus-5.5-1m · main agent and 1 sub-agent · $1.50']);
 });
 
 test('Tokens by model for Claude Code', async () => {

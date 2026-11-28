@@ -115,16 +115,19 @@ function subAgentView({ name, kind, model, task, running, stats, start, end }: N
 }
 
 // The cost, or the tokens (`by`), by model over the session's own series and those of the
-// sub-agents `counted`, each with what used it: the main agent, and how many sub-agents. The
-// largest first, those that cannot be read last; the main agent's models first among equals.
+// sub-agents `counted`, each with what used it: the main agent, how many sub-agents, and the
+// session's side calls. The largest first, those that cannot be read last; the main agent's models
+// first among equals. A model a harness does not say who used is its agent's own.
 function modelRows(series: SessionSeries | null, counted: { stats: CardStats }[], by: 'cost' | 'tokens'): SessionView['models']['rows'] {
   const rows = new Map<string, SessionView['models']['rows'][number]>();
-  const add = (models: SessionSeries['models'], main: boolean) => {
-    for (const [model, { cost, tokens }] of Object.entries(models)) {
+  const add = (models: SessionSeries['models'], own: boolean) => {
+    for (const [model, { cost, tokens, main: used = true, side = false }] of Object.entries(models)) {
       const value: Num = by === 'tokens' ? tokens : (cost ?? NA);
+      const main = own && used;
+      const subAgents = !own && used ? 1 : 0;
       const row = rows.get(model);
-      if (!row) rows.set(model, { model, main, subAgents: main ? 0 : 1, value });
-      else Object.assign(row, { main: row.main || main, subAgents: row.subAgents + (main ? 0 : 1), value: sumOf([row.value, value]) });
+      if (!row) rows.set(model, { model, main, subAgents, sideCalls: own && side, value });
+      else Object.assign(row, { main: row.main || main, subAgents: row.subAgents + subAgents, sideCalls: row.sideCalls || (own && side), value: sumOf([row.value, value]) });
     }
   };
   if (series) add(series.models, true);

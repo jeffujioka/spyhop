@@ -130,7 +130,7 @@ describe('omp session: the series of the whole session', () => {
     expect(stats.detail.points.map((point: { t: number }) => point.t)).toEqual([Date.parse(at(1)), Date.parse(at(3))]);
     expect(stats.detail.cold).toEqual({ count: 0, tokens: 0, cost: 0 });
     expect(stats.detail.recent).toEqual([300_010, 300_020]);
-    expect(stats.detail.models).toEqual({ m: { cost: 1.1, tokens: 300_011 + 300_021 } });
+    expect(stats.detail.models).toEqual({ 'p/m': { cost: 1.1, tokens: 300_011 + 300_021, main: true, side: false } });
   });
 
   test('tool calls by tool, failures from their results', () => {
@@ -156,9 +156,12 @@ describe('omp session: the series of the whole session', () => {
 
     const stats = whole([on(1, 'claude-fable-5.2', 0.25), on(2, 'claude-opus-5.5-1m', 0.5), on(3, 'claude-fable-5.2', 0.75)]);
 
-    expect(stats.detail.models).toEqual({ 'claude-fable-5.2': { cost: 1, tokens: 220 }, 'claude-opus-5.5-1m': { cost: 0.5, tokens: 110 } });
+    expect(stats.detail.models).toEqual({
+      'p/claude-fable-5.2': { cost: 1, tokens: 220, main: true, side: false },
+      'p/claude-opus-5.5-1m': { cost: 0.5, tokens: 110, main: true, side: false },
+    });
     // a call that logged no cost leaves its model's cost unknown
     const unknown = whole([on(1, 'm', 0.25), ompMessage('assistant', at(2), { output: 5, totalTokens: 5 }, { model: 'm' })]);
-    expect(unknown.detail.models).toEqual({ m: { cost: null, tokens: 115 } });
+    expect(unknown.detail.models).toEqual({ 'p/m': { cost: null, tokens: 115, main: true, side: false } });
   });
 });

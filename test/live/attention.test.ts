@@ -23,8 +23,8 @@ const MINUTE = 60_000;
 type Session = { title: string; state: HostWorkspace['agents'][number]; since?: number; calls: OmpCall[] };
 
 // One model call `ago` ms before NOW (a minute when not given) with `context` tokens after it,
-// which wrote to a prompt cache that lasts 5 minutes when `cached`.
-const call = (context: number, ago = MINUTE, cached = false): OmpCall => ({ at: NOW - ago, output: 100, cost: 0.1, context, cached });
+// which wrote to a prompt cache that lasts `cttl` (5 minutes or an hour) when given.
+const call = (context: number, ago = MINUTE, cttl?: OmpCall['cttl']): OmpCall => ({ at: NOW - ago, output: 100, cost: 0.1, context, cttl });
 
 // A workspace of this computer per session, each with the session's one omp Orca agent.
 const workspacesOf = (sessions: Session[]) =>
@@ -50,9 +50,9 @@ const rowsOf = (html: string) => parts(parts(html, 'data-part', 'attention')[0] 
 
 test('Kinds in order', async () => {
   const html = await fleetWith([
-    { title: 'a', state: 'waiting', since: 2 * MINUTE, calls: [call(200_000, MINUTE, true)] },
+    { title: 'a', state: 'waiting', since: 2 * MINUTE, calls: [call(200_000, MINUTE, '5m')] },
     { title: 'b', state: 'working', calls: [call(800_000)] },
-    { title: 'c', state: 'done', calls: [call(300_000, 4 * MINUTE, true)] },
+    { title: 'c', state: 'done', calls: [call(300_000, 4 * MINUTE, '5m')] },
   ]);
 
   const rows = rowsOf(html);
@@ -125,7 +125,7 @@ test('Longest at 75% or more first', async () => {
 });
 
 test('Cache about to go cold', async () => {
-  const html = await fleetWith([{ title: 'Fix the login bug', state: 'done', calls: [call(620_000, 4 * MINUTE + 18_000, true)] }]);
+  const html = await fleetWith([{ title: 'Fix the login bug', state: 'done', calls: [call(620_000, 4 * MINUTE + 18_000, '5m')] }]);
 
   const rows = rowsOf(html);
   assert.deepEqual(rows.map(text), ['cache Fix the login bug cold in 0:42 · 620k to write again']);
@@ -135,18 +135,28 @@ test('Cache about to go cold', async () => {
 
 test('Cache that goes cold soonest first', async () => {
   const html = await fleetWith([
-    { title: 'a', state: 'done', calls: [call(200_000, 3 * MINUTE + 30_000, true)] },
-    { title: 'b', state: 'done', calls: [call(200_000, 4 * MINUTE + 30_000, true)] },
+    { title: 'a', state: 'done', calls: [call(200_000, 3 * MINUTE + 30_000, '5m')] },
+    { title: 'b', state: 'done', calls: [call(200_000, 4 * MINUTE + 30_000, '5m')] },
   ]);
 
   assert.deepEqual(rowsOf(html).map(text), ['cache b cold in 0:30 · 200k to write again', 'cache a cold in 1:30 · 200k to write again']);
 });
 
+test('Cache row of a one-hour cache', async () => {
+  const sessions: Session[] = [{ title: 'Fix the login bug', state: 'done', calls: [call(28_871, 58 * MINUTE + 30_000, '1h')] }];
+  const { answer, html } = await fleetOf(workspacesOf(sessions), { prepare: (home) => writeSessions(home, sessions) });
+
+  const rows = rowsOf(html);
+  assert.deepEqual(rows.map(text), ['cache Fix the login bug cold in 1:30 · 29k to write again']);
+  assert.equal(figure(rows[0], 'coldIn'), '1:30');
+  assert.equal(answer.attention[0].rewriteTokens, 28_871);
+});
+
 test('Sessions that get no cache row', async () => {
   const sessions: Session[] = [
-    { title: 'working', state: 'working', calls: [call(200_000, 4 * MINUTE, true)] },
-    { title: 'cold', state: 'done', calls: [call(200_000, 6 * MINUTE, true)] },
-    { title: 'later', state: 'done', calls: [call(200_000, 2 * MINUTE, true)] },
+    { title: 'working', state: 'working', calls: [call(200_000, 4 * MINUTE, '5m')] },
+    { title: 'cold', state: 'done', calls: [call(200_000, 6 * MINUTE, '5m')] },
+    { title: 'later', state: 'done', calls: [call(200_000, 2 * MINUTE, '5m')] },
   ];
   const opencode: HostWorkspace = { project: 'web', name: 'main', agents: ['done'], harness: 'opencode' };
   const { html } = await fleetOf([...workspacesOf(sessions), opencode], {

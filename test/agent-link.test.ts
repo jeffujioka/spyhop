@@ -9,7 +9,7 @@ import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { chmodSync, mkdirSync, utimesSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { test } from 'node:test';
+import { beforeEach, test } from 'node:test';
 import { formatHomePath, formatRemote } from '../src/core/format.js';
 import { sessionDirSlug as claudeSlug } from '../src/core/providers/claude-sources.js';
 import { NA, STAT_FIELDS } from '../src/core/providers/index.js';
@@ -18,14 +18,19 @@ import { run, type Run } from '../src/exec.ts';
 import { readServerAgents } from '../src/hosts.ts';
 import { NOW, agent, cardsOf, costOf, ompSessionDir, opencodeDatabase, refreshing, tokensOf, workspace } from './helpers/agent-cards.ts';
 import { fixtureText, tempHome } from './helpers/files.ts';
+import { withCopilotPrices } from './helpers/prices.ts';
 import { JEFF_AGENT_LIST, JEFF_ENV, JEFF_TERMINAL_LIST } from './helpers/orca-answers.ts';
 import { serverAgent } from './helpers/server-agent.ts';
 import { answer, standIns } from './helpers/stand-ins.ts';
 
 // The ids of the omp fixtures' sessions (their `session` entries); omp names a session file
-// `<start time>_<id>.jsonl`. basic.jsonl logs $0.06, compacted.jsonl $0.05.
-const BASIC = { from: 'omp/basic.jsonl', id: '00000000-0000-7000-8000-000000000001', cost: '$0.06' };
-const COMPACTED = { from: 'omp/compacted.jsonl', id: '00000000-0000-7000-8000-0000000000c1', cost: '$0.05' };
+// `<start time>_<id>.jsonl`. Their calls go through Copilot on `claude-sonnet-5.5-1m`, which each
+// test prices at 300 credits per million input tokens, 30 cached, 375 written and 1,500 output:
+// basic.jsonl then costs $0.10, compacted.jsonl $0.71.
+const BASIC = { from: 'omp/basic.jsonl', id: '00000000-0000-7000-8000-000000000001', cost: '$0.10' };
+const COMPACTED = { from: 'omp/compacted.jsonl', id: '00000000-0000-7000-8000-0000000000c1', cost: '$0.71' };
+
+beforeEach(() => withCopilotPrices({ 'claude-sonnet-5.5-1m': { input: 300, cachedInput: 30, cacheWrite: 375, output: 1500, tiers: [] } }));
 
 // Writes an omp session of the fixture into the sessions folder of `path`, which it records as
 // its folder, with `title` in its title line and modified `minutesAgo` before NOW; returns the

@@ -113,11 +113,12 @@ function tools({ calls, failed, byTool }: NonNullable<SessionView['tools']>) {
   return `<section data-part="tools" class="box">${heading('Tools', `${num('toolCalls', formatCount(calls))} tool call${calls === 1 ? '' : 's'}${failedOf(failed, ' · ')}`)}${items.join('')}</section>`;
 }
 
-// The cost, or the tokens, by model, each with what used it: the main agent and the sub-agents.
+// The cost, or the tokens, by model, each with what used it: the main agent, the sub-agents and
+// the side calls.
 function models({ by, rows }: SessionView['models']) {
   if (rows.length === 0) return '';
-  const items = rows.map(({ model, main, subAgents, value }) => {
-    const users = [main ? 'main agent' : '', subAgents > 0 ? `<span class="num">${subAgents}</span> sub-agent${subAgents === 1 ? '' : 's'}` : ''].filter(Boolean).join(' and ');
+  const items = rows.map(({ model, main, subAgents, sideCalls, value }) => {
+    const users = [main ? 'main agent' : '', subAgents > 0 ? `<span class="num">${subAgents}</span> sub-agent${subAgents === 1 ? '' : 's'}` : '', sideCalls ? 'side calls' : ''].filter(Boolean).join(' and ');
     // the tokens are a figure and the word after them text
     const shown = by === 'tokens' && value !== 'n/a' ? `<span class="num">${formatCount(value)}</span> tokens` : `<span class="num">${by === 'cost' ? formatCost(value) : value}</span>`;
     return `<div class="row item"><span>${esc(model)}</span> · <span class="muted grow">${users}</span> · <span>${shown}</span></div>`;

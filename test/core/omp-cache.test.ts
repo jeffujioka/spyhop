@@ -73,7 +73,7 @@ describe('omp session: cache expiry countdown', () => {
 
     // a cttl class the provider does not know gives no lifetime
     const unknown = assistant(
-      { ...tokens(1, 100, 50), cttl: { ephemeral1h: 50 } },
+      { ...tokens(1, 100, 50), cttl: { ephemeral2h: 50 } },
       { completedAt: NOW - 2 * MINUTE },
     );
     expect(readStats('omp', unknown, NOW).cacheLeftMs).toBe(NA);

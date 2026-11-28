@@ -302,12 +302,17 @@ export function ompCalls(home: string, path: string, { title, contexts, cost = 0
 // One model call of an omp session, at `at` (epoch ms): the prompt tokens it read from the cache,
 // wrote to it and sent uncached, its output tokens, its cost and the cost of its cache write
 // (USD), its premium requests, and the context after it; each one not given is not logged.
-// `prompted`: the time of the user message the call answers, none when not given; `tools`: the
-// tool calls it makes, each answered right after it; `cached`: it ended at `at` and wrote to a
-// prompt cache that lasts 5 minutes (omp's `usage.cttl` of `ephemeral5m`), so the cache goes cold
-// 5 minutes after it.
+// `provider` and `model`: those it logs, when not the session's; `side`: a side call of that
+// purpose (omp's `model_usage` entry), not a model call of the session; `prompted`: the time of
+// the user message the call answers, none when not given; `tools`: the tool calls it makes, each
+// answered right after it; `cttl`: it ended at `at` and wrote to a prompt cache that lasts 5
+// minutes or an hour (omp's `usage.cttl` of `ephemeral5m` or `ephemeral1h`), so the cache goes
+// cold that long after it.
 export type OmpCall = {
   at: number;
+  provider?: string;
+  model?: string;
+  side?: 'title-fork' | 'recap' | 'composer-prediction';
   read?: number;
   write?: number;
   uncached?: number;
@@ -318,7 +323,7 @@ export type OmpCall = {
   context?: number;
   prompted?: number;
   tools?: ToolCall[];
-  cached?: boolean;
+  cttl?: '5m' | '1h';
 };
 // A tool call of the tool `name`, whose result says it failed when `failed`.
 export type ToolCall = { name: string; failed?: boolean };
@@ -335,15 +340,16 @@ export const spent = (usd: number, at = NOW - 60_000): OmpCall => ({ at, output:
 // their times, each line an entry.
 function ompEntries(calls: OmpCall[], compactions: Compaction[], model: string) {
   const timestamp = (at: number) => new Date(at).toISOString();
-  const message = ({ at, read, write, uncached, output, cost, writeCost, premium, context, tools = [], cached = false }: OmpCall, i: number) => {
+  const message = ({ at, provider = PROVIDER, model: own = model, side, read, write, uncached, output, cost, writeCost, premium, context, tools = [], cttl }: OmpCall, i: number) => {
     const tokens = { input: uncached, cacheRead: read, cacheWrite: write, output };
     const usage = {
       ...Object.fromEntries(Object.entries(tokens).filter(([, value]) => value !== undefined)),
       totalTokens: Object.values(tokens).reduce<number>((sum, value) => sum + (value ?? 0), 0),
       ...(cost === undefined ? {} : { cost: { total: cost, ...(writeCost === undefined ? {} : { cacheWrite: writeCost }) } }),
       ...(premium === undefined ? {} : { premiumRequests: premium }),
-      ...(cached ? { cttl: { ephemeral5m: write ?? 0 } } : {}),
+      ...(cttl === undefined ? {} : { cttl: { [`ephemeral${cttl}`]: write ?? 0 } }),
     };
+    if (side) return { at, lines: [{ type: 'model_usage', timestamp: timestamp(at), purpose: side, provider, model: own, usage, stopReason: 'stop' }] };
     const id = (j: number) => `call-${i}-${j}`;
     const content = tools.map(({ name }, j) => ({ type: 'toolCall', id: id(j), name }));
     const results = tools.map(({ failed = false }, j) => ({ type: 'message', timestamp: timestamp(at), message: { role: 'toolResult', toolCallId: id(j), isError: failed } }));
@@ -355,12 +361,12 @@ function ompEntries(calls: OmpCall[], compactions: Compaction[], model: string) 
           timestamp: timestamp(at),
           message: {
             role: 'assistant',
-            provider: PROVIDER,
-            model,
+            provider,
+            model: own,
             usage,
             content,
             ...(context === undefined ? {} : { contextSnapshot: { promptTokens: context } }),
-            ...(cached ? { completedAt: at } : {}),
+            ...(cttl === undefined ? {} : { completedAt: at }),
           },
         },
         ...results,

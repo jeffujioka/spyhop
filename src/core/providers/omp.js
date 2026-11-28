@@ -30,6 +30,7 @@ import { add, parseEntries, tally } from './jsonl.js';
 import { burnRate, cacheRate, isNumber, tokenCount, wholeSession } from './shared.js';
 import { addCall, addCost, addMinute, detailOf, entryOf, newSeries, pushRecent, toolAnswered, toolCalled } from '../series.js';
 import { newInsights, noteCall } from '../insights.js';
+import { copilotCost, copilotWriteCost } from '../copilot-prices.js';
 
 // A fresh accumulator. Sums are `tally`s: undefined until an entry carries the value.
 function emptyState(opts) {
@@ -68,6 +69,8 @@ function emptyState(opts) {
     cold: { count: 0, tokens: 0, cost: 0 },
     tools: {},
     pending: new Map(),
+    // the cost and tokens by `<provider>/<model>`, each with whether the session's own model
+    // calls (`main`) and its side calls (`side`) used it
     models: {},
     minutes: [],
     // the `session` entry is the second line of a file, so a state that holds it starts at
@@ -81,6 +84,8 @@ function emptyState(opts) {
     started: undefined,
     // the folder the `session` entry records, null without one
     cwd: null,
+    // whether a Copilot call's model is not in the Copilot price table, so the cost is unknown
+    unpriced: false,
     // the daily lines of the model calls (src/core/insights.js), when asked for when the state
     // starts; else null
     insights: opts?.insights ? newInsights() : null,
@@ -94,6 +99,45 @@ function emptyState(opts) {
 // The stop reasons of an assistant message that ends its turn: any other, such as a tool call's
 // `toolUse`, leaves the turn open.
 const TURN_ENDS = new Set(['stop', 'aborted']);
+
+// The provider of the calls through GitHub Copilot, which the Copilot price table prices.
+const COPILOT = 'github-copilot';
+
+// Whether `usage` logs a token sent, read, written or output: a call omp aborted, or that failed
+// before the model answered, logs a usage of all zeros (or none), so it sent and wrote nothing.
+const spentTokens = (usage) => [usage?.input, usage?.cacheRead, usage?.cacheWrite, usage?.output].some((tokens) => tokenCount(tokens) > 0);
+
+// The cost of the model call or side call `logged` (an assistant message or a `model_usage`
+// entry): a Copilot call's from the Copilot price table (null for a model it does not hold;
+// undefined, nothing to add, for a call that spent no token), any other's as omp logged it (null:
+// none logged).
+function costOf({ provider, model, usage }) {
+  if (provider !== COPILOT) return isNumber(usage?.cost?.total) ? usage.cost.total : null;
+  if (!spentTokens(usage)) return undefined;
+  return copilotCost(model, { uncached: tokenCount(usage.input), read: tokenCount(usage.cacheRead), write: tokenCount(usage.cacheWrite), output: tokenCount(usage.output) });
+}
+
+// Adds the cost `spent` of a call of `logged` (see `costOf`) to the session's cost.
+function addSpent(s, logged, spent) {
+  add(s.costUsd, spent);
+  if (spent === null && logged.provider === COPILOT) s.unpriced = true;
+}
+
+// Adds `call`, a model call or a side call (`side`) of `logged` that spent tokens and ended at
+// `time`, to the minutes, and, when it logs its model, to the models and the daily lines.
+function addSpend(s, logged, time, call, side) {
+  const tokens = tokenCount(logged.usage.totalTokens);
+  addMinute(s.minutes, time, { ...call, tokens });
+  const { provider, model } = logged;
+  // a call that logs no model is in no model and no daily line: none is filed under a made-up one
+  if (typeof model !== 'string') return;
+  const key = typeof provider === 'string' && provider ? `${provider}/${model}` : model;
+  const byModel = entryOf(s.models, key, () => ({ cost: 0, tokens: 0, main: false, side: false }));
+  byModel.cost = addCost(byModel.cost, call.cost);
+  byModel.tokens += tokens;
+  byModel[side ? 'side' : 'main'] = true;
+  if (s.insights && isNumber(time)) noteCall(s.insights, { ...call, end: time, model: key, tokens, side, copilot: provider === COPILOT });
+}
 
 // Adds `entries` (in file order, after those already in `state`) to `state`, which it changes
 // and returns; without a `state` it starts a new one, with daily lines when `opts.insights`.
@@ -116,6 +160,13 @@ function fold(state, entries, opts) {
     } else if (e.type === 'session_init') {
       if (typeof e.agent === 'string') s.kind = e.agent;
       if (typeof e.resolvedModel === 'string') s.model = e.resolvedModel;
+    } else if (e.type === 'model_usage') {
+      // a side call (a title, a recap, a prediction of the next prompt): in the session's cost
+      // and tokens, but no model call of the series, the cold starts or the cache figures
+      const spent = costOf(e);
+      add(s.totalTokens, e.usage?.totalTokens);
+      addSpent(s, e, spent);
+      if (spentTokens(e.usage)) addSpend(s, e, at, { t: at, read: 0, write: 0, uncached: 0, output: tokenCount(e.usage.output), cost: spent }, true);
     } else if (e.type === 'message' && e.message) {
       const time = Date.parse(e.timestamp);
       s.firstMessage ??= time;
@@ -127,8 +178,9 @@ function fold(state, entries, opts) {
         const ms = time - s.began;
         s.latencyMs = isNumber(ms) ? ms : undefined;
         const { usage } = e.message;
+        const spent = costOf(e.message);
         add(s.totalTokens, usage?.totalTokens);
-        add(s.costUsd, usage?.cost?.total);
+        addSpent(s, e.message, spent);
         add(s.premiumRequests, usage?.premiumRequests);
         add(s.input, usage?.input);
         add(s.cacheRead, usage?.cacheRead);
@@ -137,12 +189,9 @@ function fold(state, entries, opts) {
           s.cacheReads += 1;
           if (usage.cacheRead > 0) s.cacheHits += 1;
         }
-        // A call omp aborted, or that failed before the model answered, logs a usage of all
-        // zeros (or none): it sent and wrote nothing, so it is no model call of the series, of
-        // the cold starts or of the spark line. One that logged usage counts, whatever its
-        // stop reason.
-        const kinds = [usage?.input, usage?.cacheRead, usage?.cacheWrite, usage?.output];
-        if (kinds.some((tokens) => tokenCount(tokens) > 0)) {
+        // A call that spent no token is no model call of the series, of the cold starts or of
+        // the spark line. One that logged usage counts, whatever its stop reason.
+        if (spentTokens(usage)) {
           const prompt = e.message.contextSnapshot?.promptTokens;
           if (isNumber(prompt)) pushRecent(s.recent, prompt);
           const call = {
@@ -151,34 +200,23 @@ function fold(state, entries, opts) {
             write: tokenCount(usage.cacheWrite),
             uncached: tokenCount(usage.input),
             output: tokenCount(usage.output),
-            cost: isNumber(usage.cost?.total) ? usage.cost.total : null,
+            cost: spent,
             context: isNumber(prompt) ? prompt : null,
           };
           addCall(s.series, call);
-          addMinute(s.minutes, time, { ...call, tokens: tokenCount(usage.totalTokens) });
           // a cold start: a call after the first that read nothing from the prompt cache, so it
           // wrote the prompt to the cache again
           if (s.calls > 0 && usage.cacheRead === 0) {
             s.cold.count += 1;
             s.cold.tokens += call.write;
-            s.cold.cost = addCost(s.cold.cost, isNumber(usage.cost?.cacheWrite) ? usage.cost.cacheWrite : null);
+            const written =
+              e.message.provider === COPILOT
+                ? copilotWriteCost(e.message.model, call.write, call.uncached + call.read + call.write)
+                : isNumber(usage.cost?.cacheWrite) ? usage.cost.cacheWrite : null;
+            s.cold.cost = addCost(s.cold.cost, written);
           }
           s.calls += 1;
-          // a call that logs no model is in no daily line: no line is filed under a made-up model
-          const { provider, model } = e.message;
-          if (s.insights && isNumber(time) && typeof model === 'string') {
-            noteCall(s.insights, {
-              ...call,
-              end: time,
-              model: typeof provider === 'string' && provider ? `${provider}/${model}` : model,
-              tokens: tokenCount(usage.totalTokens),
-            });
-          }
-          if (typeof e.message.model === 'string') {
-            const byModel = entryOf(s.models, e.message.model, () => ({ cost: 0, tokens: 0 }));
-            byModel.cost = addCost(byModel.cost, call.cost);
-            byModel.tokens += tokenCount(usage.totalTokens);
-          }
+          addSpend(s, e.message, time, call, false);
         }
         for (const part of Array.isArray(e.message.content) ? e.message.content : []) {
           if (part?.type === 'toolCall') toolCalled(s, part.id, part.name);
@@ -222,9 +260,10 @@ function tokens({ totalTokens }) {
   return totalTokens.sum === undefined ? {} : { totalTokens: totalTokens.sum };
 }
 
-// Cost the harness logged (herdr-session-stats decision D5); no price table.
-function cost({ costUsd }) {
-  return costUsd.sum === undefined ? {} : { costUsd: costUsd.sum };
+// The cost omp logged (herdr-session-stats decision D5), but a Copilot call's from the Copilot
+// price table (see `costOf`); n/a once a Copilot call's model is not in the table.
+function cost({ costUsd, unpriced }) {
+  return unpriced || costUsd.sum === undefined ? {} : { costUsd: costUsd.sum };
 }
 
 // A turn is a hit when its cacheRead is above 0 and a miss when it is 0 (herdr-session-stats
@@ -235,7 +274,7 @@ function cacheTurns({ cacheReads, cacheHits }) {
 
 // The key of `usage.cttl` names the cache lifetime class; its value is a token count
 // (herdr-session-stats docs/omp-session-format.md, decision D8 (d)).
-const CACHE_LIFETIME_MS = { ephemeral5m: 5 * 60 * 1000 };
+const CACHE_LIFETIME_MS = { ephemeral5m: 5 * 60 * 1000, ephemeral1h: 60 * 60 * 1000 };
 
 // Time left on the prompt cache after the last assistant turn, counted from the turn's
 // completion; 0 once it has expired. Only that turn's own cttl counts.

@@ -16,7 +16,8 @@ import { decodeState, encodeState } from '../core/refresh.js';
 export const STORE_FILE = '.local/state/spyhop/insights.db';
 
 // The version of the file rows' states: a reader takes a row of another version as unread.
-export const HISTORY_VERSION = 1;
+// Raise it with KEPT_VERSION (src/core/refresh.js) when a fold's state changes shape.
+export const HISTORY_VERSION = 2;
 
 export type FileRow = { id: number; host: string; harness: string; path: string; pos: number; size: number; mtimeMs: number; version: number; state: unknown };
 

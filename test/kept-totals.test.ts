@@ -312,6 +312,32 @@ test('Scans of spyhop 0.1.0 are discarded once', async () => {
   assert.deepEqual(dds(lines().slice(again)), []);
 });
 
+test('Scans of spyhop 0.2.0 discarded once', async () => {
+  const { file, lines, start } = devboxAgent();
+  const first = await start();
+  await refresh();
+  const { key, value } = keptIn(first.data().storage);
+  const scan = value.scans[0];
+  // what spyhop 0.2.0 kept for the file: its version's number, 5, and a cost of 99 USD that no
+  // scan of this version gives
+  const old = { version: 5, scans: [{ ...scan, state: { ...scan.state, costUsd: { ...scan.state.costUsd, sum: 99 } } }] };
+  const before = lines().length;
+
+  const updated = await start({ [key]: JSON.stringify(old) } as Storage);
+  const card = await refresh();
+
+  const ran = dds(lines().slice(before));
+  assert.equal(ran.length, 1);
+  assert.match(ran[0], / 'skip=0' /);
+  assert.equal(costOf(card), '$0.10');
+  assert.deepEqual(keptIn(updated.data().storage).value.scans.map((s) => [s.path, s.state.costUsd.sum]), [[file, 0.1]]);
+
+  const again = lines().length;
+  await start(updated.data().storage as Storage);
+  await refresh();
+  assert.deepEqual(dds(lines().slice(again)), []);
+});
+
 test('File that is not the one scanned is scanned again', async () => {
   const { file, lines, start } = devboxAgent();
   const first = await start();

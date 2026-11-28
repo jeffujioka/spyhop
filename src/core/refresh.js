@@ -87,8 +87,8 @@ const newScan = () => ({ state: undefined, block: 0, skip: 0, carry: '', pos: -1
 // has a `$` field of its own, as `fields`.
 // Raise KEPT_VERSION when a provider's state changes shape: values of another number are
 // ignored, so each file is scanned whole again once. It is raised by each slice of spyhop-live
-// that changes a fold's state.
-export const KEPT_VERSION = 5;
+// that changes a fold's state, and by spyhop-insights (5 was spyhop 0.2.0's).
+export const KEPT_VERSION = 6;
 
 // A state as plain values that JSON writes and reads back as the same state (see above); the
 // history store writes a file's state with it too (src/history/store.ts).

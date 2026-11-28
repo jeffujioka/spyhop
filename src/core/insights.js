@@ -3,15 +3,17 @@
 
 import { dayOf } from './days.js';
 
-// The figures of a daily line. `cost` sums the logged costs; `costNa` counts the calls that
-// logged none.
-export const LINE_FIGURES = ['calls', 'tokens', 'uncached', 'read', 'write', 'output', 'cost', 'costNa'];
+// The figures of a daily line. `cost` sums the costs, side calls' included; `costNa` counts the
+// calls that have none. `sideCost` and `sideTokens` are the side calls' share of the cost and
+// tokens, which count as no model call; `copilotCost` is the Copilot calls' share of the cost.
+export const LINE_FIGURES = ['calls', 'tokens', 'uncached', 'read', 'write', 'output', 'cost', 'costNa', 'sideCost', 'sideTokens', 'copilotCost'];
 
 // The open buckets: `day\nmodel` -> `{ day, model, figures }`.
 export const newInsights = () => ({ open: new Map() });
 
-// Adds the model call `call` (`end` epoch ms, `model`, its token counts and `cost`, null when
-// none was logged) to the bucket of its day and model.
+// Adds the model call `call` (`end` epoch ms, `model`, its token counts and `cost`, null when it
+// has none; `side`: a side call, `copilot`: a call through Copilot) to the bucket of its day and
+// model. A side call adds its tokens and cost, but no model call nor its prompt's tokens.
 export function noteCall(ins, call) {
   const day = dayOf(call.end);
   const key = `${day}\n${call.model}`;
@@ -21,10 +23,18 @@ export function noteCall(ins, call) {
     ins.open.set(key, line);
   }
   const { figures } = line;
-  figures.calls += 1;
-  for (const name of ['tokens', 'uncached', 'read', 'write', 'output']) figures[name] += call[name];
+  figures.tokens += call.tokens;
+  if (call.side) figures.sideTokens += call.tokens;
+  else {
+    figures.calls += 1;
+    for (const name of ['uncached', 'read', 'write', 'output']) figures[name] += call[name];
+  }
   if (call.cost === null) figures.costNa += 1;
-  else figures.cost += call.cost;
+  else {
+    figures.cost += call.cost;
+    if (call.side) figures.sideCost += call.cost;
+    if (call.copilot) figures.copilotCost += call.cost;
+  }
 }
 
 // The lines noted since the last take, which it empties.
