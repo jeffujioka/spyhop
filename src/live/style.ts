@@ -167,4 +167,20 @@ button:hover { background: var(--orca-accent); color: var(--orca-accent-foregrou
 [data-chart="subagents"] { height: 8px; margin-top: 2px; }
 [data-chart="subagents"] rect { fill: var(--k); }
 .more { margin-top: 6px; font-size: 11px; }
+/* the tab bar, the range control, and a range tab's titled figures and charts: each its title,
+   the line of what it means under it, then its figure or chart */
+[data-part="tabs"], [data-part="range"] { gap: 4px; margin-bottom: 8px; }
+[data-part="tabs"] [aria-selected="true"], [data-part="range"] [aria-pressed="true"] {
+  background: var(--orca-accent); color: var(--orca-accent-foreground); border-color: var(--orca-primary);
+}
+section[data-part="figure"] {
+  margin-top: 8px; padding: 10px 12px; min-width: 0; background: var(--orca-card); color: var(--orca-card-foreground);
+  border: 1px solid var(--orca-border); border-radius: var(--orca-radius);
+}
+.figures > section[data-part="figure"] { margin: 0; padding: 0; border: none; }
+[data-meaning] { margin: 2px 0 4px; font-size: 11px; }
+section[data-part="figure"] > .num { display: block; font-size: 17px; font-weight: 650; }
+[data-chart^="range-"] { height: 100px; }
+[data-chart^="range-"] path { stroke: var(--spy-s1); stroke-width: 1.5; }
+[data-chart^="range-"] path[data-key] { stroke-width: 4; }
 `;

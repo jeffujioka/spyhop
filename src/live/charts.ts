@@ -1,7 +1,8 @@
 // The charts of the live panel, as markup: on the fleet screen, the burn rate of the last hour
 // stacked by session; on a card, the spark line of a session's recent contexts and the bar of its
 // context; on the session screen, the context over the whole session,
-// the tokens of each model call, the cost, and the bars of its sub-agents on one time axis. A
+// the tokens of each model call, the cost, and the bars of its sub-agents on one time axis; on a
+// range tab, a figure by day or month (`rangeChart`). A
 // chart is an SVG as wide as its box (`width="100%"` over a `viewBox` 360 wide, stretched with
 // `preserveAspectRatio="none"`) with no text of its own: its headline, times, labels and notes are
 // HTML around it. Its colours come from the stylesheet (src/live/style.ts), by its classes and
@@ -13,10 +14,22 @@
 // model calls to the room it has (`groupPoints`), and is not drawn without a point.
 // Pure: no DOM.
 
-import { formatClock, formatCost, formatCostPerHour, formatCount, formatPercent, formatTokens, orNa } from '../core/format.js';
+import {
+  formatClock,
+  formatCost,
+  formatCostPerHour,
+  formatCount,
+  formatDayMonth,
+  formatDayShort,
+  formatMonthShort,
+  formatMonthYear,
+  formatPercent,
+  formatTokens,
+  orNa,
+} from '../core/format.js';
 import { groupPoints, MINUTE_MS } from '../core/series.js';
 import { BURN_NAMED } from '../fleet.ts';
-import type { BurnCard, Num, Point, SessionView, SubAgentView } from '../protocol.ts';
+import type { BurnCard, Num, Point, RangePoint, SessionView, SubAgentView } from '../protocol.ts';
 import { esc, num } from './html.ts';
 import { levelOf } from './levels.ts';
 
@@ -27,6 +40,7 @@ const CONTEXT_HEIGHT = 120;
 const TOKENS_HEIGHT = 120;
 const COST_HEIGHT = 100;
 const BURN_HEIGHT = 80;
+const RANGE_HEIGHT = 100;
 const AGENT_HEIGHT = 10;
 // Room of a session chart, in bars or points, unless its caller gives another.
 const ROOM = 120;
@@ -169,13 +183,13 @@ function clockMarks(times: number[], x: (t: number) => number) {
   return timesRow(marks.map((t) => ({ t, x: x(t) })));
 }
 
-// The times `marks` under a chart, each written at its x and kept within the chart: shifted left
-// by as much of its width as its x is of the chart's, so one at the left edge begins at its x and
-// one at the right edge ends at it.
-function timesRow(marks: { t: number; x: number }[]) {
-  const spans = marks.map(({ t, x }) => {
+// The times `marks` under a chart, each written at its x, as its `label` or else its time of day,
+// and kept within the chart: shifted left by as much of its width as its x is of the chart's, so
+// one at the left edge begins at its x and one at the right edge ends at it.
+function timesRow(marks: { t: number; x: number; label?: string }[]) {
+  const spans = marks.map(({ t, x, label }) => {
     const left = cssPercent(x / WIDTH);
-    return `<span data-time="${t}" class="num" style="left:${left};transform:translateX(-${left})">${formatClock(t)}</span>`;
+    return `<span data-time="${t}" class="num" style="left:${left};transform:translateX(-${left})">${esc(label ?? formatClock(t))}</span>`;
   });
   return `<div data-part="times" class="times muted">${spans.join('')}</div>`;
 }
@@ -465,6 +479,41 @@ export function burnChart(layers: BurnCard['layers'], endMs: number): string {
     .join('');
   // the faint lines over the areas, so that an area does not hide them
   return `${plot(BURN_TITLE, `${svgOf('burn', BURN_HEIGHT)}${drawn.join('')}${scale.lines}${hover.crosses}</svg>`, scale.labels + hover.boxes)}${clockMarks(times, x)}<div class="row key muted">${keys}</div>`;
+}
+
+// The chart over time of a range tab (`range-<name>`), a point per day (`YYYY-MM-DD`) or month
+// (`YYYY-MM`) of `points`, oldest first, drawn as the burn rate chart is: a line through the
+// points on a round scale, at most five of them marked under it (`22 Nov`, `Dec`), and each
+// point's box giving its day or month and its value as `format` writes it. A point carries its key,
+// its value and the local start of its day or month (`data-t`); one whose value is n/a has no dot,
+// and the line breaks there.
+export function rangeChart(name: string, points: RangePoint[], format: (v: number) => string): string {
+  const days = points[0]?.key.length === 10;
+  const times = points.map(({ key }) => {
+    const [year, month, day = 1] = key.split('-').map(Number);
+    return new Date(year, month - 1, day).getTime();
+  });
+  const x = timeScale(times);
+  const scale = scaleOf(RANGE_HEIGHT, Math.max(0, ...points.flatMap(({ v }) => (v === 'n/a' ? [] : [v]))), format);
+  const { y } = scale;
+  const xy = points.map(({ v }, i) => (v === 'n/a' ? null : `${x(times[i])} ${y(v)}`));
+  const line = xy.flatMap((point, i) => (point === null ? [] : [`${xy[i - 1] ? 'L' : 'M'}${point}`])).join(' ');
+  const dots = points
+    .map(({ key, v }, i) => `<path data-key="${key}" data-t="${times[i]}" data-v="${v === 'n/a' ? v : valueText(v)}"${xy[i] ? ` d="M${xy[i]} L${xy[i]}"` : ''}/>`)
+    .join('');
+  const hover = hovers(
+    RANGE_HEIGHT,
+    points.map(({ key, v }, i) => ({
+      t: times[i],
+      x: x(times[i]),
+      dots: v === 'n/a' ? [] : [{ y: y(v), kind: '' }],
+      head: days ? formatDayMonth(key) : formatMonthYear(key),
+      rows: [['', orNa(v, format)]],
+    })),
+  );
+  const every = Math.ceil(points.length / 5);
+  const marks = points.flatMap(({ key }, i) => (i % every === 0 ? [{ t: times[i], x: x(times[i]), label: days ? formatDayShort(key) : formatMonthShort(key) }] : []));
+  return plot(name, `${svgOf(`range-${name}`, RANGE_HEIGHT)}${scale.lines}<path d="${line}"/>${dots}${hover.crosses}</svg>`, scale.labels + hover.boxes) + timesRow(marks);
 }
 
 // The bars of the sub-agents `agents`, in their order, each on its own line of one time axis that

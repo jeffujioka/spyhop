@@ -142,6 +142,24 @@ export type SessionView = {
 // agent.
 export type SessionAnswer = { request: number; session: SessionView | null };
 
+// A range of the range tabs (src/core/days.js): Day is today, Week the 7 and Month the 30 days that
+// end today, Year the 12 calendar months that end with this month, in this computer's time zone.
+export type Range = 'day' | 'week' | 'month' | 'year';
+export type RangeTab = 'spend' | 'cache' | 'health';
+
+// A point of a range chart: its day (`YYYY-MM-DD`, Week and Month) or month (`YYYY-MM`, Year) and
+// its value there.
+export type RangePoint = { key: string; v: Num };
+
+// The Spend tab of a range (src/history/views.ts), over every session the history store holds,
+// sub-agents included: its cost (n/a when a model call of it logged none), tokens and model calls,
+// and its cost by day or month, null for Day.
+export type SpendView = { cost: Num; tokens: Num; calls: number; chart: RangePoint[] | null };
+
+// The range tab `tab` over `range`, as the history store holds it: the Spend tab's view when it is
+// the Spend tab, else null; `request`: the panel's number of the request.
+export type RangeAnswer = { request: number; tab: RangeTab; range: Range; spend: SpendView | null };
+
 declare module 'orca' {
   interface PluginRequests {
     /** The fleet of the Orca agents' cards on every Orca host, built once per request.
@@ -151,6 +169,9 @@ declare module 'orca' {
     /** The session of one card, built as the fleet is, which posts nothing. `request`: the
      *  panel's number of the request; `card`: the card's id. */
     'spyhop.session': { input: { request: number; card: string }; output: SessionAnswer };
+    /** The range tab `tab` over `range`, from the history store as it is now. `request`: the
+     *  panel's number of the request. */
+    'spyhop.range': { input: { request: number; tab: RangeTab; range: Range }; output: RangeAnswer };
     /** Focuses the pane in this computer's Orca window; `focused` false when it could not, the
      *  reason in the worker's log. */
     'spyhop.focus': { input: Pane; output: { focused: boolean } };

@@ -1,10 +1,15 @@
 // What the tests of the history store share: the store under a home, opened read-only beside the
-// worker or the catch-up that writes it, and the wait for its catch-ups.
+// worker or the catch-up that writes it, the wait for its catch-ups, and a range tab as the real
+// worker answers it from the store.
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { STORE_FILE } from '../../src/history/store.ts';
-import { until } from './live.ts';
+import { spendTab } from '../../src/live/spend.ts';
+import { tabBar } from '../../src/live/tabs.ts';
+import type { Range, RangeAnswer, RangeTab } from '../../src/protocol.ts';
+import { type Mounting, mountOn, until } from './live.ts';
+import type { HostWorkspace } from './orca-host.ts';
 
 // The history store of `home`, read-only; the caller closes it.
 export const storeOf = (home: string) => new DatabaseSync(join(home, STORE_FILE), { readOnly: true });
@@ -25,3 +30,13 @@ function catchUps(home: string) {
 
 // Resolves once `runs` catch-ups have ended on the store of `home` (see `until`).
 export const caughtUp = (home: string, runs = 1) => until(() => catchUps(home) >= runs);
+
+// The worker's answer for the range tab `tab` over `range`, once its first catch-up has read the
+// session files `prepare` wrote under the home (test/helpers/live.ts mounts it, with the mock
+// clock at `now`), and the tab bar and the Spend tab drawn from it.
+export async function rangeOf(workspaces: HostWorkspace[], { tab, range, ...mounting }: Mounting & { tab: RangeTab; range: Range }): Promise<{ answer: RangeAnswer; html: string }> {
+  const { home, mounted } = await mountOn(workspaces, mounting);
+  await caughtUp(home);
+  const answer = (await mounted.request('spyhop.range', { request: 1, tab, range })) as RangeAnswer;
+  return { answer, html: tabBar(tab, range) + spendTab(answer) };
+}

@@ -55,20 +55,27 @@ atTestEnd(async () => {
   }
 });
 
-// What a test may give `fleetOf` and `sessionOf`: `prepare` runs first with the home, to put files
-// under it; `now`: the mock clock's time, NOW when not given; `homes` and `orca` go to the
-// stand-ins (test/helpers/stand-ins.ts), so that a test may list and reach another Orca host.
-type Mounting = { prepare?: (home: string) => void; now?: number; homes?: Record<string, string>; orca?: Record<string, string> };
+// What a test may give `fleetOf`, `sessionOf` and `rangeOf` (test/helpers/history.ts): `prepare`
+// runs first with the home, to put files under it; `now`: the mock clock's time, NOW when not
+// given; `homes` and `orca` go to the stand-ins (test/helpers/stand-ins.ts), so that a test may
+// list and reach another Orca host.
+export type Mounting = { prepare?: (home: string) => void; now?: number; homes?: Record<string, string>; orca?: Record<string, string> };
 
-// The real worker mounted on this computer's Orca host with `workspaces`, and its fleet answer.
-async function mountedFleet(workspaces: HostWorkspace[], { prepare, now = NOW, homes = {}, orca = {} }: Mounting) {
+// The real worker mounted on this computer's Orca host with `workspaces`, and its home.
+export async function mountOn(workspaces: HostWorkspace[], { prepare, now = NOW, homes = {}, orca = {} }: Mounting) {
   setEnv('TZ', 'UTC');
   mock.timers.enable({ apis: ['Date'], now });
   const home = useTempHome();
   prepare?.(home);
   standIns({ homes, orca });
   worker = await mountWorker(workerModule, { host: orcaHost(home, { workspaces }) });
-  return { mounted: worker, fleet: (await worker.request('spyhop.fleet', { request: 1 })) as FleetAnswer };
+  return { home, mounted: worker };
+}
+
+// The real worker mounted on this computer's Orca host with `workspaces`, and its fleet answer.
+async function mountedFleet(workspaces: HostWorkspace[], mounting: Mounting) {
+  const { mounted } = await mountOn(workspaces, mounting);
+  return { mounted, fleet: (await mounted.request('spyhop.fleet', { request: 1 })) as FleetAnswer };
 }
 
 // The fleet the worker answers on this computer's Orca host with `workspaces`, and the fleet

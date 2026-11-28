@@ -21,6 +21,7 @@
 // panel is open, and for the palette command `spyhop.show`, which shows the panel. Apart from
 // them, a catch-up reads this computer's omp session files into the history store
 // (src/history/catch-up.ts) when the worker starts and every CATCH_UP_MS after.
+// `spyhop.range` answers a range tab from the history store as it is then (src/history/views.ts).
 // `spyhop.focus` focuses a card's pane
 // in this computer's Orca window: an agent on this computer or an SSH workspace by Orca's
 // `terminal.focus`, one on a paired Orca server by `orca terminal switch` to the server's
@@ -35,9 +36,10 @@ import { createTtlCache } from './core/ttl-cache.js';
 import { run } from './exec.ts';
 import { attentionRows, burnCard, type FleetAgent, groupCards, LOCAL, stateCounts } from './fleet.ts';
 import { orca as cli, type HostLists, listHosts, readServerAgents, type RemoteHost, remoteHosts, type ServerAgent } from './hosts.ts';
-import type { CardView, FleetAnswer, HostGroup, Pane, SessionAnswer } from './protocol.ts';
+import type { CardView, FleetAnswer, HostGroup, Pane, RangeAnswer, SessionAnswer } from './protocol.ts';
 import { type CatchUp, createCatchUp } from './history/catch-up.ts';
 import { openStore } from './history/store.ts';
+import { spendView } from './history/views.ts';
 import { sessionDetail } from './session-detail.ts';
 
 // How long Orca's lists of hosts and paired servers are kept: a server is paired seldom, its
@@ -271,6 +273,13 @@ export default function activate(orca: OrcaWorkerApi): void {
     const host = hostId === LOCAL ? null : (names.get(hostId) ?? hostId);
     return { request, session: sessionDetail(card, { home, host, view: views.get(id)!, now: Date.now() }) };
   });
+
+  orca.panels.handle('spyhop.range', async ({ request, tab, range }): Promise<RangeAnswer> => ({
+    request,
+    tab,
+    range,
+    spend: tab === 'spend' ? spendView(store, range, Date.now()) : null,
+  }));
 
   orca.panels.handle('spyhop.focus', async (pane: Pane) => {
     try {

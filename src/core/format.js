@@ -77,6 +77,28 @@ export function formatDate(ms) {
   return `${DAYS[date.getDay()]} ${date.getDate()} ${MONTHS[date.getMonth()]}, ${formatClock(ms)}`;
 }
 
+const MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+
+// A day of a range as the live panel writes it: '2026-11-27' (src/core/days.js) is "27 November".
+export function formatDayMonth(day) {
+  return `${Number(day.slice(8, 10))} ${MONTH_NAMES[Number(day.slice(5, 7)) - 1]}`;
+}
+
+// A month of a range as the live panel writes it: '2025-12' is "December 2025".
+export function formatMonthYear(month) {
+  return `${MONTH_NAMES[Number(month.slice(5, 7)) - 1]} ${month.slice(0, 4)}`;
+}
+
+// A day of a range as a mark under a chart: '2026-11-27' is "27 Nov".
+export function formatDayShort(day) {
+  return `${Number(day.slice(8, 10))} ${MONTHS[Number(day.slice(5, 7)) - 1]}`;
+}
+
+// A month of a range as a mark under a chart: '2025-12' is "Dec".
+export function formatMonthShort(month) {
+  return MONTHS[Number(month.slice(5, 7)) - 1];
+}
+
 // A short wait as the live panel writes it, to a tenth of a second: "2.9s"; from a minute on as a
 // duration is. Takes a number or 'n/a'.
 export function formatSeconds(ms) {
