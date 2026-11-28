@@ -6,6 +6,7 @@ import { copyFileSync, mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { type BuiltCard, createAgentCards, type OrcaAgent } from '../../src/agent-cards.ts';
 import { cardView } from '../../src/card-view.ts';
+import { type Price } from '../../src/core/copilot-prices.js';
 import { formatCost, formatTokens, orNa } from '../../src/core/format.js';
 import { sessionDirSlug as ompSlug } from '../../src/core/providers/omp-sources.js';
 import { TAIL_BYTES } from '../../src/core/refresh.js';
@@ -80,13 +81,17 @@ export function opencodeDatabase(home: string, name = 'basic') {
 // context.
 export type OpencodeCalls = { provider: string; model: string; contexts: number[] };
 
+// The tokens of one model call of an opencode session: sent fresh, read from the cache, written
+// to it and output.
+export type OpencodeCall = { uncached: number; read: number; write: number; output: number };
+
 // The session `ses_window` of the folder `folder` in opencode's database under `home` (made from
-// current.sql), in the current tables: one model call of `model` of the provider `provider` per
-// context of `contexts` (each the prompt's tokens, read from the cache but for 100 sent fresh),
-// at 0.10 USD each, and opencode's own total of 0.40 USD; returns the database's path.
-export function opencodeCalls(home: string, folder: string, { provider, model, contexts }: OpencodeCalls) {
-  const at = (i: number) => NOW - 60_000 * (contexts.length - i);
-  const rows = contexts.map((context, i) => {
+// current.sql), in the current tables: `calls` of `model` of the provider `provider`, one a
+// minute, the last a minute ago, at 0.10 USD each, and opencode's own total of `cost` USD;
+// returns the database's path.
+export function opencodeSession(home: string, folder: string, { provider, model, calls, cost }: { provider: string; model: string; calls: OpencodeCall[]; cost: number }) {
+  const at = (i: number) => NOW - 60_000 * (calls.length - i);
+  const rows = calls.map(({ uncached, read, write, output }, i) => {
     const data = {
       time: { created: at(i), completed: at(i) + 1000 },
       agent: 'build',
@@ -94,15 +99,25 @@ export function opencodeCalls(home: string, folder: string, { provider, model, c
       content: [],
       finish: 'stop',
       cost: 0.1,
-      tokens: { input: 100, output: 50, reasoning: 0, cache: { read: context - 100, write: 0 } },
+      tokens: { input: uncached, output, reasoning: 0, cache: { read, write } },
     };
     return `INSERT INTO session_message VALUES ('w${i}', 'ses_window', 'assistant', ${i + 1}, ${at(i)}, ${at(i) + 1000}, ${sqlText(JSON.stringify(data))});`;
   });
-  const session = `INSERT INTO session_v2 VALUES ('ses_window', 'prj', NULL, 's', ${sqlText(folder)}, 't', '2.0.0', 0.40, NULL, NULL, ${at(0)}, ${at(contexts.length - 1) + 1000}, NULL);`;
+  const session = `INSERT INTO session_v2 VALUES ('ses_window', 'prj', NULL, 's', ${sqlText(folder)}, 't', '2.0.0', ${cost}, NULL, NULL, ${at(0)}, ${at(calls.length - 1) + 1000}, NULL);`;
   const database = opencodeDatabase(home, 'current');
   execFileSync('sqlite3', [database, [session, ...rows].join('\n')]);
   return database;
 }
+
+// The session `opencodeSession` writes with one call per context of `contexts` (each the
+// prompt's tokens, read from the cache but for 100 sent fresh, and 50 output), and opencode's own
+// total of 0.40 USD; returns the database's path.
+export const opencodeCalls = (home: string, folder: string, { provider, model, contexts }: OpencodeCalls) =>
+  opencodeSession(home, folder, { provider, model, cost: 0.4, calls: contexts.map((context) => ({ uncached: 100, read: context - 100, write: 0, output: 50 })) });
+
+// The Copilot price (src/core/copilot-prices.js) at which each call `opencodeCalls` writes costs
+// the 0.10 USD it logs: its 50 output tokens at 200,000 credits per million, the rest free.
+export const OPENCODE_CALL_PRICE: Price = { input: 0, cachedInput: 0, cacheWrite: 0, output: 200_000, tiers: [] };
 
 // `text` as an SQL string literal.
 export const sqlText = (text: string) => `'${text.replaceAll("'", "''")}'`;

@@ -153,8 +153,8 @@ describe('opencode session', () => {
     ]);
     expect(current.detail.marks).toEqual([{ t: T0 + 61000, before: null, after: null }]);
     expect(current.detail.tools).toEqual({ bash: { calls: 3, failed: 1 }, read: { calls: 1, failed: 0 } });
-    expect(Object.keys(current.detail.models)).toEqual(['claude-haiku-5.5', 'model-c']);
-    expect(current.detail.models['claude-haiku-5.5'].tokens).toBe(960 + 950);
+    expect(Object.keys(current.detail.models)).toEqual(['p/claude-haiku-5.5', 'p/model-c']);
+    expect(current.detail.models['p/claude-haiku-5.5'].tokens).toBe(960 + 950);
     expect(current.detail.cold).toEqual({ count: 1, tokens: 0, cost: null });
     expect([current.detail.start - T0, current.detail.end - T0]).toEqual([0, 130000]);
 

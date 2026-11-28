@@ -6,9 +6,10 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { MINUTE } from '../core/helpers/entries.ts';
-import { NOW, opencodeCalls, workspace } from '../helpers/agent-cards.ts';
+import { NOW, OPENCODE_CALL_PRICE, opencodeCalls, workspace } from '../helpers/agent-cards.ts';
 import { burnOf, claudeSession, claudeSubAgent, spent } from '../helpers/live.ts';
 import { attr, figure, parts, text } from '../helpers/markup.ts';
+import { withCopilotPrices } from '../helpers/prices.ts';
 import type { HostWorkspace } from '../helpers/orca-host.ts';
 
 // This computer's workspace `web`/`main`, with one working Claude Code agent.
@@ -150,6 +151,7 @@ test('Claude Code session left out', async () => {
 });
 
 test('opencode session counts', async () => {
+  withCopilotPrices({ 'claude-haiku-5.5': OPENCODE_CALL_PRICE });
   const { burn } = await burnOf([], {
     others: [{ project: 'web', name: 'main', agents: ['working'], harness: 'opencode' }],
     prepare: (home) => {

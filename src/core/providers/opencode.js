@@ -17,6 +17,7 @@
 
 import { burnRate, isNumber, tokenCount } from './shared.js';
 import { addCall, addCost, addMinute, detailOf, entryOf, newSeries, pushRecent } from '../series.js';
+import { copilotCost } from '../copilot-prices.js';
 
 function parseSession({ messages, compactions, tools, loggedCost, sources }) {
   const rows = Array.isArray(messages) ? messages : [];
@@ -71,12 +72,35 @@ function tokens(session) {
   return totalTokens === undefined ? {} : { totalTokens };
 }
 
-// Cost the database logged (herdr-session-stats decision D5); no price table. A current
-// session's is the total opencode keeps for it, which can be above the sum of its messages'
-// costs; a legacy session's is that sum.
+// The provider of the calls through GitHub Copilot, which the Copilot price table prices.
+const COPILOT = 'github-copilot';
+
+// A message that sent and wrote nothing (an aborted or failed request) is no model call.
+const isCall = (row) => [row.input, row.cacheRead, row.cacheWrite, row.output].some((count) => tokenCount(count) > 0);
+
+// The cost of the assistant message `row`: a Copilot call's from the Copilot price table (null
+// for a model it does not hold; undefined, nothing to add, for a message that spent no token),
+// any other's as the database logged it (null: none logged).
+function costOf(row) {
+  if (row.providerId !== COPILOT) return isNumber(row.cost) ? row.cost : null;
+  if (!isCall(row)) return undefined;
+  return copilotCost(row.modelId, { uncached: tokenCount(row.input), read: tokenCount(row.cacheRead), write: tokenCount(row.cacheWrite), output: tokenCount(row.output) });
+}
+
+// The sum of the costs of the session's messages (see costOf); undefined when none has one, or
+// once a Copilot call's model is not in the Copilot price table.
+function callsCost(session) {
+  if (session.assistants.some((row) => row.providerId === COPILOT && costOf(row) === null)) return undefined;
+  return sumAssistants(session, costOf);
+}
+
+// Cost the database logged (herdr-session-stats decision D5): a current session's is the total
+// opencode keeps for it, which can be above the sum of its messages' costs; a legacy session's
+// is that sum. A session with a Copilot call costs the sum of its calls, each Copilot call priced
+// from the Copilot price table (D27).
 function cost(session) {
-  if (session.loggedCost !== null) return { costUsd: session.loggedCost };
-  const costUsd = sumAssistants(session, (row) => row.cost);
+  const priced = session.assistants.some((row) => row.providerId === COPILOT && isCall(row));
+  const costUsd = session.loggedCost !== null && !priced ? session.loggedCost : callsCost(session);
   return costUsd === undefined ? {} : { costUsd };
 }
 
@@ -118,7 +142,7 @@ function context({ turns, window }) {
 
 // Burn rate from the session's own duration, token figures and the costs of its model calls, as
 // its cost chart adds them up.
-const burn = (session) => burnRate({ ...duration(session), costUsd: sumAssistants(session, (row) => row.cost), ...tokens(session) });
+const burn = (session) => burnRate({ ...duration(session), costUsd: callsCost(session), ...tokens(session) });
 
 function sinceActivity(session, now) {
   const range = span(session);
@@ -138,9 +162,6 @@ function thinking({ turns }) {
   const latest = turns.findLast((row) => typeof row.modelId === 'string' && row.modelId);
   return typeof latest?.variant === 'string' && latest.variant ? { thinkingLevel: latest.variant } : {};
 }
-
-// A message that sent and wrote nothing (an aborted or failed request) is no model call.
-const isCall = (row) => [row.input, row.cacheRead, row.cacheWrite, row.output].some((count) => tokenCount(count) > 0);
 
 // The session's own model calls (see isCall). A sub-agent with none, which logs no cost until
 // its first call, then spent nothing (card-view.ts `spentOf`).
@@ -185,7 +206,7 @@ function detail(session) {
       write: tokenCount(row.cacheWrite),
       uncached: tokenCount(row.input),
       output: tokenCount(row.output),
-      cost: isNumber(row.cost) ? row.cost : null,
+      cost: costOf(row),
       context: prompt > 0 ? prompt : null,
     };
     addCall(series, call);
@@ -199,7 +220,8 @@ function detail(session) {
     }
     calls += 1;
     if (typeof row.modelId === 'string' && row.modelId) {
-      const byModel = entryOf(models, row.modelId, () => ({ cost: 0, tokens: 0 }));
+      const key = typeof row.providerId === 'string' && row.providerId ? `${row.providerId}/${row.modelId}` : row.modelId;
+      const byModel = entryOf(models, key, () => ({ cost: 0, tokens: 0 }));
       byModel.cost = addCost(byModel.cost, call.cost);
       byModel.tokens += tokenCount(messageTotal(row));
     }

@@ -1,11 +1,12 @@
-// What an omp session costs on its session screen: its side calls (omp's `model_usage` entries)
-// counted in its cost but not as model calls, and its Copilot calls priced from the Copilot price
-// table (src/core/copilot-prices.js), which the tests set (test/helpers/prices.ts). Drawn from the
-// real worker's session answer over omp session files under a temporary home (`sessionOf`,
-// test/helpers/live.ts), and read through the markup's conventions (test/helpers/markup.ts).
+// What an omp or an opencode session costs on its session screen: omp's side calls (its
+// `model_usage` entries) counted in its cost but not as model calls, and the Copilot calls of
+// either priced from the Copilot price table (src/core/copilot-prices.js), which the tests set
+// (test/helpers/prices.ts). Drawn from the real worker's session answer over omp session files or
+// opencode's database under a temporary home (`sessionOf`, test/helpers/live.ts), and read through
+// the markup's conventions (test/helpers/markup.ts).
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { NOW } from '../helpers/agent-cards.ts';
+import { NOW, opencodeSession, type OpencodeCall, workspace } from '../helpers/agent-cards.ts';
 import { FIX, folderOf, ompSession, sessionOf, type OmpCall } from '../helpers/live.ts';
 import { figure, parts, text } from '../helpers/markup.ts';
 import { withCopilotPrices } from '../helpers/prices.ts';
@@ -80,4 +81,31 @@ test('a Copilot call without usage costs nothing', async () => {
 
   assert.equal(figure(html, 'cost'), '$0.25');
   assert.equal(figure(html, 'calls'), '1');
+});
+
+// The session answer and the session screen of a working opencode agent of the workspace
+// `web`/`main`, whose session logs `calls` of `github-copilot`'s `claude-opus-5.5` and opencode's
+// own total of `cost` USD.
+const opencodeScreenOf = (calls: OpencodeCall[], cost: number) =>
+  sessionOf([{ project: 'web', name: 'main', agents: ['working'], harness: 'opencode' }], {
+    prepare: (home) => opencodeSession(home, workspace(home, 'web-main'), { provider: 'github-copilot', model: 'claude-opus-5.5', calls, cost }),
+  });
+
+test('Long-context tier', async () => {
+  withCopilotPrices({
+    'claude-opus-5.5': { ...OPUS_PRICES['claude-opus-5.5'], tiers: [{ over: 200_000, input: 1000, cachedInput: 100, cacheWrite: 1250, output: 3750 }] },
+  });
+
+  const { html } = await opencodeScreenOf([{ uncached: 10_000, read: 240_000, write: 0, output: 4_000 }], 0.1);
+
+  assert.equal(figure(html, 'cost'), '$0.49');
+  assert.deepEqual(models(html), ['github-copilot/claude-opus-5.5 · main agent · $0.49']);
+});
+
+test('an opencode session with a Copilot call costs the sum of its calls', async () => {
+  withCopilotPrices(OPUS_PRICES);
+
+  const { html } = await opencodeScreenOf([{ uncached: 10_000, read: 100_000, write: 16_000, output: 2_000 }], 3);
+
+  assert.equal(figure(html, 'cost'), '$0.25');
 });

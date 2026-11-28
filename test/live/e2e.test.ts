@@ -9,10 +9,11 @@ import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { mock, test } from 'node:test';
 import { REFRESH_INTERVAL_MS } from '../../src/core/refresh.js';
-import { NOW, opencodeCalls, opencodeCatalogue, sqlText, workspace } from '../helpers/agent-cards.ts';
+import { NOW, OPENCODE_CALL_PRICE, opencodeCalls, opencodeCatalogue, sqlText, workspace } from '../helpers/agent-cards.ts';
 import { tempHome } from '../helpers/files.ts';
 import { FIX, folderOf, ompSession, ompSubAgent, ompWindow, type OmpCall, open, openOnFleet, spent, toolCalls, until } from '../helpers/live.ts';
 import { attr, figure, parts, text } from '../helpers/markup.ts';
+import { withCopilotPrices } from '../helpers/prices.ts';
 import { DEVBOX, DEVBOX_LISTS } from '../helpers/orca-answers.ts';
 import type { HostWorkspace } from '../helpers/orca-host.ts';
 import { readOnlyLine } from '../helpers/read-only.ts';
@@ -119,14 +120,15 @@ test('an opencode session end to end', async () => {
   // `ses_window`, of the workspace's folder, logs four model calls of `github-copilot`'s
   // `claude-haiku-5.5`, whose context rises to 160,000 tokens of the catalogue's 200,000, the last
   // calling the tool `task`; its child session `ses_child`, `Explore the repo` of the kind
-  // `general`, logs one call at 0.05 USD
+  // `general`, logs one call, which the Copilot price table prices at 0.05 USD
+  withCopilotPrices({ 'claude-haiku-5.5': OPENCODE_CALL_PRICE });
   const web: HostWorkspace = { project: 'web', name: 'main', agents: ['working'], harness: 'opencode2' };
   const opened = await openOnFleet([web], {
     prepare: (home) => {
       const folder = workspace(home, 'web-main');
       const database = opencodeCalls(home, folder, { provider: 'github-copilot', model: 'claude-haiku-5.5', contexts: [40_000, 80_000, 120_000, 160_000] });
       const model = { id: 'claude-haiku-5.5', providerID: 'github-copilot', variant: 'high' };
-      const call = { time: { created: NOW - 90_000, completed: NOW - 89_000 }, agent: 'general', model, content: [], finish: 'stop', cost: 0.05, tokens: { input: 100, output: 50, reasoning: 0, cache: { read: 0, write: 800 } } };
+      const call = { time: { created: NOW - 90_000, completed: NOW - 89_000 }, agent: 'general', model, content: [], finish: 'stop', cost: 0.05, tokens: { input: 100, output: 25, reasoning: 0, cache: { read: 0, write: 800 } } };
       execFileSync('sqlite3', [
         database,
         `INSERT INTO session_v2 VALUES ('ses_child', 'prj', 'ses_window', 's', ${sqlText(folder)}, 'Explore the repo', '2.0.0', 0.05, 'general', ${sqlText(JSON.stringify(model))}, ${NOW - 100_000}, ${NOW - 89_000}, NULL);\n` +
@@ -158,5 +160,5 @@ test('an opencode session end to end', async () => {
     parts(section, 'data-agent').map((bar) => text(parts(bar, 'class', 'row label')[0])),
     ['Explore the repo · general · claude-haiku-5.5 · $0.05'],
   );
-  assert.deepEqual(parts(parts(html, 'data-part', 'models')[0], 'class', 'row item').map((row) => text(row).split(' ')[0]), ['claude-haiku-5.5']);
+  assert.deepEqual(parts(parts(html, 'data-part', 'models')[0], 'class', 'row item').map((row) => text(row).split(' ')[0]), ['github-copilot/claude-haiku-5.5']);
 });

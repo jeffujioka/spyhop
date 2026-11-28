@@ -16,10 +16,11 @@ import { formatCost } from '../../src/core/format.js';
 import { CATALOGUE_TTL_MS } from '../../src/core/providers/opencode-sources.js';
 import { createTtlCache } from '../../src/core/ttl-cache.js';
 import { run } from '../../src/exec.ts';
-import { NOW, agent, cardsOf, costOf, opencodeCalls, type OpencodeCalls, opencodeCatalogue, opencodeDatabase, workspace } from '../helpers/agent-cards.ts';
+import { NOW, agent, cardsOf, costOf, OPENCODE_CALL_PRICE, opencodeCalls, type OpencodeCalls, opencodeCatalogue, opencodeDatabase, workspace } from '../helpers/agent-cards.ts';
 import { tempHome } from '../helpers/files.ts';
 import { fleetOf, sessionOf } from '../helpers/live.ts';
 import { figure, parts, text } from '../helpers/markup.ts';
+import { withCopilotPrices } from '../helpers/prices.ts';
 import { DEVBOX, DEVBOX_LISTS } from '../helpers/orca-answers.ts';
 import { readOnlyLine } from '../helpers/read-only.ts';
 import { standIns } from '../helpers/stand-ins.ts';
@@ -183,8 +184,10 @@ const rising = (provider: string, model: string): OpencodeCalls => ({ provider, 
 
 // The fleet screen with a working opencode agent of the workspace `web`/`main` on this computer, or
 // of `infra`/`main` on `devbox` with `remote` its home, whose session's calls are `calls`, and that
-// agent's card; the catalogue is under the agent's host's home when `catalogue`.
+// agent's card; the catalogue is under the agent's host's home when `catalogue`. The Copilot price
+// table prices each call of `claude-haiku-5.5` and of `claude-haiku-9` at the 0.10 USD it logs.
 async function opencodeCard({ calls, catalogue, remote }: { calls: OpencodeCalls; catalogue: boolean; remote?: string }) {
+  withCopilotPrices({ 'claude-haiku-5.5': OPENCODE_CALL_PRICE, 'claude-haiku-9': OPENCODE_CALL_PRICE });
   const on = remote ? { project: 'infra', name: 'main', hostId: `ssh:${DEVBOX}` } : { project: 'web', name: 'main' };
   const { html } = await fleetOf([{ ...on, agents: ['working'], harness: 'opencode' }], {
     ...(remote ? { homes: { devbox: remote }, orca: DEVBOX_LISTS } : {}),
