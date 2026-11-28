@@ -54,7 +54,7 @@
 import { type } from 'node:os';
 import { zstdDecompressSync } from 'node:zlib';
 import { HARNESS_NAMES } from '../agent-cards.ts';
-import { dayOf } from '../core/days.js';
+import { dayOf, midnightBefore } from '../core/days.js';
 import { readOrigin } from '../core/git.js';
 import { newInsights, takeLines } from '../core/insights.js';
 import { claudeProvider } from '../core/providers/claude.js';
@@ -315,8 +315,7 @@ export function createCatchUp({
     if (!sessions) return null;
     const row = store.file(host, 'opencode', database);
     const first = row?.version !== HISTORY_VERSION;
-    const today = new Date();
-    const open = new Date(today.getFullYear(), today.getMonth(), today.getDate() - OPENCODE_OPEN_DAYS).getTime();
+    const open = midnightBefore(Date.now(), OPENCODE_OPEN_DAYS);
     // the calls of both phases, for `progress` only: counted until the database is read through,
     // a count that fails leaving its share unknown, never shown
     if (store.meta(readThrough(host, 'opencode')) === null) {
@@ -409,8 +408,7 @@ export function createCatchUp({
 
   async function runOnce() {
     shares = [];
-    const today = new Date();
-    const recent = new Date(today.getFullYear(), today.getMonth(), today.getDate() - FIRST_DAYS).getTime();
+    const recent = midnightBefore(Date.now(), FIRST_DAYS);
     const local: Place = { host: LOCAL, name: LOCAL, rank: 0, exec: run, read: run, os: type(), home, reached: () => true };
     // the first phase on every host at once, another host's place asked first
     const [localRead, remotes] = await Promise.all([

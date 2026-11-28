@@ -1,5 +1,5 @@
 import { beforeEach, describe, test } from 'node:test';
-import { rangeDays } from '../../src/core/days.js';
+import { midnightBefore, rangeDays } from '../../src/core/days.js';
 import { takeLines } from '../../src/core/insights.js';
 import { ompProvider } from '../../src/core/providers/omp.js';
 import { setEnv } from '../helpers/env.ts';
@@ -114,5 +114,12 @@ describe('insights: day buckets of model calls', () => {
 
     const day = rangeDays('day', now);
     expect([day.from, day.to, day.by]).toEqual(['2026-11-28', '2026-11-28', null]);
+  });
+
+  test('the midnight days before today', () => {
+    // 2026-11-28 15:00 in Berlin, and midnight there on 18 November
+    const now = Date.parse('2026-11-28T14:00:00.000Z');
+
+    expect(midnightBefore(now, 10)).toBe(Date.parse('2026-11-17T23:00:00.000Z'));
   });
 });

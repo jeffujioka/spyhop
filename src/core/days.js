@@ -8,6 +8,13 @@ const monthKey = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}`;
 // `YYYY-MM-DD` of the epoch ms `t` in this computer's time zone.
 export const dayOf = (t) => dayKey(new Date(t));
 
+// Epoch ms of midnight in this computer's time zone `days` days before the day of the epoch ms
+// `now`.
+export function midnightBefore(now, days) {
+  const today = new Date(now);
+  return new Date(today.getFullYear(), today.getMonth(), today.getDate() - days).getTime();
+}
+
 // The days a range spans as of the epoch ms `now`: Day is today; Week the 7 and Month the 30
 // days that end today, a point each; Year the 12 calendar months that end with this month, a
 // point each (`YYYY-MM`). Day has no chart over time, so no points.
