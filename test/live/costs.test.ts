@@ -48,6 +48,18 @@ test('Session cost with side calls', async () => {
   assert.equal(figure(html, 'noCall'), undefined);
 });
 
+// A guard of the cache share, no scenario of the spec: side calls are out of the cache figures, so
+// the share is of the model calls' tokens alone.
+test('the cache share leaves the side calls out', async () => {
+  const { html } = await screenOf([
+    { at: NOW - 3 * MINUTE, provider: 'anthropic', model: 'claude-opus-5.5', read: 900, uncached: 100, cost: 0.1 },
+    { at: NOW - 2 * MINUTE, provider: 'anthropic', model: 'claude-haiku-5.5', side: 'recap', uncached: 1_000, cost: 0.01 },
+  ]);
+
+  assert.equal(figure(html, 'tokens'), '2k');
+  assert.equal(figure(html, 'cacheShare'), '90%');
+});
+
 test('Copilot call priced from the table', async () => {
   withCopilotPrices(OPUS_PRICES);
 
@@ -82,6 +94,16 @@ test('a Copilot call without usage costs nothing', async () => {
 
   assert.equal(figure(html, 'cost'), '$0.25');
   assert.equal(figure(html, 'calls'), '1');
+});
+
+// A guard of the aborted call, no scenario of the spec: a session whose only Copilot call was
+// aborted spent nothing, so it costs 0, not n/a.
+test('a session whose Copilot calls were all aborted costs nothing', async () => {
+  withCopilotPrices(OPUS_PRICES);
+
+  const { html } = await screenOf([{ at: NOW - MINUTE, provider: 'github-copilot', model: 'kimi-k3', uncached: 0, read: 0, write: 0, output: 0, cost: 0 }]);
+
+  assert.equal(figure(html, 'cost'), '$0.00');
 });
 
 // The spec's call through `anthropic` that logged 0.40 USD, a minute before NOW.

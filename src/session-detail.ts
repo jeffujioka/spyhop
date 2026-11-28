@@ -36,7 +36,11 @@ export function sessionDetail(card: BuiltCard, { home, host, view }: { home: str
     : [];
   // the cost the session's own model calls and side calls logged, after each of them
   const own = series ? cumulativeCost(spendsOf([series])) : NA;
-  const cacheRead = sumOf([series, ...subSeries].map((kept) => (kept ? kept.points.reduce((sum, point) => sum + point.read, 0) : NA)));
+  // the cache share: what the model calls read from the cache, of their tokens; side calls are out
+  // of the cache figures
+  const callPoints = [series, ...subSeries].map((kept) => kept?.points ?? null);
+  const cacheRead = sumOf(callPoints.map((points) => (points ? points.reduce((sum, point) => sum + point.read, 0) : NA)));
+  const callTokens = sumOf(callPoints.map((points) => (points ? points.reduce((sum, point) => sum + point.read + point.write + point.uncached + point.output, 0) : NA)));
   // the Copilot part of the cost, the sub-agents' while it counts them; Claude Code prices no call
   const copilot = claude ? 0 : sumOf([series, ...subSeries].map((kept) => (kept ? (kept.copilotUsd ?? 0) : NA)));
   return {
@@ -47,7 +51,7 @@ export function sessionDetail(card: BuiltCard, { home, host, view }: { home: str
       cost,
       subShare: cost === NA || subCost === NA ? NA : cost > 0 ? subCost / cost : 0,
       tokens,
-      cacheShare: cacheRead !== NA && tokens !== NA && tokens > 0 ? cacheRead / tokens : NA,
+      cacheShare: cacheRead !== NA && tokens !== NA && callTokens !== NA && callTokens > 0 ? cacheRead / callTokens : NA,
       calls: stats.calls,
       failedTools: series ? Object.values(series.tools).reduce((sum, tool) => sum + tool.failed, 0) : NA,
       durationMs,
