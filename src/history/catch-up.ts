@@ -66,7 +66,7 @@ import { ompSessionsDir } from '../core/providers/omp-sources.js';
 import { absoluteFolder, listFolder, mainSessionOf, SUBAGENT_DEPTH } from '../core/providers/session-files.js';
 import { scanFile } from '../core/refresh.js';
 import { newestFirst } from '../core/session-link.js';
-import type { Run, RunBytes } from '../exec.ts';
+import { MAX_OUTPUT_BYTES, type Run, type RunBytes } from '../exec.ts';
 import { LOCAL } from '../fleet.ts';
 import { type HistoryHost, placeOf } from '../hosts.ts';
 import type { ReadProgress } from '../protocol.ts';
@@ -386,11 +386,12 @@ export function createCatchUp({
       return result;
     };
     const exec: Run = async (command, args, options) => noted(await run(command, args, { ...options, on: alias }));
-    // the program's own exit code kept; `dd` still prints its statistics on stderr
+    // the program's own exit code kept; `dd` still prints its statistics on stderr; its output
+    // decompressed no larger than a raw answer may be, past which it rejects as a raw one does
     const compressed: Run = async (command, args, options) => {
       const { code, stdout, stderr } = noted(await runBytes('sh', ['-c', ZSTD_SCRIPT, 'sh', command, ...args], { ...options, on: alias }));
       // nothing at all when ssh fails
-      return { code, stdout: stdout.length === 0 ? '' : zstdDecompressSync(stdout).toString('utf8'), stderr };
+      return { code, stdout: stdout.length === 0 ? '' : zstdDecompressSync(stdout, { maxOutputLength: MAX_OUTPUT_BYTES }).toString('utf8'), stderr };
     };
     // its programs one after the other, as every program of a host's read
     let place: { os: string; home: string };
