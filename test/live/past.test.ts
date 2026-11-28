@@ -194,8 +194,11 @@ test('The fleet does not wait on the probe of a remote host', async () => {
   try {
     await until(() => opened.html().includes('data-part="counts"'));
     // only the catch-up's probe asked for the machine id: a probe for the card's session, which
-    // the fleet then waited on until the held call timed out, would be a second
-    assert.equal(opened.calls.ssh().filter((args) => args.at(-1)!.includes(machineId)).length, 1);
+    // the fleet then waited on until the held call timed out, would be a second. The catch-up
+    // issues its probe on its own schedule, so count it only once it has been seen.
+    const probes = () => opened.calls.ssh().filter((args) => args.at(-1)!.includes(machineId)).length;
+    await until(() => probes() > 0);
+    assert.equal(probes(), 1);
   } finally {
     opened.calls.release(held);
   }
