@@ -3,7 +3,8 @@
 import { HARNESS_NAMES } from '../agent-cards.ts';
 import { rangeDays } from '../core/days.js';
 import { AWAY_BANDS, cap, MISS_CAUSES } from '../core/insights.js';
-import type { CacheView, CostlySession, Num, Range, SpendRow, SpendView } from '../protocol.ts';
+import { FAILURE_TYPES, replyQuantile } from '../core/reply-times.js';
+import type { CacheView, HealthView, CostlySession, Num, Range, SpendRow, SpendView } from '../protocol.ts';
 import type { DailyLine, Store } from './store.ts';
 
 // How many of the costliest sessions the Spend tab lists.
@@ -123,5 +124,77 @@ export function cacheView(store: Store, range: Range, now: number): CacheView {
     costLeftOut: leftOutOf(lines, (line) => sumOf([line], ...unpricedNames) > 0),
     away: AWAY_BANDS.map((band: string) => ({ band, returns: total(`returns${cap(band)}`), cold: total(`returnsCold${cap(band)}`) })),
     compactions: { idle: total('compactionsIdle'), full: total('compactionsFull'), manual: total('compactionsManual'), inferred: total('compactionsInferred') },
+  };
+}
+
+// The sum of the `figures` named of the daily lines of `lines` that `keyOf` gives one key.
+function sumsBy(lines: DailyLine[], keyOf: (line: DailyLine) => string, ...names: string[]) {
+  const sums = new Map<string, Record<string, number>>();
+  for (const line of lines) {
+    const key = keyOf(line);
+    const sum = sums.get(key) ?? Object.fromEntries(names.map((name) => [name, 0]));
+    for (const name of names) sum[name] += line.figures[name];
+    sums.set(key, sum);
+  }
+  return sums;
+}
+
+// `counts` (name -> count) as rows: those over 0, most first, equal counts in their order.
+const ranked = (counts: Iterable<[string, number]>) =>
+  [...counts]
+    .filter(([, count]) => count > 0)
+    .map(([name, count]) => ({ name, count }))
+    .sort((a, b) => b.count - a.count);
+
+// The failed calls of `lines` (the sum of the figures `names`) by the key `keyOf` gives each line.
+function failedBy(lines: DailyLine[], keyOf: (line: DailyLine) => string, names: string[]) {
+  const counts = new Map<string, number>();
+  for (const line of lines) counts.set(keyOf(line), (counts.get(keyOf(line)) ?? 0) + sumOf([line], ...names));
+  return ranked([...counts].sort(([a], [b]) => a.localeCompare(b)));
+}
+
+// How the Health tab names a type of failure.
+const TYPE_NAMES: Record<string, string> = { notFound: 'not found', rateLimit: 'rate limit' };
+
+// The provider of a model: its part before the `/`, n/a for a model that has none.
+const providerOf = (model: string) => (model !== 'n/a' && model.includes('/') ? model.slice(0, model.indexOf('/')) : 'n/a');
+
+// Most first, equal values by name; n/a last.
+const mostFirst = <T extends { model: string }>(rows: T[], value: (row: T) => Num) => {
+  const rank = (row: T) => {
+    const v = value(row);
+    return v === 'n/a' ? -1 : v;
+  };
+  return rows.sort((a, b) => rank(b) - rank(a) || a.model.localeCompare(b.model));
+};
+
+// The Health tab of `range` as of the epoch ms `now`: see HealthView. `places` names the Orca
+// host of a failed call, as the Spend tab does; the store's key of it without.
+export function healthView(store: Store, range: Range, now: number, places: Places | null): HealthView {
+  const { first, last, lines } = linesOf(store, range, now);
+  const failures = FAILURE_TYPES.map((type: string) => `fail${cap(type)}`);
+  const models = sumsBy(lines, (line) => line.model, 'calls', 'cutCalls', 'cutCost', 'cutCostNa', 'thinkingCalls', 'thinkingTokens');
+  const replies = [...store.replies(first, last)].flatMap(([model, counts]) => {
+    const typical = replyQuantile(counts, 0.5);
+    return typical === null ? [] : [{ model, typical, slow: replyQuantile(counts, 0.95)! }];
+  });
+  return {
+    failed: sumOf(lines, ...failures),
+    byType: ranked(FAILURE_TYPES.map((type: string, i: number) => [TYPE_NAMES[type] ?? type, sumOf(lines, failures[i])] as [string, number])),
+    byHost: failedBy(lines, (line) => (places ? places.hostName(line.host) : line.host), failures),
+    byProvider: failedBy(lines, (line) => providerOf(line.model), failures),
+    retries: sumOf(lines, 'retries'),
+    retriesLeftOut: leftOutOf(lines, (line) => line.harness === 'claude'),
+    replies: replies.sort((a, b) => a.model.localeCompare(b.model)),
+    cut: mostFirst(
+      [...models].filter(([, sum]) => sum.cutCalls > 0).map(([model, sum]) => ({ model, calls: sum.cutCalls, cost: sum.cutCostNa > 0 ? ('n/a' as Num) : sum.cutCost })),
+      (row) => row.calls,
+    ),
+    cutLeftOut: leftOutOf(lines, (line) => line.harness === 'claude' && line.figures.cutCostNa > 0),
+    thinking: mostFirst(
+      [...models].filter(([, sum]) => sum.calls > 0).map(([model, sum]) => ({ model, tokens: sum.thinkingCalls === 0 ? ('n/a' as Num) : sum.thinkingTokens })),
+      (row) => row.tokens,
+    ),
+    thinkingLeftOut: leftOutOf(lines, (line) => line.harness === 'omp'),
   };
 }

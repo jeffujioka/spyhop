@@ -225,15 +225,38 @@ export type CacheView = {
   compactions: { idle: Num; full: Num; manual: Num; inferred: Num };
 };
 
+// The Health tab of a range (src/history/views.ts): `failed`, its failed model calls, and them by
+// type (`network`, `auth`, `notFound`, `rateLimit`, `server`, `other`), by Orca host (named as the
+// Spend tab names it) and by provider (the model's part before the `/`, else `n/a`), each list the
+// rows there are, most calls first; `retries`: the model calls that failed and then succeeded on a
+// retry, `retriesLeftOut`: the harnesses that log none; per model, most first, the `typical` (median)
+// and `slow` (95th percentile) reply time in ms of the calls that ended without failure, the calls
+// `cut` at the maximum length with their cost (n/a when one of them logged none), and the thinking
+// `tokens` (n/a for a model that logged none); `cutLeftOut` and `thinkingLeftOut`: the harnesses
+// whose figure leaves them out. Every figure n/a, no row, when the store cannot be opened or read.
+export type HealthView = {
+  failed: Num;
+  byType: { name: string; count: number }[];
+  byHost: { name: string; count: number }[];
+  byProvider: { name: string; count: number }[];
+  retries: Num;
+  retriesLeftOut: string[];
+  replies: { model: string; typical: Num; slow: Num }[];
+  cut: { model: string; calls: number; cost: Num }[];
+  cutLeftOut: string[];
+  thinking: { model: string; tokens: Num }[];
+  thinkingLeftOut: string[];
+};
+
 // What the running catch-up is reading (src/history/catch-up.ts): the Orca host's name, the
 // harness's and the share of its bytes read, from 0 to 1.
 export type ReadProgress = { host: string; harness: string; share: number };
 
 // The range tab `tab` over `range`, as the history store holds it: the Spend tab's view when it is
-// the Spend tab, the Cache tab's when it is the Cache tab, else null; `notRead`: the names of the Orca hosts the last catch-up could not
+// the Spend tab, the Cache tab's when it is the Cache tab, the Health tab's when it is the Health tab, else null; `notRead`: the names of the Orca hosts the last catch-up could not
 // read, whose figures are those read before; `progress`: what the running catch-up is reading of
 // a host and harness never read through, else null; `request`: the panel's number of the request.
-export type RangeAnswer = { request: number; tab: RangeTab; range: Range; spend: SpendView | null; cache: CacheView | null; notRead: string[]; progress: ReadProgress | null };
+export type RangeAnswer = { request: number; tab: RangeTab; range: Range; spend: SpendView | null; cache: CacheView | null; health: HealthView | null; notRead: string[]; progress: ReadProgress | null };
 
 // A past session, one with no Live card: what the history store keeps of it, its summary and its
 // Trace (null when it has none), or null when the store keeps none. `request`: the panel's number

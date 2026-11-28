@@ -55,10 +55,10 @@ import { createTtlCache } from './core/ttl-cache.js';
 import { run, runBytes } from './exec.ts';
 import { attentionRows, burnCard, type FleetAgent, groupCards, LOCAL, stateCounts } from './fleet.ts';
 import { orca as cli, historyHosts, type HostLists, listHosts, readServerAgents, type RemoteHost, remoteHosts, type ServerAgent } from './hosts.ts';
-import type { CacheView, CardView, FleetAnswer, HostGroup, Num, PastAnswer, Pane, RangeAnswer, SessionAnswer, SpendView } from './protocol.ts';
+import type { CacheView, CardView, FleetAnswer, HealthView, HostGroup, Num, PastAnswer, Pane, RangeAnswer, SessionAnswer, SpendView } from './protocol.ts';
 import { type CatchUp, createCatchUp } from './history/catch-up.ts';
 import { openStore, type Store } from './history/store.ts';
-import { cacheView, type Places, spendView } from './history/views.ts';
+import { cacheView, healthView, type Places, spendView } from './history/views.ts';
 import { sessionDetail } from './session-detail.ts';
 
 // How long Orca's lists of hosts and paired servers are kept: a server is paired seldom, its
@@ -82,6 +82,21 @@ const CACHE_NA: CacheView = {
   costLeftOut: [],
   away: AWAY_BANDS.map((band: string) => ({ band, returns: 'n/a', cold: 'n/a' })),
   compactions: { idle: 'n/a', full: 'n/a', manual: 'n/a', inferred: 'n/a' },
+};
+
+// The Health tab's view when the history store cannot be opened or read.
+const HEALTH_NA: HealthView = {
+  failed: 'n/a',
+  byType: [],
+  byHost: [],
+  byProvider: [],
+  retries: 'n/a',
+  retriesLeftOut: [],
+  replies: [],
+  cut: [],
+  cutLeftOut: [],
+  thinking: [],
+  thinkingLeftOut: [],
 };
 
 // How many characters of a machine's id name its Orca host when no card gave the host's name.
@@ -427,7 +442,7 @@ export default function activate(orca: OrcaWorkerApi): void {
   orca.panels.handle('spyhop.range', async ({ request, tab, range }): Promise<RangeAnswer> => {
     const history = await opening;
     // the tab's view, n/a where the store cannot be opened or read, null for a tab with none
-    const none = { spend: tab === 'spend' ? SPEND_NA : null, cache: tab === 'cache' ? CACHE_NA : null };
+    const none = { spend: tab === 'spend' ? SPEND_NA : null, cache: tab === 'cache' ? CACHE_NA : null, health: tab === 'health' ? HEALTH_NA : null };
     if (!history) return { request, tab, range, ...none, notRead: [], progress: null };
     const { store, catchUp } = history;
     if (!catchUp.running() && Date.now() - (catchUp.startedMs() ?? -Infinity) >= RANGE_CATCH_UP_MS) await caughtUp(catchUp, log, () => showToday(store));
@@ -436,6 +451,7 @@ export default function activate(orca: OrcaWorkerApi): void {
     try {
       if (tab === 'spend') return { request, tab, range, ...none, spend: spendView(store, range, Date.now(), await placesOf(catchUp)), ...read };
       if (tab === 'cache') return { request, tab, range, ...none, cache: cacheView(store, range, Date.now()), ...read };
+      if (tab === 'health') return { request, tab, range, ...none, health: healthView(store, range, Date.now(), await placesOf(catchUp)), ...read };
       return { request, tab, range, ...none, ...read };
     } catch (error) {
       log(`spyhop: cannot read the history store: ${(error as Error).message}`);

@@ -4,6 +4,7 @@
 
 import type { Range, RangeAnswer, RangeTab } from '../protocol.ts';
 import { cacheTab } from './cache.ts';
+import { healthTab } from './health.ts';
 import { spendTab } from './spend.ts';
 
 const TABS = [
@@ -27,6 +28,5 @@ export function tabBar(tab: 'live' | RangeTab, range: Range | null): string {
   return `<nav data-part="tabs" class="row" role="tablist">${tabs}</nav>${ranges}`;
 }
 
-// The body of the range tab `answer` is of, under its tab bar: the Spend or the Cache tab; the
-// Health tab has none yet.
-export const tabBody = (answer: RangeAnswer): string => (answer.tab === 'spend' ? spendTab(answer) : answer.tab === 'cache' ? cacheTab(answer) : '');
+// The body of the range tab `answer` is of, under its tab bar: the Spend, the Cache or the Health tab.
+export const tabBody = (answer: RangeAnswer): string => (answer.tab === 'spend' ? spendTab(answer) : answer.tab === 'cache' ? cacheTab(answer) : healthTab(answer));
