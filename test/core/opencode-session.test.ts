@@ -118,6 +118,18 @@ describe('opencode session', () => {
     expect(empty.autocompactions).toBe(0);
   });
 
+  // A guard of the aborted call, no scenario of the spec: a legacy session (no total of its own)
+  // whose only Copilot message sent nothing spent nothing, so it costs 0, not n/a.
+  test('a legacy session whose Copilot calls were all aborted costs nothing', () => {
+    const rows = [
+      { id: 'u', role: 'user', created: 0 },
+      { id: 'a', role: 'assistant', parentId: 'u', created: 1000, completed: 3000, providerId: 'github-copilot', modelId: 'kimi-k3', cost: 0, total: 0, input: 0, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0 },
+    ];
+    const stats = readStats('opencode', { messages: rows, compactions: null, loggedCost: null }, 5000);
+
+    expect(stats.costUsd).toBe(0);
+  });
+
   test('current rows give the same figures as legacy rows', async () => {
     const home = tempHome();
     opencodeDatabase(home, 'current');

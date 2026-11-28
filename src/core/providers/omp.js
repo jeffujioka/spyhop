@@ -109,10 +109,11 @@ const TURN_ENDS = new Set(['stop', 'aborted']);
 const spentTokens = (usage) => [usage?.input, usage?.cacheRead, usage?.cacheWrite, usage?.output].some((tokens) => tokenCount(tokens) > 0);
 
 // The cost of the model call or side call `logged` (an assistant message or a `model_usage`
-// entry), by the Copilot cost rule (`callCost`).
+// entry), by the Copilot cost rule (`callCost`); undefined, nothing to add, when it logged no usage.
 function costOf({ provider, model, usage }) {
-  const tokens = { uncached: tokenCount(usage?.input), read: tokenCount(usage?.cacheRead), write: tokenCount(usage?.cacheWrite), output: tokenCount(usage?.output) };
-  return callCost(provider, model, tokens, usage?.cost?.total);
+  if (!usage) return undefined;
+  const tokens = { uncached: tokenCount(usage.input), read: tokenCount(usage.cacheRead), write: tokenCount(usage.cacheWrite), output: tokenCount(usage.output) };
+  return callCost(provider, model, tokens, usage.cost?.total);
 }
 
 // Adds the cost `spent` of a call of `logged` (see `costOf`) to the session's cost, and a Copilot

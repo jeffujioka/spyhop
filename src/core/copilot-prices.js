@@ -87,12 +87,11 @@ export function copilotCost(model, { uncached, read, write, output }) {
 
 // The cost in USD of a model call through `provider` on `model` that spent `tokens` (`{ uncached,
 // read, write, output }`, each a count) and logged the cost `logged`: a Copilot call's from the
-// Copilot price table (null for a model it does not hold; undefined, nothing to add, for a call
-// that spent no token: one aborted, or that failed before the model answered), any other's as
-// logged (null: none logged).
+// Copilot price table (null for a model it does not hold; 0 for a call that spent no token: one
+// aborted, or that failed before the model answered), any other's as logged (null: none logged).
 export function callCost(provider, model, tokens, logged) {
   if (provider !== COPILOT) return isNumber(logged) ? logged : null;
-  if (!Object.values(tokens).some((count) => count > 0)) return undefined;
+  if (!Object.values(tokens).some((count) => count > 0)) return 0;
   return copilotCost(model, tokens);
 }
 
