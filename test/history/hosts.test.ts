@@ -6,10 +6,11 @@
 // other program are the real ones.
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { join } from 'node:path';
+import { chmodSync, mkdirSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import { afterEach, mock, test } from 'node:test';
 import { RANGE_REFRESH_MS } from '../../src/core/refresh.js';
-import { run, type Run } from '../../src/exec.ts';
+import { run, type Run, type RunBytes, runBytes, type RunOptions } from '../../src/exec.ts';
 import { createCatchUp } from '../../src/history/catch-up.ts';
 import { openStore, type Store } from '../../src/history/store.ts';
 import { spendTab } from '../../src/live/spend.ts';
@@ -83,13 +84,13 @@ async function oneOriginOnTwoHosts() {
 }
 
 // A catch-up of a new temporary home and of starfish-bs, whose home is `remoteHome`, through
-// `exec` (the real runner when not given), with the real store; the stand-ins' calls.
-async function catchUpOf(remoteHome: string, exec: Run = run) {
+// `exec` and `bytes` (the real runners when not given), with the real store; the stand-ins' calls.
+async function catchUpOf(remoteHome: string, exec: Run = run, bytes: RunBytes = runBytes) {
   setEnv('TZ', 'UTC');
   const home = useTempHome();
   const calls = standIns({ homes: { 'starfish-bs': remoteHome }, orca: STARFISH_LISTS });
   store = await openStore(home);
-  const catchUp = createCatchUp({ run: exec, store, home, log: () => {}, hosts: async () => historyHosts(await listHosts(run)) });
+  const catchUp = createCatchUp({ run: exec, runBytes: bytes, store, home, log: () => {}, hosts: async () => historyHosts(await listHosts(run)) });
   return { home, calls, catchUp };
 }
 
@@ -168,24 +169,30 @@ test("a host's programs run one at a time", async () => {
   const folder = join(remoteHome, 'spyhop');
   ompSession(remoteHome, folder, { title: 'spyhop', calls: [spent(1)] });
   withOrigin(folder);
-  // the most programs that ran on starfish-bs at once
+  // the most programs that ran on starfish-bs at once, and each program run there, the one a
+  // compressed line wraps included
   let running = 0;
   let most = 0;
-  const counting: Run = async (command, args, options) => {
-    if (options?.on !== 'starfish-bs') return run(command, args, options);
-    running += 1;
-    most = Math.max(most, running);
-    try {
-      return await run(command, args, options);
-    } finally {
-      running -= 1;
-    }
-  };
-  const { catchUp } = await catchUpOf(remoteHome, counting);
+  const programs: string[] = [];
+  const counting =
+    <Result>(runner: (command: string, args: string[], options?: RunOptions) => Promise<Result>) =>
+    async (command: string, args: string[], options?: RunOptions) => {
+      if (options?.on !== 'starfish-bs') return runner(command, args, options);
+      programs.push(command === 'sh' ? args[3] : command);
+      running += 1;
+      most = Math.max(most, running);
+      try {
+        return await runner(command, args, options);
+      } finally {
+        running -= 1;
+      }
+    };
+  const { catchUp } = await catchUpOf(remoteHome, counting(run), counting(runBytes));
 
   await catchUp.run();
 
   assert.equal(most, 1);
+  assert.ok(['find', 'dd', 'git'].every((program) => programs.includes(program)), JSON.stringify(programs));
 });
 
 test('a host that drops while its repo is asked keeps no repo of it', async () => {
@@ -211,6 +218,45 @@ test('a host that drops while its repo is asked keeps no repo of it', async () =
     repos.map(({ repo }) => repo),
     [ORIGIN],
   );
+});
+
+test('a host that drops while a file is read compressed is not read', async () => {
+  const remoteHome = tempHome();
+  ompSession(remoteHome, join(remoteHome, 'api'), { title: 'api', calls: [spent(1)] });
+  // ssh to starfish-bs fails on each compressed read of a file's bytes
+  const dropping: RunBytes = (command, args, options) =>
+    options?.on === 'starfish-bs' && command === 'sh' && ['dd', 'tail'].includes(args[3])
+      ? Promise.resolve({ code: 255, stdout: Buffer.alloc(0), stderr: 'Connection closed' })
+      : runBytes(command, args, options);
+  const { catchUp } = await catchUpOf(remoteHome, run, dropping);
+
+  await catchUp.run();
+
+  assert.deepEqual(catchUp.notRead(), ['starfish-bs']);
+});
+
+test('a listing that fails through zstd leaves the run unended', async () => {
+  const remoteHome = tempHome();
+  const folder = join(remoteHome, 'api');
+  ompSession(remoteHome, folder, { title: 'api', calls: [spent(1)] });
+  // a folder of the sessions folder that `find` cannot enter: it exits 1, the others listed
+  const locked = join(dirname(ompSessionDir(remoteHome, folder)), 'locked');
+  mkdirSync(locked);
+  chmodSync(locked, 0o000);
+  const { home, calls, catchUp } = await catchUpOf(remoteHome);
+
+  try {
+    await catchUp.run();
+  } finally {
+    chmodSync(locked, 0o700);
+  }
+
+  assert.ok(calls.ssh().some((args) => args.at(-1)!.includes("'find'") && args.at(-1)!.includes('zstd')));
+  assert.deepEqual(catchUp.notRead(), []);
+  const db = storeOf(home);
+  const ended = db.prepare("SELECT value FROM meta WHERE key = 'catch-ups'").get();
+  db.close();
+  assert.equal(ended, undefined);
 });
 
 test('Host that cannot be reached', async () => {

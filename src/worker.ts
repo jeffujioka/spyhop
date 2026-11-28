@@ -39,7 +39,7 @@ import { type BuiltCard, createAgentCards, type OrcaAgent, sameButStates } from 
 import { cardView } from './card-view.ts';
 import { CATCH_UP_MS, decodeScans, encodeScans, keptPartsOf, RANGE_REFRESH_MS, REFRESH_INTERVAL_MS } from './core/refresh.js';
 import { createTtlCache } from './core/ttl-cache.js';
-import { run } from './exec.ts';
+import { run, runBytes } from './exec.ts';
 import { attentionRows, burnCard, type FleetAgent, groupCards, LOCAL, stateCounts } from './fleet.ts';
 import { orca as cli, historyHosts, type HostLists, listHosts, readServerAgents, type RemoteHost, remoteHosts, type ServerAgent } from './hosts.ts';
 import type { CardView, FleetAnswer, HostGroup, Pane, RangeAnswer, SessionAnswer, SpendView } from './protocol.ts';
@@ -105,7 +105,7 @@ export default function activate(orca: OrcaWorkerApi): void {
   // and its catch-up; null when it cannot be opened, `node:sqlite` not loaded included.
   const opening = openStore(home).then(
     (store) => {
-      const catchUp = createCatchUp({ run, store, home, log, hosts: async () => historyHosts(await listsNow()) });
+      const catchUp = createCatchUp({ run, runBytes, store, home, log, hosts: async () => historyHosts(await listsNow()) });
       const stopCatchUps = scheduleCatchUps(catchUp, log);
       return { store, catchUp, stopCatchUps };
     },

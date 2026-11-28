@@ -6,9 +6,9 @@
 // HOME`); its harness folders lie under that home. A host whose `ssh` exits 255, as when it
 // cannot be reached, or whose place cannot be asked, is not read: its read stops there, it is
 // named in `notRead` until a later run reads it, and the lines kept of it stay. Then `zstd -V`
-// is asked once: on a host where it exits 0, the programs that read a file's bytes (`dd`,
-// `tail`) run as `sh -c '"$@" | zstd -q -c' sh <program> <args…>` and their output is
-// decompressed here; on any other, they run raw.
+// is asked once: on a host where it exits 0, the listings (`find`) and the reads of a file's
+// bytes (`dd`, `tail`) run within ZSTD_SCRIPT, their output decompressed here and their exit
+// code their own; on any other, they run raw. `uname`, `printenv` and `git` always run raw.
 //
 // On each host, one run lists every `.jsonl` file under each harness's sessions folder, down to
 // the sub-agents (of sub-agents, for omp), with one `find` each; a listing that fails, but for a
@@ -34,13 +34,18 @@ import { ompProvider } from '../core/providers/omp.js';
 import { ompSessionsDir } from '../core/providers/omp-sources.js';
 import { absoluteFolder, listFolder, mainSessionOf, SUBAGENT_DEPTH } from '../core/providers/session-files.js';
 import { scanFile } from '../core/refresh.js';
-import { type Run, runBytes } from '../exec.ts';
+import type { Run, RunBytes } from '../exec.ts';
 import { LOCAL } from '../fleet.ts';
 import { type HistoryHost, placeOf } from '../hosts.ts';
 import { HISTORY_VERSION, type Store } from './store.ts';
 
 // The meta key of the number of runs that have ended.
 const CATCH_UPS = 'catch-ups';
+
+// The script, run as `sh -c <script> sh <program> <args…>`, that prints the program's output
+// compressed by `zstd` and exits with the program's exit code: the code goes out of the pipe on
+// fd 3, while the compressed output goes to the script's stdout, kept on fd 4.
+const ZSTD_SCRIPT = 'exec 4>&1; s=$( { { "$@"; echo $? >&3; } | zstd -q -c >&4; } 3>&1 ); exit $s';
 
 // The state a file's row keeps: its harness's fold state and the repo its lines count in.
 type Kept = { fold: { cwd: string | null; insights: object }; repo: string };
@@ -65,9 +70,9 @@ const HARNESSES = [
 
 type Harness = (typeof HARNESSES)[number];
 
-// The Orca host a read is of: its id in the store, the runner bound to it and the one that reads
-// its files' bytes, its system (`uname -s`) and home folder, and whether `ssh` has reached it so
-// far.
+// The Orca host a read is of: its id in the store, the runner bound to it and the one that lists
+// its files and reads their bytes, its system (`uname -s`) and home folder, and whether `ssh` has
+// reached it so far.
 type Place = { host: string; exec: Run; read: Run; os: string; home: string; reached: () => boolean };
 
 export type CatchUp = {
@@ -80,16 +85,18 @@ export type CatchUp = {
   notRead(): string[];
 };
 
-// `run`: the plugin's runner; `log`: the worker's log, which a file that cannot be read is
-// written to, left for the next run; `hosts`: the Orca hosts other than this computer.
+// `run` and `runBytes`: the plugin's runners; `log`: the worker's log, which a file that cannot
+// be read is written to, left for the next run; `hosts`: the Orca hosts other than this computer.
 export function createCatchUp({
   run,
+  runBytes,
   store,
   home,
   log,
   hosts,
 }: {
   run: Run;
+  runBytes: RunBytes;
   store: Store;
   home: string;
   log: (message: string) => void;
@@ -133,7 +140,7 @@ export function createCatchUp({
       let listed;
       try {
         // `path` named: the JS signature's inferred type asks for it
-        listed = await listFolder(place.exec, { dir, os: place.os, depth: harness.depth, path: undefined, strict: true });
+        listed = await listFolder(place.read, { dir, os: place.os, depth: harness.depth, path: undefined, strict: true });
       } catch (error) {
         if (!place.reached()) return ended;
         log(`spyhop: catch-up cannot list ${dir}: ${(error as Error).message}`);
@@ -163,10 +170,11 @@ export function createCatchUp({
       return result;
     };
     const exec: Run = async (command, args, options) => noted(await run(command, args, { ...options, on: alias }));
-    // the line's exit code is zstd's; `dd` still prints its statistics on stderr
+    // the program's own exit code kept; `dd` still prints its statistics on stderr
     const compressed: Run = async (command, args, options) => {
-      const { code, stdout, stderr } = noted(await runBytes('sh', ['-c', '"$@" | zstd -q -c', 'sh', command, ...args], { ...options, on: alias }));
-      return { code, stdout: zstdDecompressSync(stdout).toString('utf8'), stderr };
+      const { code, stdout, stderr } = noted(await runBytes('sh', ['-c', ZSTD_SCRIPT, 'sh', command, ...args], { ...options, on: alias }));
+      // nothing at all when ssh fails
+      return { code, stdout: stdout.length === 0 ? '' : zstdDecompressSync(stdout).toString('utf8'), stderr };
     };
     // its programs one after the other, as every program of a host's read
     let place: { os: string; home: string } | null = null;
@@ -179,7 +187,7 @@ export function createCatchUp({
     if (place) {
       // a `zstd -V` that fails, or cannot be run, reads the host raw
       const zstd = await exec('zstd', ['-V']).catch(() => null);
-      const ended = await readHost({ host: id, exec, read: zstd?.code === 0 ? compressed : exec, ...place, reached: () => reached });
+      const ended = reached && (await readHost({ host: id, exec, read: zstd?.code === 0 ? compressed : exec, ...place, reached: () => reached }));
       if (reached) return { name, read: true, ended };
       log(`spyhop: catch-up cannot reach ${name}`);
     }

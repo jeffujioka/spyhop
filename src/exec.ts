@@ -47,6 +47,7 @@ export type RunResult = { code: number; stdout: string; stderr: string };
 export type RunOptions = { cwd?: string; on?: string | null };
 export type Run = (command: string, args: string[], options?: RunOptions) => Promise<RunResult>;
 export type BytesResult = { code: number; stdout: Buffer; stderr: string };
+export type RunBytes = (command: string, args: string[], options?: RunOptions) => Promise<BytesResult>;
 
 // A word as the remote POSIX shell reads it back unchanged.
 const quote = (word: string) => `'${word.replaceAll("'", `'\\''`)}'`;
@@ -91,7 +92,7 @@ async function reuseOptions(alias: string): Promise<string[]> {
   return ['-o', 'ControlMaster=auto', '-o', `ControlPath=${folder}/%C`, '-o', 'ControlPersist=60'];
 }
 
-export async function runBytes(command: string, args: string[], options: RunOptions = {}): Promise<BytesResult> {
+export const runBytes: RunBytes = async (command, args, options = {}) => {
   const { on, cwd } = options;
   if (!on) return execute(command, args, cwd);
   if (on.startsWith('-')) return { code: 255, stdout: Buffer.alloc(0), stderr: `spyhop: alias ${on} reads as an ssh option` };
@@ -103,7 +104,7 @@ export async function runBytes(command: string, args: string[], options: RunOpti
   const key = `${owned ? 'owned' : 'shared'} ${on}`;
   if (!limits.has(key)) limits.set(key, createLimit(owned ? OWNED_AT_ONCE : SHARED_AT_ONCE));
   return limits.get(key)!(() => execute('ssh', argv, undefined));
-}
+};
 
 export const run: Run = async (command, args, options) => {
   const { code, stdout, stderr } = await runBytes(command, args, options);

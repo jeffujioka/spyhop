@@ -10,6 +10,7 @@ import { setImmediate } from 'node:timers/promises';
 import { afterEach, describe, mock, test } from 'node:test';
 import { CATCH_UP_MS } from '../../src/core/refresh.js';
 import { ompSessionsDir } from '../../src/core/providers/omp-sources.js';
+import { runBytes } from '../../src/exec.ts';
 import { createCatchUp } from '../../src/history/catch-up.ts';
 import { openStore, STORE_FILE, type Store } from '../../src/history/store.ts';
 import { scheduleCatchUps } from '../../src/worker.ts';
@@ -37,7 +38,7 @@ async function catchUpOf() {
   const { exec, calls } = recordingRun();
   const logs: string[] = [];
   store = await openStore(home);
-  const catchUp = createCatchUp({ run: exec, store, home, log: (message) => logs.push(message), hosts: async () => [] });
+  const catchUp = createCatchUp({ run: exec, runBytes, store, home, log: (message) => logs.push(message), hosts: async () => [] });
   return { home, calls, logs, store, catchUp };
 }
 

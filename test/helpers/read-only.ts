@@ -1,6 +1,9 @@
 // Whether a command line `ssh` runs on a remote Orca host only reads: what the remote tests ask
 // of every command the plugin runs there.
 
+// The script the runner wraps a program in to compress its output (src/history/catch-up.ts).
+const ZSTD_SCRIPT = 'exec 4>&1; s=$( { { "$@"; echo $? >&3; } | zstd -q -c >&4; } 3>&1 ); exit $s';
+
 // Whether one program with its arguments only reads.
 function readsOnly([program, ...args]: string[]): boolean {
   switch (program) {
@@ -23,9 +26,10 @@ function readsOnly([program, ...args]: string[]): boolean {
       return (args[0] === 'branch' && args[1] === '--show-current') || (args[0] === 'remote' && args[1] === 'get-url');
     case 'zstd':
       return args.length === 1 && args[0] === '-V';
-    // a read-only program whose output the runner compresses (src/history/catch-up.ts)
+    // a read-only program whose output the runner compresses, keeping its exit code
+    // (src/history/catch-up.ts)
     case 'sh':
-      return args[0] === '-c' && args[1] === '"$@" | zstd -q -c' && args[2] === 'sh' && readsOnly(args.slice(3));
+      return args[0] === '-c' && args[1] === ZSTD_SCRIPT && args[2] === 'sh' && readsOnly(args.slice(3));
     case 'sqlite3':
       return args[0] === '-readonly';
     default:
