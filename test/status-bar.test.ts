@@ -4,9 +4,11 @@
 // after each catch-up. The worker is the real one, mounted on this computer's Orca host as the test
 // kit plays it (test/helpers/live.ts), whose `statusBar.update` calls the test reads.
 import assert from 'node:assert/strict';
-import { join } from 'node:path';
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import { mock, test } from 'node:test';
 import { RANGE_REFRESH_MS } from '../src/core/refresh.js';
+import { STORE_FILE } from '../src/history/store.ts';
 import { NOW } from './helpers/agent-cards.ts';
 import { caughtUp } from './helpers/history.ts';
 import { mountOn, ompSession, spent, until } from './helpers/live.ts';
@@ -23,6 +25,8 @@ test("the status bar item follows today's spend after a catch-up", async () => {
   const { home, mounted } = await mountOn([], { prepare: (at) => ompSession(at, join(at, 'api'), { title: 'api', calls: [first] }) });
   const updates = () => mounted.host.callsOf('statusBar.update');
   await caughtUp(home);
+  // set at activation, before the first catch-up ended, from the empty store
+  assert.partialDeepStrictEqual(updates()[0], { id: 'spyhop', text: '$0.00 today' });
   await until(() => shown(updates())?.text === '$1.00 today');
   assert.equal(shown(updates())!.tooltip, "Spyhop: today's model spend on every Orca host");
 
@@ -33,4 +37,16 @@ test("the status bar item follows today's spend after a catch-up", async () => {
   await caughtUp(home, 2);
 
   await until(() => shown(updates())?.text === '$1.25 today');
+});
+
+test('the status bar item is n/a when the history store cannot be opened', async () => {
+  const { mounted } = await mountOn([], {
+    prepare: (home) => {
+      const path = join(home, STORE_FILE);
+      mkdirSync(dirname(path), { recursive: true });
+      writeFileSync(path, 'not a SQLite file, but long enough for SQLite to read its header as one');
+    },
+  });
+
+  await until(() => shown(mounted.host.callsOf('statusBar.update'))?.text === 'n/a today');
 });

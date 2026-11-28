@@ -25,4 +25,5 @@ test('Manifest of the new panel', () => {
   );
   assert.deepEqual(manifest.contributes.keybindings, [{ command: 'spyhop.show', key: 'Mod+Alt+Shift+S' }]);
   assert.deepEqual(manifest.contributes.statusBarItems, [{ id: 'spyhop', icon: 'bar-chart-3', command: 'spyhop.show' }]);
+  assert.equal(read('package.json').version, '0.2.0');
 });
