@@ -22,7 +22,7 @@
 // them, a catch-up reads this computer's omp session files into the history store
 // (src/history/catch-up.ts) when the worker starts and every CATCH_UP_MS after.
 // `spyhop.range` answers a range tab from the history store (src/history/views.ts): at once while
-// a catch-up runs, else after a catch-up when the last one started RANGE_REFRESH_MS ago or more.
+// a catch-up runs, else after a catch-up when the last one started RANGE_CATCH_UP_MS ago or more.
 // A history store that cannot be opened is logged once; no catch-up runs then, and each range
 // tab's figures are n/a, while the fleet and the sessions are answered as ever.
 // `spyhop.focus` focuses a card's pane
@@ -34,7 +34,7 @@ import { homedir } from 'node:os';
 import type { OrcaWorkerApi } from 'orca/worker';
 import { type BuiltCard, createAgentCards, type OrcaAgent, sameButStates } from './agent-cards.ts';
 import { cardView } from './card-view.ts';
-import { CATCH_UP_MS, decodeScans, encodeScans, keptPartsOf, RANGE_REFRESH_MS } from './core/refresh.js';
+import { CATCH_UP_MS, decodeScans, encodeScans, keptPartsOf, RANGE_REFRESH_MS, REFRESH_INTERVAL_MS } from './core/refresh.js';
 import { createTtlCache } from './core/ttl-cache.js';
 import { run } from './exec.ts';
 import { attentionRows, burnCard, type FleetAgent, groupCards, LOCAL, stateCounts } from './fleet.ts';
@@ -57,6 +57,11 @@ const KEPT_WRITE_MS = 30 * 1000;
 
 // The Spend tab's view when the history store cannot be opened.
 const SPEND_NA: SpendView = { cost: 'n/a', tokens: 'n/a', calls: 'n/a', chart: null };
+
+// A range ask runs a catch-up when the last one started this long ago or more: less than the
+// panel's RANGE_REFRESH_MS by a margin, since the panel times its asks from when it sends them and
+// the catch-up starts a few ms later, when the worker takes the ask.
+const RANGE_CATCH_UP_MS = RANGE_REFRESH_MS - REFRESH_INTERVAL_MS;
 
 // Runs `catchUp`, or waits for the one running; a run that fails is logged, and resolves.
 function caughtUp(catchUp: CatchUp, log: (message: string) => void) {
@@ -302,7 +307,7 @@ export default function activate(orca: OrcaWorkerApi): void {
     const history = await opening;
     if (!history) return { request, tab, range, spend: tab === 'spend' ? SPEND_NA : null };
     const { store, catchUp } = history;
-    if (!catchUp.running() && Date.now() - (catchUp.startedMs() ?? -Infinity) >= RANGE_REFRESH_MS) await caughtUp(catchUp, log);
+    if (!catchUp.running() && Date.now() - (catchUp.startedMs() ?? -Infinity) >= RANGE_CATCH_UP_MS) await caughtUp(catchUp, log);
     return { request, tab, range, spend: tab === 'spend' ? spendView(store, range, Date.now()) : null };
   });
 

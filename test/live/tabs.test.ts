@@ -1,6 +1,6 @@
 // The live panel's tabs: it opens on Live, which holds the fleet screen, and the Spend tab reads
 // the history store over the range shown, asked again every minute while shown, which the worker
-// answers after a catch-up when the last one started a minute ago or more. The controller
+// answers after a catch-up when the last one started nearly a minute ago or more. The controller
 // (src/live/controller.ts) runs over the real worker, through the frame the tests play
 // (`openLive`, test/helpers/live.ts); the worker's catch-ups read the omp session files with the
 // real programs under a temporary home. Time is node:test's mock clock.
@@ -46,6 +46,33 @@ test("Today's cost while the Spend tab is shown", async () => {
 
   await until(() => figure(opened.html(), 'cost') === '$1.25');
   assert.equal(opened.requests('spyhop.fleet'), fleets);
+});
+
+test('today is read again a minute after an ask the worker took late', async () => {
+  const first = spent(1);
+  const opened = await openLive([], { prepare: (home) => apiSession(home, [first]) });
+  const home = process.env.HOME!;
+  await caughtUp(home);
+  mock.timers.tick(RANGE_REFRESH_MS);
+  // the worker takes the tab's first ask, which starts a catch-up, 5 ms after the panel sent it
+  const request = opened.worker.request.bind(opened.worker);
+  let held = false;
+  opened.worker.request = ((name: string, ...args: unknown[]) => {
+    if (name === 'spyhop.range' && !held) {
+      held = true;
+      mock.timers.tick(5);
+    }
+    return (request as (name: string, ...args: unknown[]) => Promise<unknown>)(name, ...args);
+  }) as typeof opened.worker.request;
+  await opened.openTab('spend');
+  await caughtUp(home, 2);
+  assert.equal(figure(opened.html(), 'cost'), '$1.00');
+
+  apiSession(home, [first, spent(0.25, NOW + RANGE_REFRESH_MS)]);
+  // the panel's next ask, 5 ms short of a minute after the worker started the catch-up
+  mock.timers.tick(RANGE_REFRESH_MS - 5);
+
+  await until(() => figure(opened.html(), 'cost') === '$1.25');
 });
 
 test('a tab pressed during an ask is asked for at its answer', async () => {

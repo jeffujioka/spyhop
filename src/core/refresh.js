@@ -15,7 +15,7 @@ export const REFRESH_INTERVAL_MS = 2000;
 export const CATCH_UP_MS = 15 * 60 * 1000;
 
 // The live panel asks again for a range tab this often while it is shown, and the worker runs a
-// catch-up before it answers when the last one started this long ago or more.
+// catch-up before it answers when the last one started nearly this long ago (src/worker.ts).
 export const RANGE_REFRESH_MS = 60 * 1000;
 
 // The most of a session file one refresh reads for the figures about its end. A line cut at
