@@ -7,9 +7,10 @@
 //   state as JSON (`encodeState` of src/core/refresh.js); an opencode database is one row, whose
 //   lines a catch-up replaces from a day on (`replaceDays`);
 // - `lines`: the figures (LINE_FIGURES) of a file's model calls by session, day, repo and model;
-// - `meta`: string values by key; `host-keys` set to `machine` once the rows of another Orca host
-//   are keyed by the machine it reaches, `machine:<node name>` (src/history/catch-up.ts), not by
-//   its ssh alias, `ssh:<alias>`, as HISTORY_VERSION 3 kept them;
+// - `meta`: string values by key; `host-keys` set to `machine-id` once the rows of another Orca
+//   host are keyed by the machine it reaches, `machine:<identity>:<home>`
+//   (src/history/catch-up.ts), not by its ssh alias, `ssh:<alias>`, as HISTORY_VERSION 3 kept
+//   them, nor by its node name, `machine:<node name>`, as `host-keys` `machine` marked;
 // - the view `daily_lines`: the lines summed by day, Orca host, repo, harness and model.
 import { mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -98,16 +99,16 @@ export async function openStore(home: string): Promise<Store> {
         FROM lines JOIN files ON files.id = lines.file
         GROUP BY day, host, repo, harness, model;
     `);
-    // once: the rows, and the read-through marks, of every Orca host keyed by anything but this
-    // computer or a machine, which the next catch-up reads again, once each
-    if (db.prepare("SELECT value FROM meta WHERE key = 'host-keys'").get()?.value !== 'machine') {
-      const other = `host != '${LOCAL}' AND host NOT LIKE 'machine:%'`;
+    // once: the rows, and the read-through marks, of every Orca host but this computer, all keyed
+    // by an older key, which the next catch-up reads again, once each
+    if (db.prepare("SELECT value FROM meta WHERE key = 'host-keys'").get()?.value !== 'machine-id') {
+      const other = `host != '${LOCAL}'`;
       db.exec(`
         BEGIN;
         DELETE FROM lines WHERE file IN (SELECT id FROM files WHERE ${other});
         DELETE FROM files WHERE ${other};
-        DELETE FROM meta WHERE key LIKE 'read:%' AND key NOT LIKE 'read:${LOCAL}:%' AND key NOT LIKE 'read:machine:%';
-        INSERT INTO meta (key, value) VALUES ('host-keys', 'machine') ON CONFLICT (key) DO UPDATE SET value = excluded.value;
+        DELETE FROM meta WHERE key LIKE 'read:%' AND key NOT LIKE 'read:${LOCAL}:%';
+        INSERT INTO meta (key, value) VALUES ('host-keys', 'machine-id') ON CONFLICT (key) DO UPDATE SET value = excluded.value;
         COMMIT;
       `);
     }

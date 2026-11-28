@@ -5,17 +5,19 @@
 // first the files and opencode calls of the last FIRST_DAYS days, changed or created from that
 // day's start on, then the older ones, each phase's files newest first. Within a phase it reads
 // this computer and each other host at once, a host's programs one at a time; the second phase
-// starts once every host has ended the first. Every other host's system, node name and home
-// folder are asked first (`uname -sn`, `printenv HOME`), before any is read; its harness folders
-// lie under that home. Hosts whose node name and home are the same reach one machine, read once,
-// over the first of them in Orca's order; one whose node name (lowercased) and home are this
-// computer's (`hostname()`) reaches this computer, read here, so it is not read nor named. A host
-// whose `ssh` exits 255, as when it cannot be reached, or whose place cannot be asked, is not
-// read: its read stops there, it is named in `notRead` until a later run reads it, and the lines
-// kept of it stay. Then `zstd -V` is asked once: on a host where it exits 0, the listings
-// (`find`), the reads of a file's bytes (`dd`, `tail`) and opencode's queries (`sqlite3`) run
-// within ZSTD_SCRIPT, their output decompressed here and their exit code their own; on any
-// other, they run raw. `uname`, `printenv` and `git` always run raw.
+// starts once every host has ended the first. Every other host's system, node name, home folder
+// and machine id are asked first (`uname -sn`, `printenv HOME`, then `ioreg` or `cat
+// /etc/machine-id`: `machineOf`, src/hosts.ts), before any is read; its harness folders lie under
+// that home. A machine's identity is its id, else its node name. Hosts of the same identity and
+// home are one machine, read once, over the first of them in Orca's order; one whose identity and
+// home are this computer's (asked the same way, here, once) is this computer, read here, so it
+// is not read nor named. A host whose `ssh` exits 255, as when it cannot be reached, or whose
+// place or identity cannot be asked (an empty one included), is not read: its read stops there,
+// it is named in `notRead` until a later run reads it, and the lines kept of it stay. Then `zstd
+// -V` is asked once: on a host where it exits 0, the listings (`find`), the reads of a file's
+// bytes (`dd`, `tail`) and opencode's queries (`sqlite3`) run within ZSTD_SCRIPT, their output
+// decompressed here and their exit code their own; on any other, they run raw. `uname`,
+// `printenv`, `ioreg`, `cat` and `git` always run raw.
 //
 // On each host, one run lists every `.jsonl` file under each harness's sessions folder, down to
 // the sub-agents (of sub-agents, for omp), with one `find` each; a listing that fails, but for a
@@ -34,8 +36,8 @@
 // reads, counted only while the database was never read through, and unknown, so never named,
 // when that count fails.
 //
-// A file's lines count in its host's lines (`local` for this computer, else `machine:<the node
-// name of the machine its host reaches>`, so a target Orca lists again under a new id or a new
+// A file's lines count in its host's lines (`local` for this computer, else `machine:<identity>:
+// <home>` of the machine its host reaches, so a target Orca lists again under a new id or a new
 // alias counts once), in
 // its session, `<host>\0<harness>\0<main session file>` (a sub-agent's transcript in its main
 // session's), and in its repo: set when the file is read from its start, the git origin, on its
@@ -73,7 +75,7 @@ import { scanFile } from '../core/refresh.js';
 import { newestFirst } from '../core/session-link.js';
 import { MAX_OUTPUT_BYTES, type Run, type RunBytes } from '../exec.ts';
 import { LOCAL } from '../fleet.ts';
-import { type HistoryHost, placeOf } from '../hosts.ts';
+import { type HistoryHost, machineOf, placeOf } from '../hosts.ts';
 import type { ReadProgress } from '../protocol.ts';
 import { type FileMark, HISTORY_VERSION, type SessionLine, type Store } from './store.ts';
 
@@ -381,10 +383,10 @@ export function createCatchUp({
     return true;
   }
 
-  // The Orca host `host` over `ssh` to its alias: the node name and home of the machine it reaches
-  // (`placeOf` of `uname -sn` and `printenv HOME`), and its place, `rank` in `progress`'s order,
-  // keyed by that machine, `machine:<node name>`, with `zstd -V` asked; null when its place cannot
-  // be asked.
+  // The Orca host `host` over `ssh` to its alias: the machine it reaches, `machine:<identity>:<home>`
+  // (`placeOf` of `uname -sn` and `printenv HOME`, then `machineOf`), and its place, `rank` in
+  // `progress`'s order, keyed by that machine, with `zstd -V` asked; null when its place or its
+  // machine cannot be asked, an empty identity or home included.
   async function probe({ name, alias }: HistoryHost, rank: number) {
     let reached = true;
     const noted = <Result extends { code: number }>(result: Result) => {
@@ -400,24 +402,28 @@ export function createCatchUp({
       return { code, stdout: stdout.length === 0 ? '' : zstdDecompressSync(stdout, { maxOutputLength: MAX_OUTPUT_BYTES }).toString('utf8'), stderr };
     };
     // its programs one after the other, as every program of a host's read
-    let found: { os: string; node: string; home: string };
+    let found: { os: string; home: string; machine: string };
     try {
       const uname = await exec('uname', ['-sn']);
-      found = placeOf(uname, uname.code === 0 ? await exec('printenv', ['HOME']) : null, null);
+      const { os, node, home: at } = placeOf(uname, uname.code === 0 ? await exec('printenv', ['HOME']) : null, null);
+      found = { os, home: at, machine: `machine:${await machineOf(exec, os, node)}:${at}` };
     } catch (error) {
       log(`spyhop: catch-up cannot ask the place of ${name}: ${(error as Error).message}`);
       return null;
     }
-    const { os, node, home: at } = found;
+    const { os, home: at, machine } = found;
     return {
-      machine: `${node}\0${at}`,
+      machine,
       async place(): Promise<Place> {
         // a `zstd -V` that fails, or cannot be run, reads the host raw
         const zstd = await exec('zstd', ['-V']).catch(() => null);
-        return { host: `machine:${node}`, name, rank, exec, read: zstd?.code === 0 ? compressed : exec, os, home: at, reached: () => reached };
+        return { host: machine, name, rank, exec, read: zstd?.code === 0 ? compressed : exec, os, home: at, reached: () => reached };
       },
     };
   }
+
+  // This computer's machine, as `probe` keys another host's, asked once.
+  let thisMachine: Promise<string> | null = null;
 
   async function runOnce() {
     shares = [];
@@ -430,7 +436,8 @@ export function createCatchUp({
       phaseOne(local, recent),
       hosts().then(async (listed) => {
         const probed = await Promise.all(listed.map((host, i) => probe(host, i + 1)));
-        const machines = new Set([`${hostname().toLowerCase()}\0${home}`]);
+        thisMachine ??= machineOf(run, type(), hostname().toLowerCase()).then((identity) => `machine:${identity}:${home}`);
+        const machines = new Set([await thisMachine]);
         const kept = listed.flatMap((host, i) => {
           const machine = probed[i]?.machine;
           if (machine !== undefined && machines.has(machine)) return [];

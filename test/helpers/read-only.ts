@@ -30,6 +30,9 @@ function readsOnly([program, ...args]: string[]): boolean {
       return (args[0] === 'branch' && args[1] === '--show-current') || (args[0] === 'remote' && args[1] === 'get-url');
     case 'zstd':
       return args.length === 1 && args[0] === '-V';
+    // a Mac's machine id (`machineOf`, src/hosts.ts); a Linux one's is a `cat`
+    case 'ioreg':
+      return args.join(' ') === '-rd1 -c IOPlatformExpertDevice';
     // a read-only program whose output the runner compresses, keeping its exit code
     // (src/history/catch-up.ts)
     case 'sh':

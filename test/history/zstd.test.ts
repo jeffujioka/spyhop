@@ -19,7 +19,7 @@ import { ompSession, spent } from '../helpers/live.ts';
 import { DEVBOX_LISTS, environmentListOf, hostListOf, STARFISH_LISTS } from '../helpers/orca-answers.ts';
 import { figure } from '../helpers/markup.ts';
 import { readOnlyLine, ZSTD_PIPE } from '../helpers/read-only.ts';
-import { standIns } from '../helpers/stand-ins.ts';
+import { machineKeyOf, standIns } from '../helpers/stand-ins.ts';
 
 // The Spend tab of Day once the first catch-up has read an omp session of 1.00 USD today on the
 // SSH host `alias`, the only other Orca host, listed by `lists`, and the commands run on it.
@@ -92,7 +92,7 @@ test('a compressed answer is no larger than a raw one could be', async () => {
   }
 
   const db = storeOf(home);
-  const { n } = db.prepare("SELECT count(*) AS n FROM lines JOIN files ON files.id = lines.file WHERE host = 'machine:starfish-bs' AND harness = 'opencode'").get()!;
+  const { n } = db.prepare("SELECT count(*) AS n FROM lines JOIN files ON files.id = lines.file WHERE host = ? AND harness = 'opencode'").get(machineKeyOf(remoteHome))!;
   db.close();
   assert.equal(Number(n), 0);
   // the line names the database, so that one of this computer's is told from another host's

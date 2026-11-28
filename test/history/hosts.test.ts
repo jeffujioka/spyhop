@@ -7,6 +7,7 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { chmodSync, mkdirSync } from 'node:fs';
+import { type } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterEach, mock, test } from 'node:test';
 import { RANGE_REFRESH_MS } from '../../src/core/refresh.js';
@@ -14,7 +15,7 @@ import { run, type Run, type RunBytes, runBytes, type RunOptions } from '../../s
 import { createCatchUp } from '../../src/history/catch-up.ts';
 import { openStore, type Store } from '../../src/history/store.ts';
 import { spendTab } from '../../src/live/spend.ts';
-import { historyHosts, listHosts } from '../../src/hosts.ts';
+import { historyHosts, listHosts, machineOf } from '../../src/hosts.ts';
 import type { RangeAnswer } from '../../src/protocol.ts';
 import { ompSessionDir } from '../helpers/agent-cards.ts';
 import { setEnv, useTempHome } from '../helpers/env.ts';
@@ -25,7 +26,7 @@ import { figure, listOf, parts, text } from '../helpers/markup.ts';
 import { DEVBOX, DEVBOX_HOST, environmentListOf, JEFF_LISTS, JEFF_SERVER_ENVIRONMENTS, JEFF_TARGET, LOCAL_HOST, hostListOf, STARFISH_LISTS } from '../helpers/orca-answers.ts';
 import { withCopilotPrices } from '../helpers/prices.ts';
 import { readOnlyLine, ZSTD_PIPE } from '../helpers/read-only.ts';
-import { standIns } from '../helpers/stand-ins.ts';
+import { machineKeyOf, standIns } from '../helpers/stand-ins.ts';
 
 let store: Store | undefined;
 afterEach(() => {
@@ -73,7 +74,7 @@ async function oneOriginOnTwoHosts() {
       withOrigin(remote);
     },
   });
-  return { ...range, home };
+  return { ...range, home, remoteHome };
 }
 
 // A catch-up of a new temporary home and of starfish-bs, whose home is `remoteHome`, through
@@ -110,7 +111,7 @@ test('One origin on two Orca hosts', async () => {
 });
 
 test('One repo on two Orca hosts', async () => {
-  const { home, html } = await oneOriginOnTwoHosts();
+  const { home, remoteHome, html } = await oneOriginOnTwoHosts();
 
   const db = storeOf(home);
   const lines = db.prepare("SELECT host, repo, harness, model, cost FROM daily_lines WHERE day = '2026-11-27' ORDER BY host").all();
@@ -120,7 +121,7 @@ test('One repo on two Orca hosts', async () => {
     lines.map((line) => ({ ...line })),
     [
       { host: 'local', repo: ORIGIN, harness: 'omp', model, cost: 1 },
-      { host: 'machine:starfish-bs', repo: ORIGIN, harness: 'omp', model, cost: 2 },
+      { host: machineKeyOf(remoteHome), repo: ORIGIN, harness: 'omp', model, cost: 2 },
     ],
   );
   assert.deepEqual(listOf(html, 'repo'), [`${ORIGIN} $3.00`]);
@@ -152,7 +153,7 @@ test('a paired server deployed over a listed SSH host is read once', async () =>
   db.close();
   assert.deepEqual(
     hosts.map(({ host }) => host),
-    ['machine:jeff'],
+    [machineKeyOf(remoteHome)],
   );
   assert.equal(figure(html, 'cost'), '$1.00');
 });
@@ -176,7 +177,7 @@ test('a paired server whose deployment target is not listed is kept by its machi
   db.close();
   assert.deepEqual(
     hosts.map(({ host }) => host),
-    ['machine:jeff'],
+    [machineKeyOf(remoteHome)],
   );
   assert.equal(figure(html, 'cost'), '$1.00');
 });
@@ -210,7 +211,7 @@ test('a target re-added in Orca is read once', async () => {
   db.close();
   assert.deepEqual(
     hosts.map(({ host }) => host),
-    ['machine:devbox'],
+    [machineKeyOf(remoteHome)],
   );
   assert.equal(figure(spendTab(answer), 'cost'), '$1.00');
 });
@@ -242,7 +243,7 @@ test('two aliases of one machine are read once', async () => {
   db.close();
   assert.deepEqual(
     hosts.map(({ host }) => host),
-    ['machine:bs'],
+    [machineKeyOf(remoteHome)],
   );
   assert.equal(figure(html, 'cost'), '$1.00');
   assert.deepEqual(answer.notRead, []);
@@ -266,7 +267,42 @@ test('an alias that reaches this computer is not read', async () => {
   assert.equal(figure(html, 'cost'), '$1.00');
   assert.deepEqual(answer.notRead, []);
   // only its place asked
-  assert.deepEqual(calls.ssh().map((args) => args.at(-1)).sort(), ["'printenv' 'HOME'", "'uname' '-sn'"]);
+  assert.deepEqual(calls.ssh().map((args) => args.at(-1)).sort(), ["'ioreg' '-rd1' '-c' 'IOPlatformExpertDevice'", "'printenv' 'HOME'", "'uname' '-sn'"]);
+});
+
+test('a machine listed under another alias in a later run is read once', async () => {
+  const remoteHome = tempHome();
+  const { home, mounted } = await mountOn([], {
+    homes: { bs: remoteHome },
+    orca: sshLists('bs'),
+    prepare: () => ompSession(remoteHome, join(remoteHome, 'api'), { title: 'api', calls: [spent(1)] }),
+  });
+  await caughtUp(home);
+  // Orca now lists the same machine as `starfish-bs` only
+  const relisted = standIns({ homes: { 'starfish-bs': remoteHome }, orca: sshLists('starfish-bs') });
+
+  mock.timers.tick(RANGE_REFRESH_MS);
+  const answer = (await mounted.request('spyhop.range', { request: 1, tab: 'spend', range: 'day' })) as RangeAnswer;
+  await caughtUp(home, 2);
+
+  assert.ok(relisted.ssh().some(([alias]) => alias === 'starfish-bs'));
+  assert.deepEqual(relisted.ssh().filter((args) => args.at(-1)!.includes("'dd'")), []);
+  const db = storeOf(home);
+  const hosts = db.prepare("SELECT DISTINCT host FROM files WHERE host != 'local'").all();
+  db.close();
+  assert.deepEqual(
+    hosts.map(({ host }) => host),
+    [machineKeyOf(remoteHome)],
+  );
+  assert.equal(figure(spendTab(answer), 'cost'), '$1.00');
+});
+
+test("a machine's identity is its id, else its node name, never empty", async () => {
+  assert.equal(type(), 'Darwin', 'this test reads the machine id of a Mac');
+  assert.match(await machineOf(run, 'Darwin', 'node-a'), /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+  // a Mac has no /etc/machine-id
+  assert.equal(await machineOf(run, 'Linux', 'node-a'), 'node-a');
+  await assert.rejects(machineOf(run, 'Linux', ''), /machine unknown/);
 });
 
 test('Appended bytes only', async () => {
@@ -277,11 +313,11 @@ test('Appended bytes only', async () => {
   await catchUp.run();
   const dir = ompSessionDir(remoteHome, folder);
   const file = join(dir, '2026-11-25T11-58-00-000Z_s1.jsonl');
-  const session = `machine:starfish-bs\0omp\0${file}`;
+  const session = `${machineKeyOf(remoteHome)}\0omp\0${file}`;
   const db = storeOf(home);
   const costOf = () => Number(db.prepare('SELECT SUM(cost) AS cost FROM lines WHERE session = ?').get(session)!.cost);
   const before = costOf();
-  const { pos } = db.prepare("SELECT pos FROM files WHERE host = 'machine:starfish-bs' AND path = ?").get(file) as { pos: number };
+  const { pos } = db.prepare('SELECT pos FROM files WHERE host = ? AND path = ?').get(machineKeyOf(remoteHome), file) as { pos: number };
   const mark = calls.ssh().length;
 
   // the same session, which has since logged a call of 0.10 USD
@@ -347,7 +383,7 @@ test('a host that drops while its repo is asked keeps no repo of it', async () =
   await catchUp.run();
 
   const db = storeOf(home);
-  const repos = db.prepare("SELECT DISTINCT repo FROM daily_lines WHERE host = 'machine:starfish-bs'").all();
+  const repos = db.prepare('SELECT DISTINCT repo FROM daily_lines WHERE host = ?').all(machineKeyOf(remoteHome));
   db.close();
   assert.deepEqual(
     repos.map(({ repo }) => repo),

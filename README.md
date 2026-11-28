@@ -246,7 +246,9 @@ own host's group. Their session files and git facts are read over `ssh <alias> -
 ConnectTimeout=5`, at most eight commands at once on a host whose SSH connection spyhop keeps
 for itself and four on any other (one whose own SSH settings already reuse connections, or
 whose settings cannot be read), with read-only commands only: `cd`,
-`uname -s` (the history catch-up: `uname -sn`), `printenv HOME`, `cat`, `head`, `tail`, `dd` (reading a block, never writing one),
+`uname -s` (the history catch-up: `uname -sn`), `printenv HOME`, `cat` (the history catch-up
+also: `cat /etc/machine-id`), `ioreg -rd1 -c IOPlatformExpertDevice` (the history catch-up, on a
+Mac), `head`, `tail`, `dd` (reading a block, never writing one),
 `find` with `stat`, a bare `stat`, `git branch --show-current`, `git remote get-url`, `sqlite3
 -readonly` and `zstd -V`; the history catch-up also runs `find`, `dd`, `tail` and `sqlite3
 -readonly` within `sh -c`, which pipes their output through `zstd -q -c` and keeps their exit code.
@@ -290,11 +292,14 @@ refresh is never drawn.
 Apart from the panel, the worker runs a catch-up when it starts and every 15 minutes after,
 whether the panel is open or closed, and between catch-ups reads nothing for them. A catch-up
 reads this computer and every Orca host Orca lists, each SSH host and each paired Orca server,
-another host over ssh (see Other hosts). It first asks every other host the machine it reaches,
-its node name and home (`uname -sn`, `printenv HOME`): a machine is read once, whatever aliases
-reach it, over the first of them in Orca's order, and an alias that reaches this computer (its
-node name and home this computer's) is never read over ssh, nor named as not read, since this
-computer is read here. On each it lists the omp and Claude
+another host over ssh (see Other hosts). It first asks every other host the machine it reaches:
+its machine id (on a Mac the IOPlatformUUID of `ioreg -rd1 -c IOPlatformExpertDevice`, else
+`cat /etc/machine-id`), else, when it gives none, its node name (`uname -sn`), and its home
+(`printenv HOME`). Hosts of the same identity and home are one machine, read once, whatever
+aliases reach it, over the first of them in Orca's order; an alias that reaches this computer
+(its identity and home this computer's, asked the same way here) is never read over ssh, nor
+named as not read, since this computer is read here. A host whose identity or home cannot be
+asked, or is empty, is named as not read. On each it lists the omp and Claude
 Code session files and sub-agent transcripts with one `find` for each, and reads each one into
 the history store (see What spyhop stores) from where its last
 read ended, one program at a time: a file whose size and modified time are those of its last read
@@ -370,10 +375,11 @@ next one. Claude Code's calls and costs are filed under one name per model, with
 set when it is first read: the git origin of the folder
 it records first (omp: its `session` entry), else that folder, else `n/a`; a sub-agent's
 transcript counts in its own folder's repo and in its main session. Another Orca host's lines are
-kept by the machine its alias reaches, `machine:<node name>`, not by the alias or Orca's id of it,
-so a target removed and added again in Orca, or reached under another alias, is counted once. A
-store that kept them by ssh alias, as spyhop did before, drops those lines once when it is opened,
-and the next catch-up reads those machines again, once each. Another program that holds the
+kept by the machine its alias reaches, `machine:<identity>:<home>`, not by the alias or Orca's id
+of it, so a target removed and added again in Orca, or reached under another alias, is counted
+once. A store that kept them by ssh alias or by node name, as spyhop did before, drops those
+lines once when it is opened, and the next catch-up reads those machines again, once each.
+Another program that holds the
 store, such as `sqlite3`, is waited for up
 to 5 seconds.
 A store that cannot be opened, or a Node in Orca that cannot load `node:sqlite`, is written to

@@ -4,19 +4,25 @@
 // `controlmaster`, or fails; `ssh <alias> <command>` runs the command after the alias here, under
 // the remote host's own home folder (with no `zstd` for an alias the test names), or fails as an
 // unreachable host does. Both log each call. Each home is one machine, whose node name `uname -sn`
-// prints: the first alias of that home, or this computer's own for an alias of the test's home.
+// prints, the first alias of that home, and whose id `ioreg` and `cat /etc/machine-id` print,
+// `machineIdOf` the home; an alias of the test's home is this computer, its own answers real.
 // `orca` holds back the answer to each command the test names until the test releases it, and
 // `ssh` every command on an alias the test names, or each of its commands holding a word it names;
 // `ssh` also fails, as a dropped connection does, each command on an alias holding a word it names.
 // `standIns` sets PATH and ORCA_CLI_COMMAND for the test (test/helpers/env.ts).
 import { chmodSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { type } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { setEnv } from './env.ts';
 import { seenIn, tempHome } from './files.ts';
 
 // `{ ok, result }`, as every `orca … --json` answers.
 export const answer = (result: unknown) => JSON.stringify({ id: 'local', ok: true, result });
+
+// The machine id a stand-in machine of the home `home` gives, in capitals, and the key the history
+// store keeps its rows by (src/history/catch-up.ts).
+const machineIdOf = (home: string) => `ID-${basename(home).toUpperCase()}`;
+export const machineKeyOf = (home: string) => `machine:${machineIdOf(home).toLowerCase()}:${home}`;
 
 // `homes`: each reachable alias and its home folder; any other alias is unreachable. `orca`: each
 // command line and its recorded answer; any other line fails. `controlmaster`: each alias whose
@@ -69,14 +75,19 @@ export function standIns({
   chmodSync(join(noZstdDir, 'zstd'), 0o755);
   const withoutZstd = (alias: string) => (noZstd.includes(alias) ? ` PATH='${noZstdDir}':"$PATH"; export PATH;` : '');
   // each home but this computer's -> the folder of a `uname` whose `-sn` prints that machine's node
-  // name, the home's first alias, and that passes any other ask to the real one
+  // name, the home's first alias, and of an `ioreg` and a `cat /etc/machine-id` that print its id,
+  // each passing any other ask to the real program
   const nodes = new Map<string, string>();
   for (const [alias, home] of Object.entries(homes)) {
     if (home === process.env.HOME || nodes.has(home)) continue;
     const dir = join(bin, `node-${nodes.size}`);
     mkdirSync(dir);
-    writeFileSync(join(dir, 'uname'), `#!/bin/sh\n[ "$*" = -sn ] && { echo '${type()} ${alias}'; exit 0; }\nPATH="\${PATH#${dir}:}" exec uname "$@"\n`);
-    chmodSync(join(dir, 'uname'), 0o755);
+    const real = (program: string) => `PATH="\${PATH#${dir}:}" exec ${program} "$@"`;
+    const id = machineIdOf(home);
+    writeFileSync(join(dir, 'uname'), `#!/bin/sh\n[ "$*" = -sn ] && { echo '${type()} ${alias}'; exit 0; }\n${real('uname')}\n`);
+    writeFileSync(join(dir, 'ioreg'), `#!/bin/sh\nprintf '+-o J316sAP  <class IOPlatformExpertDevice>\\n    "IOPlatformUUID" = "${id}"\\n'\n`);
+    writeFileSync(join(dir, 'cat'), `#!/bin/sh\n[ "$*" = /etc/machine-id ] && { echo '${id}'; exit 0; }\n${real('cat')}\n`);
+    for (const program of ['uname', 'ioreg', 'cat']) chmodSync(join(dir, program), 0o755);
     nodes.set(home, dir);
   }
   const onNode = (home: string) => (nodes.has(home) ? ` PATH='${nodes.get(home)}':"$PATH"; export PATH;` : '');

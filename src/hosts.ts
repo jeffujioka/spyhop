@@ -86,6 +86,19 @@ export function placeOf(uname: RunResult, printenv: RunResult | null, home: stri
   return { os, node: node.toLowerCase(), home: found };
 }
 
+// The identity of the machine whose system is `os` and node name `node`, asked through `exec` on
+// it: its machine id, lowercased (macOS: the IOPlatformUUID `ioreg -rd1 -c
+// IOPlatformExpertDevice` prints; any other system: /etc/machine-id), else, when it gives none,
+// its node name. Throws when both are empty: the machine is unknown.
+export async function machineOf(exec: Run, os: string, node: string): Promise<string> {
+  const mac = os === 'Darwin';
+  const answer = await (mac ? exec('ioreg', ['-rd1', '-c', 'IOPlatformExpertDevice']) : exec('cat', ['/etc/machine-id'])).catch(() => null);
+  const id = answer?.code === 0 ? (mac ? /"IOPlatformUUID" = "([^"]*)"/.exec(answer.stdout)?.[1] : answer.stdout.trim()) : undefined;
+  const identity = (id || node).toLowerCase();
+  if (!identity) throw new Error('machine unknown');
+  return identity;
+}
+
 // An Orca agent of a paired server, in the server's group, with its pane, if any.
 export type ServerAgent = FleetAgent & { pane: Pane | null };
 
