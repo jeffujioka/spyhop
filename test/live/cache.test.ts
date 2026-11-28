@@ -91,7 +91,8 @@ test('a Copilot cold start the price table cannot price has a cost n/a', async (
 
   assert.equal(figure(html, 'cold-expired'), '1 · 160,000 · n/a');
   const [hint] = parts(html, 'data-part', 'hint');
-  assert.equal(text(hint), '1 cold start after the cache expired: avoiding them would have saved up to n/a estimate');
+  assert.equal(text(hint), '1 cold start after the cache expired');
+  assert.equal(parts(hint, 'data-estimate').length, 0);
   assert.equal(parts(html, 'data-part', 'left-out').length, 0);
 });
 
@@ -166,6 +167,8 @@ test('Claude Code and opencode compactions', async () => {
 
   assert.equal(figure(html, 'compactions'), '1 context full · 2 manual');
   assert.doesNotMatch(compactionsOf(html), /inferred/);
+  // a small figure in a row, as the other lists draw theirs, not the big number of a figure block
+  assert.match(parts(html, 'data-name', 'Compactions')[0], /<div class="row item"><span class="num" data-figure="compactions">/);
 });
 
 test('omp compactions inferred', async () => {

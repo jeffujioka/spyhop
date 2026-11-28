@@ -151,6 +151,9 @@ button:hover { background: var(--orca-accent); color: var(--orca-accent-foregrou
 .cost-card > .headline > .num { font-size: 22px; font-weight: 650; }
 .box .head { margin-bottom: 4px; }
 .box .head .muted { font-size: 11px; }
+/* a list of model names, long ones: the name above its figures, each row a name line and a figures line */
+[data-stack] .item { flex-direction: column; align-items: flex-start; gap: 0; }
+[data-stack] .item > .grow { flex: none; }
 .box .item, [data-list] .item { font-size: 12px; padding: 2px 0; }
 /* a long model or host name breaks where it must, and its figures wrap under it */
 [data-list] .grow { overflow-wrap: anywhere; }

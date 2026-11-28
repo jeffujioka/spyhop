@@ -51,7 +51,7 @@ function compactionKinds({ compactions: { idle, full, manual, inferred } }: Cach
   const kinds = ([['context full', full], ['idle', idle], ['manual', manual]] as const).filter(([, count]) => count !== 0);
   const words = [full, idle, manual].includes('n/a') ? 'n/a' : kinds.length > 0 ? kinds.map(([kind, count]) => `${formatCount(count)} ${kind}`).join(' · ') : 'none';
   const mark = typeof inferred === 'number' && inferred > 0 ? ' <span class="muted" data-part="inferred">inferred</span>' : '';
-  return titled('Compactions', 'How often a session was compacted: when its context was full, when it sat idle, or when the developer asked', `${num('compactions', words)}${mark}`);
+  return titled('Compactions', 'How often a session was compacted: when its context was full, when it sat idle, or when the developer asked', `<div class="row item">${num('compactions', words)}${mark}</div>`);
 }
 
 // A hint per cause other than `other` with cold starts: what happened, how many cold starts it
@@ -59,7 +59,7 @@ function compactionKinds({ compactions: { idle, full, manual, inferred } }: Cach
 function hints({ causes }: CacheView) {
   const found = causes.flatMap(({ cause, cold, cost }) => {
     if (cause === 'other' || typeof cold !== 'number' || cold === 0) return [];
-    const saved = cost === null ? '' : `: avoiding them would have saved up to ${formatCost(cost)} <span data-estimate>estimate</span>`;
+    const saved = cost === null || cost === 'n/a' ? '' : `: avoiding them would have saved up to ${formatCost(cost)} <span data-estimate>estimate</span>`;
     return [`<p data-part="hint" data-cause="${cause}">${counted(cold, 'cold start')} ${esc(CAUSES[cause]?.what ?? cause)}${saved}</p>`];
   });
   return found.length === 0 ? '' : titled('Hints', 'What caused cold starts that could have been avoided, and what avoiding them would have saved', found.join(''));

@@ -281,6 +281,10 @@ test('Reply times name which is typical and which is slow', async () => {
   const html = await healthOf(omp([call('10:00', { ...COPILOT, duration: 1000 })]));
 
   assert.deepEqual(listOf(html, 'replies').map((row) => row.replace(/\d+\.\d+s/g, 'T')), [`${COPILOT_MODEL} typical T · slow T`]);
+  // rows of a model name and its figures stack, the figures one unit; the rows of short names do not
+  for (const list of ['replies', 'cut', 'thinking']) assert.match(html, new RegExp(`<div data-list="${list}" data-stack>`), list);
+  for (const list of ['failed-type', 'failed-host', 'failed-provider']) assert.doesNotMatch(html, new RegExp(`data-list="${list}" data-stack`), list);
+  assert.match(parts(html, 'data-list', 'replies')[0], /<span class="grow">[^<]*<\/span><span><span class="muted">typical<\/span> .*<\/span><\/div>/);
 });
 
 test('a store that cannot be opened draws n/a figures and no rows', async () => {
