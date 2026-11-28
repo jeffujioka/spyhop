@@ -3,8 +3,9 @@
 # computer, as the dev plugin `local.spyhop`, and stops at the first step that fails, with the
 # step's answer on stderr. It validates the folder, records `orca plugin check`, loads the folder
 # with `orca plugin dev watch` (stopped when the script exits), opens the panel, asks the worker
-# for the fleet, then for the session of each of its cards, waits for the first catch-up of the
-# history store, asks the worker for the Spend tab over a day and a year, checks every answer's
+# for the fleet, then for the session of each of its cards, waits for a catch-up of the dev
+# plugin's own to end on the history store, asks the worker for the Spend tab over a day and a
+# year, checks every answer's
 # bounds, shoots the fleet screen 300 and 420 pixels wide in Orca's dark and light themes, keeping
 # each PNG, and reads the logs. The themes take effect only while Orca's window is hidden or
 # minimized.
@@ -18,6 +19,8 @@ ORCA=${ORCA_CLI_COMMAND:-orca}
 dry=
 [ "${1:-}" = --dry-run ] && dry=1
 cd "$(dirname "$0")/.."
+# The history store's checks read it with sqlite3, so a computer without it fails at once.
+command -v sqlite3 > /dev/null || { echo 'frame check: sqlite3 is not installed; it reads the history store' >&2; exit 1; }
 
 KEY=local.spyhop
 SHOTS=.orca/shots
@@ -87,6 +90,14 @@ run "$work/validate.json" plugin validate . --json
 status=0
 run "$work/check.json" plugin check . --json || status=$?
 [ -n "$dry" ] || record "$work/check.json" check "$status" 'a.result.panels.length > 0'
+
+# The catch-ups the history store counts in its meta `catch-ups` before the dev plugin is loaded,
+# 0 while it is missing or counts none: the check waits for one more, the dev plugin's own.
+count="SELECT value FROM meta WHERE key = 'catch-ups'"
+printf '+ %s\n' "sqlite3 -readonly $STORE \"$count\""
+before=
+[ -n "$dry" ] || before=$(sqlite3 -readonly "$STORE" "$count" 2>/dev/null || true)
+before=${before:-0}
 
 watched=1
 printf '+ %s %s\n' "$ORCA" 'plugin dev watch . --json'
@@ -171,17 +182,21 @@ done 3<<EOF
 $cards
 EOF
 
-# The history store and the Spend tab: once the first catch-up has ended, as counted by the
-# store's meta `catch-ups`, the Spend tab over a day and over a year is under Orca's limit with a
-# cost that is a number or `n/a`, and the store is not empty.
-count="SELECT value FROM meta WHERE key = 'catch-ups'"
+# The history store and the Spend tab: once a catch-up of the dev plugin has ended, as the store
+# counts one more than before it was loaded, the Spend tab over a day and over a year is under
+# Orca's limit with a cost that is a number or `n/a`, and the store is not empty.
 printf '+ %s\n' "sqlite3 -readonly $STORE \"$count\""
 if [ -z "$dry" ]; then
   deadline=$((SECONDS + CATCH_UP_WAIT))
   # sqlite3 fails while the store is missing or locked, and prints nothing before a catch-up ends
-  until [ "$(sqlite3 -readonly "$STORE" "$count" 2>/dev/null || true)" -ge 1 ] 2>/dev/null; do
+  until [ "$(sqlite3 -readonly "$STORE" "$count" 2>/dev/null || true)" -gt "$before" ] 2>/dev/null; do
     if [ "$SECONDS" -ge "$deadline" ]; then
-      echo "frame check: no catch-up of the history store $STORE ended within $CATCH_UP_WAIT s" >&2
+      # a store that sqlite3 cannot open either is one the worker could not make or open
+      if ! sqlite3 -readonly "$STORE" 'SELECT 1' > /dev/null 2>&1; then
+        echo "frame check: cannot open the history store $STORE" >&2
+      else
+        echo "frame check: no catch-up of the history store $STORE ended within $CATCH_UP_WAIT s" >&2
+      fi
       exit 1
     fi
     sleep 1

@@ -6,7 +6,7 @@
 // waits on a clock.
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { copyFileSync, mkdirSync } from 'node:fs';
+import { copyFileSync, mkdirSync, symlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { tempHome } from './helpers/files.ts';
@@ -84,6 +84,22 @@ test('the insights steps are listed', () => {
   ]) {
     assert.ok(lines.includes(line), `${line}\nnot in\n${out}`);
   }
+  // the catch-ups are counted before the dev plugin is loaded, so that only one of its own counts
+  const counted = lines.indexOf(`+ sqlite3 -readonly ${process.env.HOME}/.local/state/spyhop/insights.db "SELECT value FROM meta WHERE key = 'catch-ups'"`);
+  assert.ok(counted >= 0 && counted < lines.indexOf(`${step}plugin dev watch . --json`), out);
+  assert.deepEqual(orca.orca(), []);
+});
+
+test('a computer without sqlite3 fails before any step', () => {
+  const orca = standIns({ homes: {}, orca: {} });
+  // a PATH of `dirname` alone, which the script runs before it looks for `sqlite3`
+  const bin = tempHome();
+  symlinkSync(execFileSync('/bin/sh', ['-c', 'command -v dirname'], { encoding: 'utf8' }).trim(), join(bin, 'dirname'));
+
+  const run = spawnSync('/bin/bash', ['scripts/frame-check.sh'], { cwd: new URL('..', import.meta.url), encoding: 'utf8', env: { ...process.env, PATH: bin } });
+
+  assert.equal(run.status, 1);
+  assert.ok(run.stderr.includes('frame check: sqlite3 is not installed'), run.stderr);
   assert.deepEqual(orca.orca(), []);
 });
 
