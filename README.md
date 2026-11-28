@@ -35,14 +35,16 @@ follows a change of theme without being loaded again. It opens on the fleet scre
   the harness compacts on its own, the one longest at 75% or more first; then a row for each agent
   not working whose session's prompt cache goes cold within 2 minutes, with the time left,
   counted down at each refresh, and the context tokens the next model call would write to it
-  again, the soonest first. opencode's sessions get no cache row: their cache countdown cannot
+  again, the soonest first. The time left is counted from the cache's lifetime the call logged:
+  omp's `cttl` (`ephemeral5m` 5 minutes, `ephemeral1h` one hour) and Claude Code's
+  `cache_creation` split. opencode's sessions get no cache row: their cache countdown cannot
   be read. Each row names its session by its title.
 - **A group per Orca host**, this computer's (`local`) first, then the others in the order Orca
   lists their first agent, each with the number of its cards. There are no project or workspace
   rows. A group's cards go by Orca state: blocked, waiting, working, done.
 - **A card per session** whose agent is not done (agents on one session share a card, and an
   agent that links to no session has a card of its own): the session's title (the folder's name
-  for an untitled one), its cost as the harness logged it (there is no price table) with its
+  for an untitled one), its cost (see Costs) with its
   sub-agents' (see Sub-agents in the cost) and its burn rate over the last 10 minutes (`n/a` for
   Claude Code, and while its sub-agents are being read), the folder,
   git branch, harness and model, the agent's state and how long it has been in it, and its
@@ -79,6 +81,27 @@ Claude Code's cost is the total it logs for the session, which holds its sub-age
 nothing is added to it, and its split into own and sub-agents reads `n/a`; its tokens are
 summed like the other harnesses'. The model calls and the tool calls are the session's own.
 
+### Costs
+
+A session's cost is what the harness logged, but for model calls through GitHub Copilot
+(provider `github-copilot`), in omp or opencode: Copilot bills tokens, so such a call costs its
+tokens at the Copilot price table's prices, in AI credits at 0.01 USD a credit: those sent not
+cached, read from the cache, written to it and output, each at the model's price, and at a
+long-context tier's prices when the prompt passes that tier's threshold. The table is
+`src/core/copilot-prices.js`, copied from GitHub's
+[models and pricing page](https://docs.github.com/en/copilot/reference/copilot-billing/models-and-pricing)
+as read on 2026-11-28, and updated by hand. A Copilot call on a model the table does not hold
+costs `n/a`, and so does every total that counts it; a Copilot call that spent no token (one
+aborted, or that failed before the model answered) costs 0. An opencode session with a Copilot
+call costs the sum of its calls, not opencode's own total. Claude Code logs no provider, so none
+of its calls is a Copilot call.
+
+omp's side calls, its `model_usage` entries (a title, a recap, a prediction of the next prompt),
+count in their session's cost and tokens, its cost chart's own layer and the burn rate, as the
+main agent's. They are no model call: not in the model calls, the tokens per model call chart,
+the cold starts or the cache figures. The Models section names them among what used a model, as
+`side calls`.
+
 ## Session screen
 
 A session's screen has a header with the back control, the agent's state, the title, the
@@ -97,10 +120,11 @@ the agent has a pane (see Focus pane). Under it:
     output, with the session's cache hit rate and a note of its cold starts. A cold start is a
     model call after the first that read nothing from the prompt cache, so it wrote the prompt
     to the cache again; the note gives how many, the tokens written again and their cost;
-  - the cost over time, of the session's own model calls and of its sub-agents, with the total
-    as the harness logged it and the cost per hour over the session's duration; when the
-    harness logged part of the cost without a model call, as opencode can, the card says how
-    much.
+  - the cost over time, of the session's own model calls and side calls and of its sub-agents,
+    with the total and the cost per hour over the session's duration. When part of the total is
+    from Copilot calls, the card splits it into the part `from tokens at GitHub prices` and the
+    rest as the harness logged it; when the harness logged part of the cost without a model
+    call, as opencode can, the card says how much.
 - **Sub-agents**, for a session with any: how many run (not for Claude Code or opencode, which
   do not tell), how many there are and their cost; a row for each running one, with its kind, name,
   task, how long it has run and its cost; and on one time axis a bar for each of the 8 that
@@ -109,8 +133,9 @@ the agent has a pane (see Focus pane). Under it:
   how many started earlier and offers `Show all`, which draws a bar of each until the screen
   changes.
 - **Tools**: the six tools called most, the rest summed as `others`, each with its failures.
-- **Models**: the cost by model, or the tokens for a harness that logs no cost per call
-  (Claude Code), each with what used it: the main agent, the sub-agents.
+- **Models**: the cost by model, each with what used it: the main agent, the sub-agents, omp's
+  side calls. Claude Code's is the cost by model its newest `cost-state` gives, under the names it
+  gives them (such as `claude-opus-5-5[1m]`), sub-agents included.
 - **Session**: when it started, the thinking level, the time to the last reply, the premium
   requests, and the branch, remote and Orca host where there is one.
 
@@ -156,6 +181,22 @@ keys, which moves from the point they were on. They go when the focus leaves the
 A refresh keeps the line and the box, of a hovered or a focused chart, on the point of the same
 time, or on the first point after it when that time is no longer a point, with the values the
 refresh gives it; a focused chart keeps the focus.
+
+## Spend tab
+
+The Spend tab is a range tab: Day, Week, Month or Year. It reads the history store (see What
+spyhop stores) and shows:
+
+- **What the range cost**, of every harness session in the history store, sub-agents included;
+  when part of it is from Copilot calls, the part `from tokens at GitHub prices` and the rest as
+  the harnesses logged it (see Costs). Beside it, the range's tokens and model calls.
+- **Side calls**: what omp's side calls cost of the range's cost.
+- **Cost over time**, for Week, Month and Year: what each day cost, or each month for Year.
+- **By repo, By model, By harness**: the range's cost by each, costliest first, the six
+  costliest named and the rest summed as `others`. A model is named with its provider where the
+  harness logs one (omp, opencode); Claude Code's models are named without the provider prefix,
+  context size or date its names can carry, so `claude-opus-5-5[1m]` and
+  `claude-haiku-4-5-20251001` count as `claude-opus-5-5` and `claude-haiku-4-5`.
 
 ## Harnesses
 
@@ -269,18 +310,25 @@ files are left out in this order until the rest fit: the transcripts of ended om
 one read longest ago first, then the other files, the one read longest ago first, by when each
 was last read in any run; a file whose totals alone would not fit in a key is left out too. A file
 left out is scanned again whole after a restart. They are stored as version
-5: the first open after an update from a spyhop that stored another version, or stored them in
-another form, scans each file once from its start, which is all that deleting the storage costs
-too.
+6: the first open after an update from a spyhop that stored another version (spyhop 0.2.0 stored
+version 5, whose totals hold no side calls or Copilot prices), or stored them in another form,
+scans each file once from its start, which is all that deleting the storage costs too.
 
 The history store is the SQLite file `~/.local/state/spyhop/insights.db` on this computer, made
 when missing, which the catch-ups fill and nothing deletes, so it keeps what they read after omp
 or Claude Code deletes its files. For each session file it holds the daily lines of its model
-calls that log their model: their count, tokens and cost summed by the day each call ended, the
-session, the repo and the model, and how far the file was read with the session reader's state
-there. Claude Code logs no cost of a call, so its calls count at no cost, and each `cost-state`
-it logs adds to a model's cost on its day what it gives that model less what the session's
-previous one gave it. A file's repo is set when it is first read: the git origin of the folder
+calls and omp's side calls that log their model: their count (model calls only), tokens and cost
+summed by the day each call ended, the session, the repo and the model, with the side calls'
+cost and tokens and the Copilot calls' cost apart, and how far the file was read with the
+session reader's state there. Claude Code logs no cost of a call, so its calls count at no cost,
+and each `cost-state` it logs adds to a model's cost what it gives that model less what the
+session's previous one gave it. A `cost-state` has no time of its own, so it counts on the day of
+the entry before it: one written just after midnight counts on the day before. One that gives a
+model less than the previous one did starts the session's cost again (a restarted session), so
+its costs are added whole and no day is negative; one before any dated entry counts with the
+next one. Claude Code's calls and costs are filed under one name per model, without the
+`anthropic.` prefix, the `[1m]` context size or the date its names can carry. A file's repo is
+set when it is first read: the git origin of the folder
 it records first (omp: its `session` entry), else that folder, else `n/a`; a sub-agent's
 transcript counts in its own folder's repo and in its main session. Another program that holds
 the store, such as `sqlite3`, is waited for up to 5 seconds.
