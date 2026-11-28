@@ -10,10 +10,13 @@
 // /etc/machine-id`: `machineOf`, src/hosts.ts), before any is read; its harness folders lie under
 // that home. A machine's identity is its id, else its node name. Hosts of the same identity and
 // home are one machine, read once, over the first of them in Orca's order; one whose identity and
-// home are this computer's (asked the same way, here, once) is this computer, read here, so it
-// is not read nor named. A host whose `ssh` exits 255, as when it cannot be reached, or whose
-// place or identity cannot be asked (an empty one included), is not read: its read stops there,
-// it is named in `notRead` until a later run reads it, and the lines kept of it stay. Then `zstd
+// home are this computer's (asked the same way, here, and again at each run until an ask
+// succeeds) is this computer, read here, so it is not read nor named; while this computer's
+// identity is unknown, no other host is read, each named in `notRead`. A host whose `ssh` exits
+// 255, as when it cannot be reached, or whose place or identity cannot be asked (an empty one
+// included, and an id answer lost, rejected or ssh's 255, which never falls back to the node
+// name), is not read: its read stops there, it is named in `notRead` until a later run reads it,
+// and the lines kept of it stay. Then `zstd
 // -V` is asked once: on a host where it exits 0, the listings (`find`), the reads of a file's
 // bytes (`dd`, `tail`) and opencode's queries (`sqlite3`) run within ZSTD_SCRIPT, their output
 // decompressed here and their exit code their own; on any other, they run raw. `uname`,

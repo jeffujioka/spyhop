@@ -350,6 +350,34 @@ test('a host whose id is not answered is not read', async () => {
   );
 });
 
+test("no other host is read while this computer's id is not answered", async () => {
+  const remoteHome = tempHome();
+  ompSession(remoteHome, join(remoteHome, 'api'), { title: 'api', calls: [spent(1)] });
+  // while `lost`, the ask of this computer's id rejects, as a run past its timeout does
+  let lost = true;
+  const exec: Run = async (command, args, options) => {
+    if (lost && options?.on === undefined && (command === 'ioreg' || args.includes('/etc/machine-id'))) throw new Error('timed out');
+    return run(command, args, options);
+  };
+  const { home, catchUp } = await catchUpOf(remoteHome, { exec });
+  const remoteHosts = () => {
+    const db = storeOf(home);
+    const hosts = db.prepare("SELECT DISTINCT host FROM files WHERE host != 'local'").all();
+    db.close();
+    return hosts.map(({ host }) => host);
+  };
+
+  await catchUp.run();
+  assert.deepEqual(catchUp.notRead(), ['starfish-bs']);
+  assert.deepEqual(remoteHosts(), []);
+
+  // the failed ask was not kept: the next run asks again, and reads the hosts
+  lost = false;
+  await catchUp.run();
+  assert.deepEqual(catchUp.notRead(), []);
+  assert.deepEqual(remoteHosts(), [machineKeyOf(remoteHome)]);
+});
+
 test('Appended bytes only', async () => {
   const remoteHome = tempHome();
   const folder = join(remoteHome, 'api');
