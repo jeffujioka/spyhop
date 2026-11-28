@@ -5,13 +5,21 @@
 // two days, both under a temporary home read by the real programs; from the fleet card to the
 // session screen's cost card, then the Spend tab's Week, from the history store the worker's
 // catch-up filled (test/helpers/history.ts). Time is node:test's mock clock.
+// Then every Orca host end to end: this computer, the SSH host `devbox`, which has `zstd`, and
+// `oldbox`, which cannot be reached, stood in for by `orca` and `ssh` (test/helpers/stand-ins.ts),
+// through the Spend tab's Month.
 import assert from 'node:assert/strict';
 import { join } from 'node:path';
-import { test } from 'node:test';
+import { mock, test } from 'node:test';
+import { RANGE_REFRESH_MS } from '../../src/core/refresh.js';
+import { opencodeSession } from '../helpers/agent-cards.ts';
+import { tempHome } from '../helpers/files.ts';
 import { caughtUp } from '../helpers/history.ts';
-import { claudeSession, FIX, folderOf, ompSession, type OmpCall, open, openOnFleet } from '../helpers/live.ts';
+import { claudeSession, FIX, folderOf, ompSession, type OmpCall, open, openLive, openOnFleet, until } from '../helpers/live.ts';
 import { attr, figure, listOf, parts, text } from '../helpers/markup.ts';
+import { DEVBOX_HOST, environmentListOf, hostListOf, LOCAL_HOST } from '../helpers/orca-answers.ts';
 import { withCopilotPrices } from '../helpers/prices.ts';
+import { readOnlyLine } from '../helpers/read-only.ts';
 
 // The clock of this test: 2026-11-28 15:00 UTC.
 const CLOCK = Date.parse('2026-11-28T15:00:00.000Z');
@@ -78,4 +86,56 @@ test('costs end to end', async () => {
   assert.equal(days['2026-11-27'], 1);
   assert.equal(days['2026-11-28'], 1.47);
   assert.equal(figure(html, 'cost'), '$2.47');
+});
+
+test('every Orca host end to end', async () => {
+  const devboxHome = tempHome();
+  const oldbox = { kind: 'ssh', name: 'oldbox', id: 'oldbox', selector: '--host ssh:oldbox', connected: true };
+  // devbox's omp session: a call of 2.00 USD on 27 November, then, later, one of 0.10 USD
+  const devboxOmp = (calls: OmpCall[]) => ompSession(devboxHome, join(devboxHome, 'api'), { title: 'api', calls });
+  const first: OmpCall = { at: on('2026-11-27', '09:00'), output: 100, cost: 2 };
+  let home = '';
+  const opened = await openLive([], {
+    now: CLOCK,
+    homes: { devbox: devboxHome },
+    orca: { 'host list --json': hostListOf(LOCAL_HOST, DEVBOX_HOST, oldbox), 'environment list --json': environmentListOf() },
+    prepare: (at) => {
+      home = at;
+      // this computer: an omp session of 1.00 USD and a Claude Code session of 0.50 USD
+      ompSession(home, join(home, 'api'), { title: 'api', calls: [{ at: on('2026-11-26', '10:00'), output: 100, cost: 1 }] });
+      claudeSession(home, join(home, 'web'), {
+        model: 'claude-opus-5-5',
+        calls: [{ at: on('2026-11-26', '12:00'), output: 1_000 }],
+        costStates: [{ at: on('2026-11-26', '12:00') + 1, models: { 'claude-opus-5-5': 0.5 } }],
+      });
+      // devbox: the omp session, and an opencode database with a call of 0.30 USD
+      devboxOmp([first]);
+      opencodeSession(devboxHome, join(devboxHome, 'web'), {
+        provider: 'anthropic',
+        model: 'claude-opus-5.5',
+        calls: [{ uncached: 100, read: 0, write: 0, output: 50 }],
+        cost: 0.3,
+        callCost: 0.3,
+        last: on('2026-11-27', '14:00'),
+      });
+    },
+  });
+  await caughtUp(home);
+
+  await opened.openTab('spend', 'month');
+
+  const html = opened.html();
+  assert.deepEqual(listOf(html, 'harness'), ['omp $3.00', 'Claude Code $0.50', 'opencode $0.30']);
+  assert.equal(figure(html, 'cost'), '$3.80');
+  assert.match(text(parts(html, 'data-part', 'not-read')[0] ?? ''), /Not read this time: oldbox\./);
+  const lines = opened.calls.ssh();
+  assert.ok(lines.some(([alias]) => alias === 'devbox') && lines.some(([alias]) => alias === 'oldbox'), JSON.stringify(lines));
+  assert.deepEqual(lines.filter((args) => !readOnlyLine(args.at(-1)!)), []);
+
+  // a call of 0.10 USD on devbox, then the panel's next ask of the tab a minute later
+  devboxOmp([first, { at: CLOCK, output: 100, cost: 0.1 }]);
+  mock.timers.tick(RANGE_REFRESH_MS);
+
+  await until(() => figure(opened.html(), 'cost') === '$3.90');
+  assert.deepEqual(opened.calls.ssh().filter((args) => !readOnlyLine(args.at(-1)!)), []);
 });
