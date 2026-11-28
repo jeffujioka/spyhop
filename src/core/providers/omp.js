@@ -22,14 +22,17 @@
 // function in a list, so adding a figure never rewrites an earlier one. Beside the stats,
 // `detailOf(state)` gives the series of the whole file (src/core/series.js), from the same state,
 // with the agent kind and the model a sub-agent's `session_init` entry records, and the times of
-// the file's first and last entry, a sub-agent's start and end.
+// the file's first and last entry, a sub-agent's start and end. Asked with `{ insights: true }`
+// when the state starts, `fold` also notes each model call in the state's daily lines
+// (src/core/insights.js).
 
 import { add, parseEntries, tally } from './jsonl.js';
 import { burnRate, cacheRate, isNumber, tokenCount, wholeSession } from './shared.js';
 import { addCall, addCost, addMinute, detailOf, entryOf, newSeries, pushRecent, toolAnswered, toolCalled } from '../series.js';
+import { newInsights, noteCall } from '../insights.js';
 
 // A fresh accumulator. Sums are `tally`s: undefined until an entry carries the value.
-function emptyState() {
+function emptyState(opts) {
   return {
     // timestamps (epoch ms, NaN when unreadable) of the first and the latest message entry
     firstMessage: undefined,
@@ -76,6 +79,11 @@ function emptyState() {
     model: null,
     // the time of the `session` entry, which opens a session file: the session's start
     started: undefined,
+    // the folder the `session` entry records, null without one
+    cwd: null,
+    // the daily lines of the model calls (src/core/insights.js), when asked for when the state
+    // starts; else null
+    insights: opts?.insights ? newInsights() : null,
     // whether the newest entry that opens or ends a turn left it open: a `message` other than an
     // assistant message that stopped (`stopReason` `stop` or `aborted`), or a `custom_message`;
     // a `session_exit` ends it. Undefined before any such entry.
@@ -88,9 +96,10 @@ function emptyState() {
 const TURN_ENDS = new Set(['stop', 'aborted']);
 
 // Adds `entries` (in file order, after those already in `state`) to `state`, which it changes
-// and returns; without a `state` it starts a new one. Entries that carry no figure are skipped.
-function fold(state, entries) {
-  const s = state ?? emptyState();
+// and returns; without a `state` it starts a new one, with daily lines when `opts.insights`.
+// Entries that carry no figure are skipped.
+function fold(state, entries, opts) {
+  const s = state ?? emptyState(opts);
   for (const e of entries) {
     const at = Date.parse(e.timestamp);
     if (isNumber(at)) {
@@ -103,6 +112,7 @@ function fold(state, entries) {
     if (e.type === 'session') {
       s.fromStart = true;
       if (isNumber(at)) s.started = at;
+      if (typeof e.cwd === 'string') s.cwd = e.cwd;
     } else if (e.type === 'session_init') {
       if (typeof e.agent === 'string') s.kind = e.agent;
       if (typeof e.resolvedModel === 'string') s.model = e.resolvedModel;
@@ -154,6 +164,15 @@ function fold(state, entries) {
             s.cold.cost = addCost(s.cold.cost, isNumber(usage.cost?.cacheWrite) ? usage.cost.cacheWrite : null);
           }
           s.calls += 1;
+          if (s.insights && isNumber(time)) {
+            const { provider, model } = e.message;
+            noteCall(s.insights, {
+              ...call,
+              end: time,
+              model: typeof provider === 'string' && provider ? `${provider}/${model}` : model,
+              tokens: tokenCount(usage.totalTokens),
+            });
+          }
           if (typeof e.message.model === 'string') {
             const byModel = entryOf(s.models, e.message.model, () => ({ cost: 0, tokens: 0 }));
             byModel.cost = addCost(byModel.cost, call.cost);
