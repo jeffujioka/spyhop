@@ -7,19 +7,23 @@
 //   state as JSON (`encodeState` of src/core/refresh.js); an opencode database is one row, whose
 //   lines a catch-up replaces from a day on (`replaceDays`);
 // - `lines`: the figures (LINE_FIGURES) of a file's model calls by session, day, repo and model;
-// - `meta`: string values by key;
+// - `meta`: string values by key; `host-keys` set to `machine` once the rows of another Orca host
+//   are keyed by the machine it reaches, `machine:<node name>` (src/history/catch-up.ts), not by
+//   its ssh alias, `ssh:<alias>`, as HISTORY_VERSION 3 kept them;
 // - the view `daily_lines`: the lines summed by day, Orca host, repo, harness and model.
 import { mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { LINE_FIGURES } from '../core/insights.js';
 import { decodeState, encodeState } from '../core/refresh.js';
+import { LOCAL } from '../fleet.ts';
 
 export const STORE_FILE = '.local/state/spyhop/insights.db';
 
 // The version of the file rows' states: a reader takes a row of another version as unread.
 // Raise it with KEPT_VERSION (src/core/refresh.js) when a fold's state changes shape, and alone
-// when only the insights a fold keeps for the store change (3: the Trace lanes).
-export const HISTORY_VERSION = 3;
+// when only the insights a fold keeps for the store change (3: the Trace lanes; 4: another Orca
+// host's rows keyed by its machine).
+export const HISTORY_VERSION = 4;
 
 export type FileRow = { id: number; host: string; harness: string; path: string; pos: number; size: number; mtimeMs: number; version: number; state: unknown };
 
@@ -94,6 +98,19 @@ export async function openStore(home: string): Promise<Store> {
         FROM lines JOIN files ON files.id = lines.file
         GROUP BY day, host, repo, harness, model;
     `);
+    // once: the rows, and the read-through marks, of every Orca host keyed by anything but this
+    // computer or a machine, which the next catch-up reads again, once each
+    if (db.prepare("SELECT value FROM meta WHERE key = 'host-keys'").get()?.value !== 'machine') {
+      const other = `host != '${LOCAL}' AND host NOT LIKE 'machine:%'`;
+      db.exec(`
+        BEGIN;
+        DELETE FROM lines WHERE file IN (SELECT id FROM files WHERE ${other});
+        DELETE FROM files WHERE ${other};
+        DELETE FROM meta WHERE key LIKE 'read:%' AND key NOT LIKE 'read:${LOCAL}:%' AND key NOT LIKE 'read:machine:%';
+        INSERT INTO meta (key, value) VALUES ('host-keys', 'machine') ON CONFLICT (key) DO UPDATE SET value = excluded.value;
+        COMMIT;
+      `);
+    }
   } catch (error) {
     db.close();
     throw error;

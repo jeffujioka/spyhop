@@ -80,12 +80,12 @@ describe('history store', () => {
   test('two Orca hosts give two daily lines', async () => {
     const s = await open();
     s.saveRead(fileOf('/a.jsonl', 'local'), readOf(1));
-    s.saveRead(fileOf('/a.jsonl', 'ssh:bs'), readOf(2));
+    s.saveRead(fileOf('/a.jsonl', 'machine:bs'), readOf(2));
 
     const lines = s.dailyLines('2026-11-27', '2026-11-27').sort((a, b) => a.host.localeCompare(b.host));
     expect(lines).toEqual([
       { day: '2026-11-27', host: 'local', repo: 'git@github.com:jeffujioka/spyhop.git', harness: 'omp', model: 'm', figures: figuresOf({ calls: 1, cost: 1 }) },
-      { day: '2026-11-27', host: 'ssh:bs', repo: 'git@github.com:jeffujioka/spyhop.git', harness: 'omp', model: 'm', figures: figuresOf({ calls: 1, cost: 2 }) },
+      { day: '2026-11-27', host: 'machine:bs', repo: 'git@github.com:jeffujioka/spyhop.git', harness: 'omp', model: 'm', figures: figuresOf({ calls: 1, cost: 2 }) },
     ]);
   });
 
@@ -116,6 +116,43 @@ describe('history store', () => {
     s.saveRead(fileOf('/a.jsonl'), readOf(1));
 
     expect(s.dailyLines('2026-11-27', '2026-11-27')[0].figures).toEqual(figuresOf({ calls: 1, cost: 1 }));
+  });
+
+  test("a store of ssh alias keys drops those hosts' rows once", async () => {
+    const home = tempHome();
+    const s = await open(home);
+    s.saveRead(fileOf('/a.jsonl', 'local'), readOf(1));
+    s.saveRead(fileOf('/a.jsonl', 'machine:bs'), readOf(2));
+    s.saveRead(fileOf('/a.jsonl', 'ssh:bs'), readOf(4));
+    s.saveRead({ ...fileOf('/opencode.db', 'ssh:bs'), harness: 'opencode' }, readOf(8, { session: 'o' }));
+    for (const key of ['read:local:omp', 'read:machine:bs:omp', 'read:ssh:bs:omp', 'read:ssh:bs:opencode']) s.setMeta(key, '1');
+    s.close();
+    store = undefined;
+    // the store as HISTORY_VERSION 3 left it: its remote hosts keyed `ssh:<alias>`
+    const db = new DatabaseSync(join(home, STORE_FILE));
+    db.exec("DELETE FROM meta WHERE key = 'host-keys'");
+    db.close();
+
+    const migrated = await open(home);
+    const hostsOf = (opened: Store) => opened.dailyLines('2026-11-27', '2026-11-27').map(({ host, figures }) => [host, figures.cost]);
+    expect(hostsOf(migrated)).toEqual([
+      ['local', 1],
+      ['machine:bs', 2],
+    ]);
+    expect(migrated.file('ssh:bs', 'omp', '/a.jsonl')).toBeNull();
+    expect(migrated.file('ssh:bs', 'opencode', '/opencode.db')).toBeNull();
+    expect(['read:local:omp', 'read:machine:bs:omp', 'read:ssh:bs:omp', 'read:ssh:bs:opencode'].map((key) => migrated.meta(key))).toEqual(['1', '1', null, null]);
+    expect(migrated.meta('host-keys')).toBe('machine');
+    // a row of that key written since stays: the migration ran once
+    migrated.saveRead(fileOf('/a.jsonl', 'ssh:bs'), readOf(4));
+    migrated.close();
+    store = undefined;
+
+    expect(hostsOf(await open(home))).toEqual([
+      ['local', 1],
+      ['machine:bs', 2],
+      ['ssh:bs', 4],
+    ]);
   });
 
   test('a meta value reads back as it was set', async () => {

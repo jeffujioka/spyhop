@@ -57,33 +57,33 @@ export function remoteHosts({ hosts, environments }: HostLists, hostIds: string[
   return remote;
 }
 
-// An Orca host whose harness sessions the catch-up reads (src/history/catch-up.ts): the key its
-// rows are kept by in the history store, `ssh:<alias>`, its name and its alias, as `remoteHosts`
-// gives them.
-export type HistoryHost = { id: string; name: string; alias: string };
+// An Orca host whose harness sessions the catch-up reads (src/history/catch-up.ts): its name and
+// its alias, as `remoteHosts` gives them. The catch-up keys its rows by the machine the alias
+// reaches.
+export type HistoryHost = { name: string; alias: string };
 
-// Every SSH host `lists` names and every paired Orca server, one per alias: a paired server
-// deployed over a listed SSH target shares its home, which is read once, as the SSH host's. Each
-// is keyed by its alias, not by Orca's id of it, which changes when the target is removed and
-// added again in Orca: its home is then still the one kept, never read again as another host's.
+// Every SSH host `lists` names and every paired Orca server, one per alias, in the lists' order,
+// the SSH hosts first: a paired server deployed over a listed SSH target shares its alias, which
+// is asked once, as the SSH host's.
 export function historyHosts(lists: HostLists): HistoryHost[] {
   const sshIds = lists.hosts.filter((host) => host.kind === 'ssh').map((host) => `ssh:${host.id}`);
   const byAlias = new Map<string, HistoryHost>();
-  // the SSH hosts first, each in the lists' order
   for (const [, { name, alias }] of [...remoteHosts(lists, sshIds)].sort(([a], [b]) => Number(b.startsWith('ssh:')) - Number(a.startsWith('ssh:')))) {
-    if (!byAlias.has(alias)) byAlias.set(alias, { id: `ssh:${alias}`, name, alias });
+    if (!byAlias.has(alias)) byAlias.set(alias, { name, alias });
   }
   return [...byAlias.values()];
 }
 
-// An Orca host's place, from what `uname -s` and, on another host, `printenv HOME` answered
-// there: its operating system, for the `stat` a session listing runs, and its home folder,
-// `home` when given (this computer's, where `printenv` is null). Throws when either program
-// failed or the home is empty. Each caller runs the programs as it schedules its own.
-export function placeOf(uname: RunResult, printenv: RunResult | null, home: string | null): { os: string; home: string } {
+// An Orca host's place, from what `uname -s` (or `uname -sn`) and, on another host, `printenv
+// HOME` answered there: its operating system, for the `stat` a session listing runs, its node
+// name lowercased, '' when `uname` printed none, and its home folder, `home` when given (this
+// computer's, where `printenv` is null). Throws when either program failed or the home is empty.
+// Each caller runs the programs as it schedules its own.
+export function placeOf(uname: RunResult, printenv: RunResult | null, home: string | null): { os: string; node: string; home: string } {
   const found = printenv ? printenv.stdout.trim() : home;
   if (uname.code !== 0 || printenv?.code || !found) throw new Error('machine place unknown');
-  return { os: uname.stdout.trim(), home: found };
+  const [os, node = ''] = uname.stdout.trim().split(/\s+/);
+  return { os, node: node.toLowerCase(), home: found };
 }
 
 // An Orca agent of a paired server, in the server's group, with its pane, if any.

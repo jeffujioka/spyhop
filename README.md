@@ -246,7 +246,7 @@ own host's group. Their session files and git facts are read over `ssh <alias> -
 ConnectTimeout=5`, at most eight commands at once on a host whose SSH connection spyhop keeps
 for itself and four on any other (one whose own SSH settings already reuse connections, or
 whose settings cannot be read), with read-only commands only: `cd`,
-`uname -s`, `printenv HOME`, `cat`, `head`, `tail`, `dd` (reading a block, never writing one),
+`uname -s` (the history catch-up: `uname -sn`), `printenv HOME`, `cat`, `head`, `tail`, `dd` (reading a block, never writing one),
 `find` with `stat`, a bare `stat`, `git branch --show-current`, `git remote get-url`, `sqlite3
 -readonly` and `zstd -V`; the history catch-up also runs `find`, `dd`, `tail` and `sqlite3
 -readonly` within `sh -c`, which pipes their output through `zstd -q -c` and keeps their exit code.
@@ -289,9 +289,12 @@ refresh is never drawn.
 
 Apart from the panel, the worker runs a catch-up when it starts and every 15 minutes after,
 whether the panel is open or closed, and between catch-ups reads nothing for them. A catch-up
-reads this computer and every Orca host Orca lists, each SSH host and each paired Orca server (a
-paired server deployed over a listed SSH target shares that target's home, so it is read once,
-as the SSH host), another host over ssh (see Other hosts). On each it lists the omp and Claude
+reads this computer and every Orca host Orca lists, each SSH host and each paired Orca server,
+another host over ssh (see Other hosts). It first asks every other host the machine it reaches,
+its node name and home (`uname -sn`, `printenv HOME`): a machine is read once, whatever aliases
+reach it, over the first of them in Orca's order, and an alias that reaches this computer (its
+node name and home this computer's) is never read over ssh, nor named as not read, since this
+computer is read here. On each it lists the omp and Claude
 Code session files and sub-agent transcripts with one `find` for each, and reads each one into
 the history store (see What spyhop stores) from where its last
 read ended, one program at a time: a file whose size and modified time are those of its last read
@@ -316,8 +319,9 @@ On the Mac it was built on (2026-11-28), with about 1 GB of omp and 34 MB of Cla
 session files and a 2 GB opencode database, and Orca hosts of 2.8 GB and 27 MB of omp files,
 the first catch-up took 16.5 minutes with the panel open, this Mac's own files read in the first
 5 of them, and left a history store of 123 MB. Orca listed this Mac again as `localhost` and
-`127.0.0.1`, and each other host under two aliases, and each alias was read as a host of its
-own. A later catch-up of the same files took about 15 seconds.
+`127.0.0.1`, and each other host under two aliases, and each alias was then read as a host of its
+own; a catch-up now reads each machine once. A later catch-up of the same files took about 15
+seconds.
 
 ## What spyhop stores
 
@@ -366,8 +370,11 @@ next one. Claude Code's calls and costs are filed under one name per model, with
 set when it is first read: the git origin of the folder
 it records first (omp: its `session` entry), else that folder, else `n/a`; a sub-agent's
 transcript counts in its own folder's repo and in its main session. Another Orca host's lines are
-kept by the ssh alias it is read over, not by Orca's id of it, so a target removed and added again
-in Orca is counted once. Another program that holds the store, such as `sqlite3`, is waited for up
+kept by the machine its alias reaches, `machine:<node name>`, not by the alias or Orca's id of it,
+so a target removed and added again in Orca, or reached under another alias, is counted once. A
+store that kept them by ssh alias, as spyhop did before, drops those lines once when it is opened,
+and the next catch-up reads those machines again, once each. Another program that holds the
+store, such as `sqlite3`, is waited for up
 to 5 seconds.
 A store that cannot be opened, or a Node in Orca that cannot load `node:sqlite`, is written to
 the worker's log once; the range tabs then read n/a, and Live is drawn as ever.

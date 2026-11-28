@@ -5,8 +5,11 @@
 // first the files and opencode calls of the last FIRST_DAYS days, changed or created from that
 // day's start on, then the older ones, each phase's files newest first. Within a phase it reads
 // this computer and each other host at once, a host's programs one at a time; the second phase
-// starts once every host has ended the first. Another host's system and home folder
-// are asked first (`uname -s`, `printenv HOME`); its harness folders lie under that home. A host
+// starts once every host has ended the first. Every other host's system, node name and home
+// folder are asked first (`uname -sn`, `printenv HOME`), before any is read; its harness folders
+// lie under that home. Hosts whose node name and home are the same reach one machine, read once,
+// over the first of them in Orca's order; one whose node name (lowercased) and home are this
+// computer's (`hostname()`) reaches this computer, read here, so it is not read nor named. A host
 // whose `ssh` exits 255, as when it cannot be reached, or whose place cannot be asked, is not
 // read: its read stops there, it is named in `notRead` until a later run reads it, and the lines
 // kept of it stay. Then `zstd -V` is asked once: on a host where it exits 0, the listings
@@ -31,7 +34,9 @@
 // reads, counted only while the database was never read through, and unknown, so never named,
 // when that count fails.
 //
-// A file's lines count in its host's lines (`local` for this computer, else `ssh:<its alias>`), in
+// A file's lines count in its host's lines (`local` for this computer, else `machine:<the node
+// name of the machine its host reaches>`, so a target Orca lists again under a new id or a new
+// alias counts once), in
 // its session, `<host>\0<harness>\0<main session file>` (a sub-agent's transcript in its main
 // session's), and in its repo: set when the file is read from its start, the git origin, on its
 // host, of the folder the file itself records first (omp: its `session` entry), else that
@@ -51,7 +56,7 @@
 // `parent_id` followed up), `<host>\0opencode\0<root session id>`, and in the repo of its own
 // session's folder: the git origin as above, asked when a read first meets the folder and kept,
 // by folder, in the row's state.
-import { type } from 'node:os';
+import { hostname, type } from 'node:os';
 import { zstdDecompressSync } from 'node:zlib';
 import { HARNESS_NAMES } from '../agent-cards.ts';
 import { dayOf, midnightBefore } from '../core/days.js';
@@ -376,9 +381,11 @@ export function createCatchUp({
     return true;
   }
 
-  // The place of the Orca host `host`, `rank` in `progress`'s order, over `ssh` to its alias
-  // (`placeOf`), with `zstd -V` asked; null when it cannot be asked.
-  async function remotePlace({ id, name, alias }: HistoryHost, rank: number): Promise<Place | null> {
+  // The Orca host `host` over `ssh` to its alias: the node name and home of the machine it reaches
+  // (`placeOf` of `uname -sn` and `printenv HOME`), and its place, `rank` in `progress`'s order,
+  // keyed by that machine, `machine:<node name>`, with `zstd -V` asked; null when its place cannot
+  // be asked.
+  async function probe({ name, alias }: HistoryHost, rank: number) {
     let reached = true;
     const noted = <Result extends { code: number }>(result: Result) => {
       if (result.code === 255) reached = false;
@@ -393,34 +400,50 @@ export function createCatchUp({
       return { code, stdout: stdout.length === 0 ? '' : zstdDecompressSync(stdout, { maxOutputLength: MAX_OUTPUT_BYTES }).toString('utf8'), stderr };
     };
     // its programs one after the other, as every program of a host's read
-    let place: { os: string; home: string };
+    let found: { os: string; node: string; home: string };
     try {
-      const uname = await exec('uname', ['-s']);
-      place = placeOf(uname, uname.code === 0 ? await exec('printenv', ['HOME']) : null, null);
+      const uname = await exec('uname', ['-sn']);
+      found = placeOf(uname, uname.code === 0 ? await exec('printenv', ['HOME']) : null, null);
     } catch (error) {
       log(`spyhop: catch-up cannot ask the place of ${name}: ${(error as Error).message}`);
       return null;
     }
-    // a `zstd -V` that fails, or cannot be run, reads the host raw
-    const zstd = await exec('zstd', ['-V']).catch(() => null);
-    return { host: id, name, rank, exec, read: zstd?.code === 0 ? compressed : exec, ...place, reached: () => reached };
+    const { os, node, home: at } = found;
+    return {
+      machine: `${node}\0${at}`,
+      async place(): Promise<Place> {
+        // a `zstd -V` that fails, or cannot be run, reads the host raw
+        const zstd = await exec('zstd', ['-V']).catch(() => null);
+        return { host: `machine:${node}`, name, rank, exec, read: zstd?.code === 0 ? compressed : exec, os, home: at, reached: () => reached };
+      },
+    };
   }
 
   async function runOnce() {
     shares = [];
     const recent = midnightBefore(Date.now(), FIRST_DAYS);
     const local: Place = { host: LOCAL, name: LOCAL, rank: 0, exec: run, read: run, os: type(), home, reached: () => true };
-    // the first phase on every host at once, another host's place asked first
+    // the first phase on every host at once, every other host's machine asked first: a machine is
+    // read once, over its first alias in Orca's order, and this computer, read here, never over
+    // ssh; a host whose machine cannot be asked is not read
     const [localRead, remotes] = await Promise.all([
       phaseOne(local, recent),
-      hosts().then((listed) =>
-        Promise.all(
-          listed.map(async (host, i) => {
-            const place = await remotePlace(host, i + 1);
-            return { name: host.name, place, read: place && (await phaseOne(place, recent)) };
+      hosts().then(async (listed) => {
+        const probed = await Promise.all(listed.map((host, i) => probe(host, i + 1)));
+        const machines = new Set([`${hostname().toLowerCase()}\0${home}`]);
+        const kept = listed.flatMap((host, i) => {
+          const machine = probed[i]?.machine;
+          if (machine !== undefined && machines.has(machine)) return [];
+          if (machine !== undefined) machines.add(machine);
+          return [{ name: host.name, probed: probed[i] }];
+        });
+        return Promise.all(
+          kept.map(async ({ name, probed: found }) => {
+            const place = found && (await found.place());
+            return { name, place, read: place && (await phaseOne(place, recent)) };
           }),
-        ),
-      ),
+        );
+      }),
     ]);
     // the second phase on every host the first one read, at once
     const reads = [localRead, ...remotes.map(({ read }) => read)];

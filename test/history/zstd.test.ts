@@ -92,7 +92,7 @@ test('a compressed answer is no larger than a raw one could be', async () => {
   }
 
   const db = storeOf(home);
-  const { n } = db.prepare("SELECT count(*) AS n FROM lines JOIN files ON files.id = lines.file WHERE host = 'ssh:starfish-bs' AND harness = 'opencode'").get()!;
+  const { n } = db.prepare("SELECT count(*) AS n FROM lines JOIN files ON files.id = lines.file WHERE host = 'machine:starfish-bs' AND harness = 'opencode'").get()!;
   db.close();
   assert.equal(Number(n), 0);
   assert.ok(logs.some((line) => line.includes("cannot read opencode's database")), JSON.stringify(logs));

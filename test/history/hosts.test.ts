@@ -120,7 +120,7 @@ test('One repo on two Orca hosts', async () => {
     lines.map((line) => ({ ...line })),
     [
       { host: 'local', repo: ORIGIN, harness: 'omp', model, cost: 1 },
-      { host: 'ssh:starfish-bs', repo: ORIGIN, harness: 'omp', model, cost: 2 },
+      { host: 'machine:starfish-bs', repo: ORIGIN, harness: 'omp', model, cost: 2 },
     ],
   );
   assert.deepEqual(listOf(html, 'repo'), [`${ORIGIN} $3.00`]);
@@ -152,12 +152,12 @@ test('a paired server deployed over a listed SSH host is read once', async () =>
   db.close();
   assert.deepEqual(
     hosts.map(({ host }) => host),
-    ['ssh:jeff'],
+    ['machine:jeff'],
   );
   assert.equal(figure(html, 'cost'), '$1.00');
 });
 
-test('a paired server whose deployment target is not listed is kept by its alias', async () => {
+test('a paired server whose deployment target is not listed is kept by its machine', async () => {
   const remoteHome = tempHome();
   let home = '';
   const { html } = await rangeOf([], {
@@ -176,7 +176,7 @@ test('a paired server whose deployment target is not listed is kept by its alias
   db.close();
   assert.deepEqual(
     hosts.map(({ host }) => host),
-    ['ssh:jeff'],
+    ['machine:jeff'],
   );
   assert.equal(figure(html, 'cost'), '$1.00');
 });
@@ -210,9 +210,63 @@ test('a target re-added in Orca is read once', async () => {
   db.close();
   assert.deepEqual(
     hosts.map(({ host }) => host),
-    ['ssh:devbox'],
+    ['machine:devbox'],
   );
   assert.equal(figure(spendTab(answer), 'cost'), '$1.00');
+});
+
+// The two lists when the SSH hosts `aliases`, each Orca's id its alias, are the only other Orca
+// hosts.
+const sshLists = (...aliases: string[]) => ({
+  'host list --json': hostListOf(LOCAL_HOST, ...aliases.map((alias) => ({ kind: 'ssh', id: alias, name: alias, selector: `--host ssh:${alias}`, connected: true }))),
+  'environment list --json': environmentListOf(),
+});
+
+test('two aliases of one machine are read once', async () => {
+  const remoteHome = tempHome();
+  let home = '';
+  // `bs` and `starfish-bs` reach one machine, whose node name is `bs`
+  const { answer, html, calls } = await rangeOf([], {
+    tab: 'spend',
+    range: 'day',
+    homes: { bs: remoteHome, 'starfish-bs': remoteHome },
+    orca: sshLists('bs', 'starfish-bs'),
+    prepare: (at) => {
+      home = at;
+      ompSession(remoteHome, join(remoteHome, 'api'), { title: 'api', calls: [spent(1)] });
+    },
+  });
+
+  const db = storeOf(home);
+  const hosts = db.prepare("SELECT DISTINCT host FROM files WHERE host != 'local'").all();
+  db.close();
+  assert.deepEqual(
+    hosts.map(({ host }) => host),
+    ['machine:bs'],
+  );
+  assert.equal(figure(html, 'cost'), '$1.00');
+  assert.deepEqual(answer.notRead, []);
+  assert.deepEqual(calls.ssh().filter((args) => args[0] === 'starfish-bs' && args.at(-1)!.includes("'find'")), []);
+});
+
+test('an alias that reaches this computer is not read', async () => {
+  // `localhost` reaches this computer: its node name and its home are this computer's
+  const homes: Record<string, string> = {};
+  const { answer, html, calls } = await rangeOf([], {
+    tab: 'spend',
+    range: 'day',
+    homes,
+    orca: sshLists('localhost'),
+    prepare: (home) => {
+      homes.localhost = home;
+      ompSession(home, join(home, 'api'), { title: 'api', calls: [spent(1)] });
+    },
+  });
+
+  assert.equal(figure(html, 'cost'), '$1.00');
+  assert.deepEqual(answer.notRead, []);
+  // only its place asked
+  assert.deepEqual(calls.ssh().map((args) => args.at(-1)).sort(), ["'printenv' 'HOME'", "'uname' '-sn'"]);
 });
 
 test('Appended bytes only', async () => {
@@ -223,11 +277,11 @@ test('Appended bytes only', async () => {
   await catchUp.run();
   const dir = ompSessionDir(remoteHome, folder);
   const file = join(dir, '2026-11-25T11-58-00-000Z_s1.jsonl');
-  const session = `ssh:starfish-bs\0omp\0${file}`;
+  const session = `machine:starfish-bs\0omp\0${file}`;
   const db = storeOf(home);
   const costOf = () => Number(db.prepare('SELECT SUM(cost) AS cost FROM lines WHERE session = ?').get(session)!.cost);
   const before = costOf();
-  const { pos } = db.prepare("SELECT pos FROM files WHERE host = 'ssh:starfish-bs' AND path = ?").get(file) as { pos: number };
+  const { pos } = db.prepare("SELECT pos FROM files WHERE host = 'machine:starfish-bs' AND path = ?").get(file) as { pos: number };
   const mark = calls.ssh().length;
 
   // the same session, which has since logged a call of 0.10 USD
@@ -293,7 +347,7 @@ test('a host that drops while its repo is asked keeps no repo of it', async () =
   await catchUp.run();
 
   const db = storeOf(home);
-  const repos = db.prepare("SELECT DISTINCT repo FROM daily_lines WHERE host = 'ssh:starfish-bs'").all();
+  const repos = db.prepare("SELECT DISTINCT repo FROM daily_lines WHERE host = 'machine:starfish-bs'").all();
   db.close();
   assert.deepEqual(
     repos.map(({ repo }) => repo),

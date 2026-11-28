@@ -3,12 +3,14 @@
 // `ssh -G <alias>` prints the alias's settings, shaped on this Mac's ssh, with the test's
 // `controlmaster`, or fails; `ssh <alias> <command>` runs the command after the alias here, under
 // the remote host's own home folder (with no `zstd` for an alias the test names), or fails as an
-// unreachable host does. Both log each call.
+// unreachable host does. Both log each call. Each home is one machine, whose node name `uname -sn`
+// prints: the first alias of that home, or this computer's own for an alias of the test's home.
 // `orca` holds back the answer to each command the test names until the test releases it, and
 // `ssh` every command on an alias the test names, or each of its commands holding a word it names;
 // `ssh` also fails, as a dropped connection does, each command on an alias holding a word it names.
 // `standIns` sets PATH and ORCA_CLI_COMMAND for the test (test/helpers/env.ts).
 import { chmodSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { type } from 'node:os';
 import { join } from 'node:path';
 import { setEnv } from './env.ts';
 import { seenIn, tempHome } from './files.ts';
@@ -24,7 +26,8 @@ export const answer = (result: unknown) => JSON.stringify({ id: 'local', ok: tru
 // are, each call logged, until `release` of it. `failing`: each `ssh <alias> <word>` whose
 // commands on that alias that hold the word exit 255, each call logged, as a dropped connection
 // does. `noZstd`: each alias whose PATH puts first a `zstd` that exits 127, as a shell finds no
-// program.
+// program. The aliases that share a home reach one machine; an alias of HOME, as set when the
+// stand-ins are made, reaches this computer.
 export function standIns({
   homes,
   orca,
@@ -65,8 +68,20 @@ export function standIns({
   writeFileSync(join(noZstdDir, 'zstd'), '#!/bin/sh\nexit 127\n');
   chmodSync(join(noZstdDir, 'zstd'), 0o755);
   const withoutZstd = (alias: string) => (noZstd.includes(alias) ? ` PATH='${noZstdDir}':"$PATH"; export PATH;` : '');
+  // each home but this computer's -> the folder of a `uname` whose `-sn` prints that machine's node
+  // name, the home's first alias, and that passes any other ask to the real one
+  const nodes = new Map<string, string>();
+  for (const [alias, home] of Object.entries(homes)) {
+    if (home === process.env.HOME || nodes.has(home)) continue;
+    const dir = join(bin, `node-${nodes.size}`);
+    mkdirSync(dir);
+    writeFileSync(join(dir, 'uname'), `#!/bin/sh\n[ "$*" = -sn ] && { echo '${type()} ${alias}'; exit 0; }\nPATH="\${PATH#${dir}:}" exec uname "$@"\n`);
+    chmodSync(join(dir, 'uname'), 0o755);
+    nodes.set(home, dir);
+  }
+  const onNode = (home: string) => (nodes.has(home) ? ` PATH='${nodes.get(home)}':"$PATH"; export PATH;` : '');
   const sshCases = Object.entries(homes).map(
-    ([alias, home]) => `  '${alias}') ${hold(`ssh ${alias}`)}HOME='${home}'; export HOME;${withoutZstd(alias)} ;;`,
+    ([alias, home]) => `  '${alias}') ${hold(`ssh ${alias}`)}HOME='${home}'; export HOME;${withoutZstd(alias)}${onNode(home)} ;;`,
   );
   // `then` for a command line ($7) on the alias of each `ssh <alias> <word>` of `keys` holding the
   // word, a quote in it written `'\''` as in the line
