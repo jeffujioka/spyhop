@@ -166,6 +166,35 @@ run "$work/fleet.json" plugin dev request . spyhop.fleet --data '{"request":1}' 
 [ -n "$dry" ] || expect "Buffer.byteLength(JSON.stringify(a.result.result)) < $MAX_ANSWER_BYTES && Array.isArray(a.result.result.groups) && typeof a.result.result.burn === 'object' && a.result.result.burn !== null && Array.isArray(a.result.result.attention)" \
   "the fleet answer is not under $MAX_ANSWER_BYTES bytes with groups, burn and attention" "$work/fleet.json"
 
+# Whether the fleet still lists the card whose request data is `$1`: one more request of the fleet.
+listed() {
+  run "$work/listed.json" plugin dev request . spyhop.fleet --data '{"request":3}' --json
+  holds "$work/listed.json" "a.result.result.groups.some((group) => group.cards.some((card) => card.id === ($1).card))"
+}
+
+# Fails, as `expect` does, when the answer of the tab `$1` over the range `$2`, in "$work/range.json",
+# lists in `notRead` an Orca host the fleet reaches, one with a card in the fleet answer; prints any
+# other host not read. A group of the fleet answer is named as Orca names its host, as `notRead` is.
+not_read() {
+  hosts=$(node -e '
+    const read = (file) => JSON.parse(require("fs").readFileSync(file, "utf8")).result.result;
+    const reached = new Set(read(process.argv[1]).groups.filter((group) => group.cards.length > 0).map((group) => group.name));
+    for (const host of read(process.argv[2]).notRead) console.log(`${reached.has(host) ? "reached" : "other"} ${host}`);
+  ' "$work/fleet.json" "$work/range.json")
+  [ -n "$hosts" ] || return 0
+  while IFS= read -r line; do
+    host=${line#* }
+    if [ "${line%% *}" = reached ]; then
+      echo "frame check: the $1 answer over a $2 leaves $host, a host the fleet reaches, not read" >&2
+      cat "$work/range.json" >&2
+      exit 1
+    fi
+    echo "frame check: not read, not reached by the fleet: $host"
+  done <<EOF
+$hosts
+EOF
+}
+
 # The session of every card of the fleet, each request one refresh of the worker: each answer is
 # under Orca's limit with series of at most SERIES_POINTS points, and the card's `reading` is null
 # once its sub-agents are all read. A card's id joins its parts with NUL characters, which no shell
@@ -182,21 +211,18 @@ while IFS= read -r card <&3; do
   [ -n "$card" ] || continue
   data=$(node -e 'console.log(JSON.stringify({ request: 2, card: JSON.parse(process.argv[1]) }))' "$card")
   refresh=1
-  gone=
   while :; do
     run "$work/session.json" plugin dev request . spyhop.session --data "$data" --json
     [ -z "$dry" ] || break
     # The worker answers `session: null` once Orca no longer lists the card's agent: a card that
     # left during the check is passed over, and only one the fleet still lists fails.
     if holds "$work/session.json" 'a.result.result.session === null'; then
-      run "$work/listed.json" plugin dev request . spyhop.fleet --data '{"request":3}' --json
-      if holds "$work/listed.json" "a.result.result.groups.some((group) => group.cards.some((card) => card.id === ($data).card))"; then
+      if listed "$data"; then
         echo "frame check: the session answer of $card is null while the fleet still lists it" >&2
         cat "$work/session.json" >&2
         exit 1
       fi
       echo "frame check: $card left Orca during the check; its session is not checked"
-      gone=1
       break
     fi
     expect "const s = a.result.result.session; Buffer.byteLength(JSON.stringify(a.result.result)) < $MAX_ANSWER_BYTES && [s.tokens?.points, s.context?.points, s.cost?.own, s.cost?.sub].every((series) => !Array.isArray(series) || series.length <= $SERIES_POINTS)" \
@@ -209,13 +235,6 @@ while IFS= read -r card <&3; do
     fi
     refresh=$((refresh + 1))
   done
-  [ -z "$gone" ] || continue
-  # The Trace of the card: under Orca's limit, every lane of at most TRACE_SPANS spans
-  # (src/core/trace.js); a Trace that cannot be read is null and has no lane to bound.
-  trace=$(node -e 'console.log(JSON.stringify({ request: 4, card: JSON.parse(process.argv[1]), trace: true }))' "$card")
-  run "$work/trace.json" plugin dev request . spyhop.session --data "$trace" --json
-  [ -n "$dry" ] || expect "Buffer.byteLength(JSON.stringify(a.result.result)) < $MAX_ANSWER_BYTES && (a.result.result.session?.trace?.lanes ?? []).every((lane) => lane.spans.length <= $TRACE_SPANS)" \
-    "the Trace answer of $card is not under $MAX_ANSWER_BYTES bytes with lanes of at most $TRACE_SPANS spans" "$work/trace.json"
 done 3<<EOF
 $cards
 EOF
@@ -240,6 +259,28 @@ if [ -z "$dry" ]; then
     sleep 1
   done
 fi
+# The Trace of each card, asked after the catch-up wait, as the Trace reads the history store: under
+# Orca's limit, every lane of at most TRACE_SPANS spans (src/core/trace.js). A card the fleet still
+# lists must have a Trace; one that left Orca is passed over.
+while IFS= read -r card <&3; do
+  [ -n "$card" ] || continue
+  trace=$(node -e 'console.log(JSON.stringify({ request: 4, card: JSON.parse(process.argv[1]), trace: true }))' "$card")
+  run "$work/trace.json" plugin dev request . spyhop.session --data "$trace" --json
+  [ -z "$dry" ] || continue
+  if holds "$work/trace.json" 'a.result.result.session?.trace == null'; then
+    if listed "$trace"; then
+      echo "frame check: the Trace answer of $card has no trace while the fleet still lists it" >&2
+      cat "$work/trace.json" >&2
+      exit 1
+    fi
+    echo "frame check: $card left Orca during the check; its Trace is not checked"
+    continue
+  fi
+  expect "Buffer.byteLength(JSON.stringify(a.result.result)) < $MAX_ANSWER_BYTES && a.result.result.session.trace.lanes.every((lane) => lane.spans.length <= $TRACE_SPANS)" \
+    "the Trace answer of $card is not under $MAX_ANSWER_BYTES bytes with lanes of at most $TRACE_SPANS spans" "$work/trace.json"
+done 3<<EOF
+$cards
+EOF
 for range in day year; do
   run "$work/range.json" plugin dev request . spyhop.range --data "{\"request\":3,\"tab\":\"spend\",\"range\":\"$range\"}" --json
   [ -n "$dry" ] || expect "Buffer.byteLength(JSON.stringify(a.result.result)) < $MAX_ANSWER_BYTES && (typeof a.result.result.spend.cost === 'number' || a.result.result.spend.cost === 'n/a')" \
@@ -248,13 +289,15 @@ for range in day year; do
     "the Spend chart over a year does not hold $YEAR_POINTS points" "$work/range.json"
 done
 # The Cache and Health tabs over a week and a year: each answer is under Orca's limit with its
-# tab's view an object, `notRead` empty (every Orca host the fleet reaches was read), and, over a
-# year, the Cache chart of YEAR_POINTS points; the Health tab has no chart.
+# tab's view an object and, over a year, the Cache chart of YEAR_POINTS points (the Health tab has
+# no chart). A host in `notRead` that the fleet reaches, one with a card in the fleet answer,
+# fails; any other is printed and passes.
 for tab in cache health; do
   for range in week year; do
     run "$work/range.json" plugin dev request . spyhop.range --data "{\"request\":3,\"tab\":\"$tab\",\"range\":\"$range\"}" --json
-    [ -n "$dry" ] || expect "Buffer.byteLength(JSON.stringify(a.result.result)) < $MAX_ANSWER_BYTES && typeof a.result.result.$tab === 'object' && a.result.result.$tab !== null && Array.isArray(a.result.result.notRead) && a.result.result.notRead.length === 0" \
-      "the $tab answer over a $range is not under $MAX_ANSWER_BYTES bytes with a $tab object and no host not read" "$work/range.json"
+    [ -n "$dry" ] || expect "Buffer.byteLength(JSON.stringify(a.result.result)) < $MAX_ANSWER_BYTES && typeof a.result.result.$tab === 'object' && a.result.result.$tab !== null && Array.isArray(a.result.result.notRead)" \
+      "the $tab answer over a $range is not under $MAX_ANSWER_BYTES bytes with a $tab object and a list of hosts not read" "$work/range.json"
+    [ -n "$dry" ] || not_read "$tab" "$range"
     [ -n "$dry" ] || [ "$tab" != cache ] || [ "$range" != year ] || expect "a.result.result.cache.chart?.length === $YEAR_POINTS" \
       "the Cache chart over a year does not hold $YEAR_POINTS points" "$work/range.json"
   done

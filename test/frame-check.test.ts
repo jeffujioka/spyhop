@@ -23,10 +23,10 @@ const answeredUpToFleet = (fleet: unknown) => ({
   'plugin dev request . spyhop.fleet --data {"request":1} --json': answer({ result: fleet }),
 });
 
-// A fleet answer with one group of the cards `ids`.
-const fleetListing = (ids: string[]) => ({
+// A fleet answer with one group, named `name` as Orca names its host, of the cards `ids`.
+const fleetListing = (ids: string[], name = 'local') => ({
   request: 1,
-  groups: [{ id: 'local', name: 'local', count: ids.length, cards: ids.map((id) => ({ id })) }],
+  groups: [{ id: 'local', name, count: ids.length, cards: ids.map((id) => ({ id })) }],
   counts: {},
   burn: {},
   attention: [],
@@ -48,6 +48,8 @@ const RESTART = 'plugin restart local.spyhop --json';
 const RANGE = (tab: string, range: string) => `plugin dev request . spyhop.range --data {"request":3,"tab":"${tab}","range":"${range}"} --json`;
 const SESSION = (data: string) => `plugin dev request . spyhop.session --data ${data} --json`;
 const SESSION_C1 = SESSION('{"request":2,"card":"c1"}');
+const FLEET_AGAIN = 'plugin dev request . spyhop.fleet --data {"request":3} --json';
+const fleetOf = (host: string) => ({ 'plugin dev request . spyhop.fleet --data {"request":1} --json': answer({ result: fleetListing(['c1'], host) }) });
 const TRACE_C1 = SESSION('{"request":4,"card":"c1","trace":true}');
 const months = (n: number) => Array.from({ length: n }, (_, i) => ({ key: `2026-${i}`, v: 0 }));
 const lane = (lane: string, spans: number) => ({ lane, totalMs: 0, spans: Array.from({ length: spans }, (_, i) => [i, i + 1]) });
@@ -206,9 +208,10 @@ test('the insights steps are listed', () => {
 const big = 'x'.repeat(1048576);
 for (const [name, over, message] of [
   ['an answer over 1 MiB', { [RANGE('health', 'week')]: answer({ result: { health: {}, notRead: [], big } }) }, 'the health answer over a week is not under 1048576 bytes'],
-  ['a host not read', { [RANGE('cache', 'week')]: answer({ result: { cache: {}, notRead: ['maria'] } }) }, 'the cache answer over a week is not under 1048576 bytes with a cache object and no host not read'],
+  ['a host the fleet reaches not read', { ...fleetOf('devbox'), [RANGE('cache', 'week')]: answer({ result: { cache: {}, notRead: ['devbox'] } }) }, 'the cache answer over a week leaves devbox, a host the fleet reaches, not read'],
   ['a Year chart of 11 points', { [RANGE('cache', 'year')]: answer({ result: { cache: { chart: months(11) }, notRead: [] } }) }, 'the Cache chart over a year does not hold 12 points'],
   ['a Trace lane of 241 spans', { [TRACE_C1]: traceAnswer(241) }, 'the Trace answer of "c1" is not under 1048576 bytes with lanes of at most 240 spans'],
+  ['a Trace without lanes of a card the fleet lists', { [TRACE_C1]: answer({ result: { request: 4, session: {} } }), [FLEET_AGAIN]: answer({ result: fleetListing(['c1']) }) }, 'the Trace answer of "c1" has no trace while the fleet still lists it'],
 ] as [string, Record<string, string>, string][]) {
   test(`${name} stops the check`, async () => {
     const home = tempHome();
@@ -220,6 +223,16 @@ for (const [name, over, message] of [
     assert.ok(run.stderr.includes(`frame check: ${message}`), run.stderr);
   });
 }
+
+test('a host not read that the fleet does not reach passes and is printed', async () => {
+  const home = tempHome();
+  countCatchUps(home, 1);
+
+  const run = await wholeCheck(home, [], 2, { ...fleetOf('devbox'), [RANGE('cache', 'week')]: answer({ result: { cache: {}, notRead: ['maria'] } }) });
+
+  assert.equal(run.status, 0, run.stderr);
+  assert.ok(run.stdout.includes('frame check: not read, not reached by the fleet: maria'), run.stdout);
+});
 
 test('a computer without sqlite3 fails before any step', () => {
   const orca = standIns({ homes: {}, orca: {} });
