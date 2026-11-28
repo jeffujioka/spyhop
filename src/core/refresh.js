@@ -83,25 +83,28 @@ const newScan = () => ({ state: undefined, block: 0, skip: 0, carry: '', pos: -1
 // that changes a fold's state.
 export const KEPT_VERSION = 5;
 
-function encode(value) {
+// A state as plain values that JSON writes and reads back as the same state (see above); the
+// history store writes a file's state with it too (src/history/store.ts).
+export function encodeState(value) {
   if (value === undefined) return { $: 'undefined' };
   if (Number.isNaN(value)) return { $: 'NaN' };
-  if (value instanceof Map) return { $: 'Map', entries: [...value].map((entry) => entry.map(encode)) };
-  if (Array.isArray(value)) return value.map(encode);
+  if (value instanceof Map) return { $: 'Map', entries: [...value].map((entry) => entry.map(encodeState)) };
+  if (Array.isArray(value)) return value.map(encodeState);
   if (value !== null && typeof value === 'object') {
-    const fields = Object.fromEntries(Object.entries(value).map(([key, field]) => [key, encode(field)]));
+    const fields = Object.fromEntries(Object.entries(value).map(([key, field]) => [key, encodeState(field)]));
     return '$' in fields ? { $: 'fields', fields } : fields;
   }
   return value;
 }
 
-function decode(value) {
-  if (Array.isArray(value)) return value.map(decode);
+// The state `encodeState` wrote as `value`.
+export function decodeState(value) {
+  if (Array.isArray(value)) return value.map(decodeState);
   if (value === null || typeof value !== 'object') return value;
   if (value.$ === 'undefined') return undefined;
   if (value.$ === 'NaN') return NaN;
-  if (value.$ === 'Map') return new Map(value.entries.map((entry) => entry.map(decode)));
-  return Object.fromEntries(Object.entries(value.$ === 'fields' ? value.fields : value).map(([key, field]) => [key, decode(field)]));
+  if (value.$ === 'Map') return new Map(value.entries.map((entry) => entry.map(decodeState)));
+  return Object.fromEntries(Object.entries(value.$ === 'fields' ? value.fields : value).map(([key, field]) => [key, decodeState(field)]));
 }
 
 // Orca refuses to store a value whose JSON is over 262144 bytes, and a storage file over 5 MiB,
@@ -127,7 +130,7 @@ const utf8 = new TextEncoder();
 export function encodeScans(scans) {
   const texts = scans
     .map(({ provider, machine, path, pos, state, readAt = 0, ended = false }) => {
-      const text = JSON.stringify({ provider, machine, path, pos, readAt, ended, state: encode(state) });
+      const text = JSON.stringify({ provider, machine, path, pos, readAt, ended, state: encodeState(state) });
       // the text as a part's string holds it, and the comma before it
       return { text, readAt, ended, size: utf8.encode(JSON.stringify(text)).length - 2 + 1 };
     })
@@ -189,7 +192,7 @@ export function decodeScans(values) {
   const parts = values.map(partOf);
   if (values.length !== keptPartsOf(values[0]) || !parts.every(isKeptPart)) return [];
   try {
-    return parts.flatMap((part) => part.scans.map((scan) => ({ ...scan, state: decode(scan.state) })));
+    return parts.flatMap((part) => part.scans.map((scan) => ({ ...scan, state: decodeState(scan.state) })));
   } catch {
     return [];
   }
