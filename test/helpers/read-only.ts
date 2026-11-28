@@ -4,6 +4,10 @@
 // The script the runner wraps a program in to compress its output (src/history/catch-up.ts).
 const ZSTD_SCRIPT = 'exec 4>&1; s=$( { { "$@"; echo $? >&3; } | zstd -q -c >&4; } 3>&1 ); exit $s';
 
+// The start of the line that runs a program on a host with `zstd`, its output compressed and its
+// exit code kept.
+export const ZSTD_PIPE = `'sh' '-c' '${ZSTD_SCRIPT}' 'sh'`;
+
 // Whether one program with its arguments only reads.
 function readsOnly([program, ...args]: string[]): boolean {
   switch (program) {

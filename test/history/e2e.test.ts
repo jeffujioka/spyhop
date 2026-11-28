@@ -9,6 +9,7 @@
 // `oldbox`, which cannot be reached, stood in for by `orca` and `ssh` (test/helpers/stand-ins.ts),
 // through the Spend tab's Month.
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import { join } from 'node:path';
 import { mock, test } from 'node:test';
 import { RANGE_REFRESH_MS } from '../../src/core/refresh.js';
@@ -19,7 +20,7 @@ import { claudeSession, FIX, folderOf, ompSession, type OmpCall, open, openLive,
 import { attr, figure, listOf, parts, text } from '../helpers/markup.ts';
 import { DEVBOX_HOST, environmentListOf, hostListOf, LOCAL_HOST } from '../helpers/orca-answers.ts';
 import { withCopilotPrices } from '../helpers/prices.ts';
-import { readOnlyLine } from '../helpers/read-only.ts';
+import { readOnlyLine, ZSTD_PIPE } from '../helpers/read-only.ts';
 
 // The clock of this test: 2026-11-28 15:00 UTC.
 const CLOCK = Date.parse('2026-11-28T15:00:00.000Z');
@@ -89,6 +90,7 @@ test('costs end to end', async () => {
 });
 
 test('every Orca host end to end', async () => {
+  assert.doesNotThrow(() => execFileSync('zstd', ['-V'], { stdio: 'ignore' }), 'this Mac has no zstd');
   const devboxHome = tempHome();
   const oldbox = { kind: 'ssh', name: 'oldbox', id: 'oldbox', selector: '--host ssh:oldbox', connected: true };
   // devbox's omp session: a call of 2.00 USD on 27 November, then, later, one of 0.10 USD
@@ -127,10 +129,16 @@ test('every Orca host end to end', async () => {
   const html = opened.html();
   assert.deepEqual(listOf(html, 'harness'), ['omp $3.00', 'Claude Code $0.50', 'opencode $0.30']);
   assert.equal(figure(html, 'cost'), '$3.80');
-  assert.match(text(parts(html, 'data-part', 'not-read')[0] ?? ''), /Not read this time: oldbox\./);
+  const [notRead, ...more] = parts(html, 'data-part', 'not-read');
+  assert.ok(notRead !== undefined && more.length === 0, html);
+  assert.match(text(notRead), /Not read this time: oldbox\./);
   const lines = opened.calls.ssh();
   assert.ok(lines.some(([alias]) => alias === 'devbox') && lines.some(([alias]) => alias === 'oldbox'), JSON.stringify(lines));
   assert.deepEqual(lines.filter((args) => !readOnlyLine(args.at(-1)!)), []);
+  // devbox's session file and opencode's rows come through `zstd`
+  const devbox = lines.filter(([alias]) => alias === 'devbox').map((args) => args.at(-1)!);
+  const compressed = (program: string, word: string) => devbox.some((line) => line.startsWith(`${ZSTD_PIPE} '${program}'`) && line.includes(word));
+  assert.ok(compressed('dd', '.jsonl') && compressed('sqlite3', "'WITH RECURSIVE "), JSON.stringify(devbox));
 
   // a call of 0.10 USD on devbox, then the panel's next ask of the tab a minute later
   devboxOmp([first, { at: CLOCK, output: 100, cost: 0.1 }]);

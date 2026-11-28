@@ -12,11 +12,7 @@ import { rangeOf } from '../helpers/history.ts';
 import { ompSession, spent } from '../helpers/live.ts';
 import { DEVBOX_LISTS, environmentListOf, hostListOf } from '../helpers/orca-answers.ts';
 import { figure } from '../helpers/markup.ts';
-import { readOnlyLine } from '../helpers/read-only.ts';
-
-// The line that runs a program on a host with `zstd`, its output compressed and its exit code
-// kept.
-const ZSTD_PIPE = `'sh' '-c' 'exec 4>&1; s=$( { { "$@"; echo $? >&3; } | zstd -q -c >&4; } 3>&1 ); exit $s' 'sh'`;
+import { readOnlyLine, ZSTD_PIPE } from '../helpers/read-only.ts';
 
 // The Spend tab of Day once the first catch-up has read an omp session of 1.00 USD today on the
 // SSH host `alias`, the only other Orca host, listed by `lists`, and the commands run on it.
