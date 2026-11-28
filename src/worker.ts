@@ -41,7 +41,7 @@ import { attentionRows, burnCard, type FleetAgent, groupCards, LOCAL, stateCount
 import { orca as cli, type HostLists, listHosts, readServerAgents, type RemoteHost, remoteHosts, type ServerAgent } from './hosts.ts';
 import type { CardView, FleetAnswer, HostGroup, Pane, RangeAnswer, SessionAnswer, SpendView } from './protocol.ts';
 import { type CatchUp, createCatchUp } from './history/catch-up.ts';
-import { openStore, type Store } from './history/store.ts';
+import { openStore } from './history/store.ts';
 import { spendView } from './history/views.ts';
 import { sessionDetail } from './session-detail.ts';
 
