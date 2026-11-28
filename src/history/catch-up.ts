@@ -58,7 +58,7 @@ export function createCatchUp({ run, store, home, log }: { run: Run; store: Stor
     const row = store.file(LOCAL, 'omp', file.path);
     const usable = row?.version === HISTORY_VERSION ? row : null;
     if (usable && usable.size === file.size && usable.mtimeMs === file.mtimeMs) return;
-    const kept = usable?.state as Kept | undefined;
+    const kept = usable ? (store.state(usable.id) as Kept) : undefined;
     const read = await scanFile(run, fold, kept ? { state: kept.fold, pos: usable!.pos } : null, file.path, file.size);
     const restarted = read.restarted || !kept;
     const repo = restarted ? await repoOf(read.scan.state?.cwd ?? null) : kept!.repo;

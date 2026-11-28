@@ -93,7 +93,9 @@ describe('history store', () => {
     const state = { byModel: new Map([['m', { cost: NaN, calls: 2 }]]), cwd: '/home/u/proj', last: undefined };
     const id = s.saveRead(fileOf('/a.jsonl', 'local', state), readOf(1));
 
-    expect(s.file('local', 'omp', '/a.jsonl')).toEqual({ id, ...fileOf('/a.jsonl', 'local', state) });
+    const { state: saved, ...mark } = fileOf('/a.jsonl', 'local', state);
+    expect(s.file('local', 'omp', '/a.jsonl')).toEqual({ id, ...mark });
+    expect(s.state(id)).toEqual(saved);
     expect(s.file('local', 'omp', '/b.jsonl')).toBeNull();
   });
 

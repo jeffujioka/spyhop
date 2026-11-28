@@ -5,12 +5,13 @@
 import { execFileSync } from 'node:child_process';
 import { appendFileSync, chmodSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import { setImmediate } from 'node:timers/promises';
 import { afterEach, describe, mock, test } from 'node:test';
 import { CATCH_UP_MS } from '../../src/core/refresh.js';
 import { ompSessionsDir } from '../../src/core/providers/omp-sources.js';
 import { createCatchUp } from '../../src/history/catch-up.ts';
-import { openStore, type Store } from '../../src/history/store.ts';
+import { openStore, STORE_FILE, type Store } from '../../src/history/store.ts';
 import { scheduleCatchUps } from '../../src/worker.ts';
 import { expect } from '../core/helpers/expect.ts';
 import { recordingRun } from '../core/helpers/recording-run.ts';
@@ -77,6 +78,20 @@ describe('catch-up', () => {
 
     const reads = calls.slice(mark).filter(({ command, args }) => ['tail', 'dd'].includes(command) && args.some((arg) => arg.includes(file)));
     expect(reads).toEqual([]);
+  });
+
+  test("an unchanged file's kept state is not decoded", async () => {
+    const { home, logs, catchUp } = catchUpOf();
+    ompSession(home, join(home, 'api'), { title: 'api', calls: [spent(0.4)] });
+    await catchUp.run();
+    // a state no decode can read: a run that decoded it would log the file as not read
+    const db = new DatabaseSync(join(home, STORE_FILE));
+    db.exec("UPDATE files SET state = 'not json'");
+    db.close();
+
+    await catchUp.run();
+
+    expect(logs).toEqual([]);
   });
 
   test('Replaced file counted once', async () => {

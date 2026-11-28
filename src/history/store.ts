@@ -21,14 +21,20 @@ export const HISTORY_VERSION = 1;
 
 export type FileRow = { id: number; host: string; harness: string; path: string; pos: number; size: number; mtimeMs: number; version: number; state: unknown };
 
+// A file's row without its state, which is decoded only for a file that will be read.
+export type FileMark = Omit<FileRow, 'state'>;
+
 export type DailyLine = { day: string; host: string; repo: string; harness: string; model: string; figures: Record<string, number> };
 
 // A daily line of one read (`takeLines` of src/core/insights.js).
 type LineDelta = { day: string; model: string; figures: Record<string, number> };
 
 export type Store = {
-  // The row of the file `path` of `harness` on the Orca host `host`; null when none was saved.
-  file(host: string, harness: string, path: string): FileRow | null;
+  // The row of the file `path` of `harness` on the Orca host `host`, but its state; null when
+  // none was saved.
+  file(host: string, harness: string, path: string): FileMark | null;
+  // The state of the file of id `id`.
+  state(id: number): unknown;
   // Saves a read of a file of session `session` in `repo`, in one transaction: its lines added to
   // the file's (which a `restarted` read replaces) and its row. Returns the file's id.
   saveRead(file: Omit<FileRow, 'id'>, read: { session: string; repo: string; lines: LineDelta[]; restarted: boolean }): number;
@@ -76,7 +82,8 @@ export function openStore(home: string): Store {
       GROUP BY day, host, repo, harness, model;
   `);
 
-  const selectFile = db.prepare('SELECT * FROM files WHERE host = ? AND harness = ? AND path = ?');
+  const selectFile = db.prepare('SELECT id, host, harness, path, pos, size, mtime_ms, version FROM files WHERE host = ? AND harness = ? AND path = ?');
+  const selectState = db.prepare('SELECT state FROM files WHERE id = ?');
   const upsertFile = db.prepare(`
     INSERT INTO files (host, harness, path, pos, size, mtime_ms, version, state) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT (host, harness, path) DO UPDATE SET
@@ -103,8 +110,10 @@ export function openStore(home: string): Store {
         size: Number(row.size),
         mtimeMs: Number(row.mtime_ms),
         version: Number(row.version),
-        state: decodeState(JSON.parse(String(row.state))),
       };
+    },
+    state(id) {
+      return decodeState(JSON.parse(String(selectState.get(id)!.state)));
     },
     saveRead(file, { session, repo, lines, restarted }) {
       db.exec('BEGIN');
