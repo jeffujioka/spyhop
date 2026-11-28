@@ -8,6 +8,7 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { rangeOf } from '../helpers/history.ts';
+import { opencodeSession } from '../helpers/agent-cards.ts';
 import { claudeSession, type Compaction, type OmpCall, ompSession, ompWindow } from '../helpers/live.ts';
 import { attr, figure, parts, text } from '../helpers/markup.ts';
 import { withCopilotPrices } from '../helpers/prices.ts';
@@ -81,6 +82,52 @@ test('Copilot cold start', async () => {
   assert.equal(figure(html, 'cold-other'), '1 · 160,000 · $1.00');
 });
 
+test('a Copilot cold start the price table cannot price has a cost n/a', async () => {
+  withCopilotPrices({});
+  const copilot = { provider: 'github-copilot', model: 'claude-opus-5.5' };
+  const html = await cacheOf([
+    cold('10:00', { ...copilot, cttl: '5m' }),
+    cold('10:20', { ...copilot, cttl: '5m', write: 160_000, writeCost: undefined }),
+  ]);
+
+  assert.equal(figure(html, 'cold-expired'), '1 · 160,000 · n/a');
+  const [hint] = parts(html, 'data-part', 'hint');
+  assert.equal(text(hint), '1 cold start after the cache expired: avoiding them would have saved up to n/a estimate');
+  assert.equal(parts(html, 'data-part', 'left-out').length, 0);
+});
+
+test('a hint of cold starts without a cost names no saving', async () => {
+  const { html } = await rangeOf([], {
+    tab: 'cache',
+    range: 'week',
+    now: CLOCK,
+    prepare: (home) =>
+      claudeSession(home, join(home, 'cc'), {
+        calls: [
+          { at: at('10:00'), uncached: 10, write: 1000, output: 5, cache: '5m' },
+          { at: at('10:20'), uncached: 10, write: 2000, output: 5 },
+        ],
+      }),
+  });
+
+  assert.equal(figure(html, 'cold-expired'), '1 · 2,000');
+  assert.equal(text(parts(html, 'data-part', 'hint')[0]), '1 cold start after the cache expired');
+});
+
+test('Year charts the hit rate by month', async () => {
+  const { html } = await rangeOf([], {
+    tab: 'cache',
+    range: 'year',
+    now: CLOCK,
+    prepare: (home) => ompSession(home, join(home, 'api'), { title: 'api', calls: [{ at: at('10:00'), read: 900, write: 100, uncached: 0, output: 5, cost: 0.1 }] }),
+  });
+
+  const points = parts(parts(html, 'data-chart', 'range-hitRate')[0], 'data-key').map((point) => [attr(point, 'data-key'), attr(point, 'data-v')]);
+  assert.equal(points.length, 12);
+  assert.deepEqual(points.at(-1), ['2026-11', '0.9']);
+  assert.deepEqual(points.at(0), ['2025-12', 'n/a']);
+});
+
 test('Returns by time away', async () => {
   const html = await cacheOf([
     cold('10:00', { stop: 'stop' }),
@@ -98,7 +145,7 @@ test('Returns by time away', async () => {
 const compactionsOf = (html: string) => text(parts(html, 'data-name', 'Compactions')[0]);
 
 test('Claude Code and opencode compactions', async () => {
-  const html = await cacheOf([cold('10:00')], [], (home) =>
+  const html = await cacheOf([cold('10:00')], [], (home) => {
     claudeSession(home, join(home, 'cc'), {
       calls: [
         { at: at('10:00'), uncached: 10, output: 5 },
@@ -108,10 +155,17 @@ test('Claude Code and opencode compactions', async () => {
         { at: at('10:01'), trigger: 'auto', before: 150_000, after: 10_000 },
         { at: at('10:05'), trigger: 'manual', before: 150_000, after: 10_000 },
       ],
-    }),
-  );
+    });
+    opencodeSession(home, join(home, 'web'), {
+      provider: 'anthropic',
+      model: 'claude-opus-5.5',
+      cost: 0.2,
+      calls: [{ uncached: 10, read: 0, write: 1000, output: 5, at: at('10:00') }],
+      compactions: [{ at: at('10:30'), reason: 'manual' }],
+    });
+  });
 
-  assert.equal(figure(html, 'compactions'), '1 context full · 1 manual');
+  assert.equal(figure(html, 'compactions'), '1 context full · 2 manual');
   assert.doesNotMatch(compactionsOf(html), /inferred/);
 });
 

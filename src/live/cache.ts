@@ -6,7 +6,7 @@
 // has cold starts, each under its title and the line of what it means.
 // Pure: an answer in, a markup string out.
 
-import { formatCost, formatCount, formatPercent, orNa } from '../core/format.js';
+import { formatCost, formatCount, formatPercent } from '../core/format.js';
 import type { CacheView, Num, RangeAnswer } from '../protocol.ts';
 import { rangeChart } from './charts.ts';
 import { esc, num, readNotes, titled } from './html.ts';
@@ -30,7 +30,7 @@ const counted = (count: Num, one: string) => (count === 1 ? `1 ${one}` : `${form
 // their cost, none when no cold start of the cause has one; and the cost's left-out note.
 function coldStarts({ causes, costLeftOut }: CacheView) {
   const rows = causes.map(({ cause, cold, tokens, cost }) => {
-    const words = [formatCount(cold), formatCount(tokens), ...(cost === null ? [] : [formatCost(cost)])].join(' · ');
+    const words = cold === 'n/a' ? 'n/a' : [formatCount(cold), formatCount(tokens), ...(cost === null ? [] : [formatCost(cost)])].join(' · ');
     return `<div data-cause="${cause}" class="row item"><span class="grow">${esc(CAUSES[cause]?.name ?? cause)}</span>${num(`cold-${cause}`, words)}</div>`;
   });
   const note = costLeftOut.length > 0 ? `<p data-part="left-out" class="muted">The cost leaves out ${esc(costLeftOut.join(', '))}, which log no cost for these cache writes.</p>` : '';
@@ -40,7 +40,7 @@ function coldStarts({ causes, costLeftOut }: CacheView) {
 // The returns by their time away, a row each.
 function timeAway({ away }: CacheView) {
   const rows = away.map(({ band, returns, cold }) => {
-    const words = `${counted(returns, 'return')} · ${orNa(cold, formatCount)} cold`;
+    const words = returns === 'n/a' || cold === 'n/a' ? 'n/a' : `${counted(returns, 'return')} · ${formatCount(cold)} cold`;
     return `<div class="row item"><span class="grow">${BANDS[band] ?? esc(band)}</span>${num(`away-${band}`, words)}</div>`;
   });
   return titled('Time away', 'How long the developer was away before returning to a session, and how many found its prompt cache cold', `<div data-list="away">${rows.join('')}</div>`);
@@ -49,7 +49,7 @@ function timeAway({ away }: CacheView) {
 // The compactions by kind, the kinds there are, marked inferred when any was told apart by inference.
 function compactionKinds({ compactions: { idle, full, manual, inferred } }: CacheView) {
   const kinds = ([['context full', full], ['idle', idle], ['manual', manual]] as const).filter(([, count]) => count !== 0);
-  const words = kinds.length > 0 ? kinds.map(([kind, count]) => `${formatCount(count)} ${kind}`).join(' · ') : 'none';
+  const words = [full, idle, manual].includes('n/a') ? 'n/a' : kinds.length > 0 ? kinds.map(([kind, count]) => `${formatCount(count)} ${kind}`).join(' · ') : 'none';
   const mark = typeof inferred === 'number' && inferred > 0 ? ' <span class="muted" data-part="inferred">inferred</span>' : '';
   return titled('Compactions', 'How often a session was compacted: when its context was full, when it sat idle, or when the developer asked', `${num('compactions', words)}${mark}`);
 }
@@ -59,7 +59,7 @@ function compactionKinds({ compactions: { idle, full, manual, inferred } }: Cach
 function hints({ causes }: CacheView) {
   const found = causes.flatMap(({ cause, cold, cost }) => {
     if (cause === 'other' || typeof cold !== 'number' || cold === 0) return [];
-    const saved = cost === null || cost === 'n/a' ? '' : `: avoiding them would have saved up to ${formatCost(cost)} <span data-estimate>estimate</span>`;
+    const saved = cost === null ? '' : `: avoiding them would have saved up to ${formatCost(cost)} <span data-estimate>estimate</span>`;
     return [`<p data-part="hint" data-cause="${cause}">${counted(cold, 'cold start')} ${esc(CAUSES[cause]?.what ?? cause)}${saved}</p>`];
   });
   return found.length === 0 ? '' : titled('Hints', 'What caused cold starts that could have been avoided, and what avoiding them would have saved', found.join(''));

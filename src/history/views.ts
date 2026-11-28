@@ -92,8 +92,8 @@ export function leftOutOf(lines: DailyLine[], unlogged: (line: DailyLine) => boo
   return [...order.filter((name) => left.has(name)), ...[...left].filter((name) => !order.includes(name))];
 }
 
-// The sum of the figures `names` of a daily line.
-const sumOf = ({ figures }: DailyLine, names: string[]) => names.reduce((sum, name) => sum + figures[name], 0);
+// The sum of the figures `names` over the daily lines `lines`.
+const sumOf = (lines: DailyLine[], ...names: string[]) => lines.reduce((sum, { figures }) => names.reduce((more, name) => more + figures[name], sum), 0);
 
 // The hit rate of the figures of `lines`: what the model calls read from the cache over what they
 // read, wrote and sent not cached; n/a without any.
@@ -105,19 +105,22 @@ function hitRateOf(lines: DailyLine[]): Num {
 // The Cache tab of `range` as of the epoch ms `now`: see CacheView.
 export function cacheView(store: Store, range: Range, now: number): CacheView {
   const { by, points, lines } = linesOf(store, range, now);
+  // a cause's cost: n/a when a cold start of it has one n/a, none when every one is of a harness
+  // that logs none, else the sum of those that have
   const causes = MISS_CAUSES.map((cause: string) => {
-    const [cold, tokens, cost, unpriced] = ['cold', 'coldTokens', 'coldCost', 'coldUnpriced'].map((name) => lines.reduce((sum, line) => sum + line.figures[`${name}${cap(cause)}`], 0));
-    return { cause, cold, tokens, cost: cold === unpriced ? null : cost };
+    const [cold, tokens, cost, unpriced, costNa] = ['cold', 'coldTokens', 'coldCost', 'coldUnpriced', 'coldCostNa'].map((name) => sumOf(lines, `${name}${cap(cause)}`));
+    const priced: Num | null = costNa > 0 ? 'n/a' : cold === unpriced ? null : cost;
+    return { cause, cold, tokens, cost: priced };
   });
-  const unpricedNames = MISS_CAUSES.map((cause: string) => `coldUnpriced${cap(cause)}`);
   const days = new Map<string, DailyLine[]>(points.map((key) => [key, []]));
   for (const line of lines) days.get(by === 'month' ? line.day.slice(0, 7) : line.day)?.push(line);
-  const total = (name: string) => lines.reduce((sum, line) => sum + line.figures[name], 0);
+  const total = (name: string) => sumOf(lines, name);
+  const unpricedNames = MISS_CAUSES.map((cause: string) => `coldUnpriced${cap(cause)}`);
   return {
     hitRate: hitRateOf(lines),
     chart: by === null ? null : points.map((key) => ({ key, v: hitRateOf(days.get(key)!) })),
     causes,
-    costLeftOut: leftOutOf(lines, (line) => sumOf(line, unpricedNames) > 0),
+    costLeftOut: leftOutOf(lines, (line) => sumOf([line], ...unpricedNames) > 0),
     away: AWAY_BANDS.map((band: string) => ({ band, returns: total(`returns${cap(band)}`), cold: total(`returnsCold${cap(band)}`) })),
     compactions: { idle: total('compactionsIdle'), full: total('compactionsFull'), manual: total('compactionsManual'), inferred: total('compactionsInferred') },
   };

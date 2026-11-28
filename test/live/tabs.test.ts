@@ -166,9 +166,25 @@ test('One range for the range tabs', async () => {
   assert.equal(attr(opened.html(), 'data-tab'), 'cache');
   const [month] = parts(opened.html(), 'data-press', 'range:month');
   assert.equal(attr(month, 'aria-pressed'), 'true');
-  assert.deepEqual(parts(opened.html(), 'data-part', 'figure').length > 0, true);
+  // the Cache tab's own chart spans the 30 days of Month
+  assert.equal(parts(parts(opened.html(), 'data-chart', 'range-hitRate')[0], 'data-key').length, 30);
 
   opened.live.press('tab:live');
   await until(() => attr(opened.html(), 'data-screen') === 'fleet');
   assert.deepEqual(parts(opened.html(), 'data-part', 'range'), []);
+});
+
+test('a range the store cannot read is n/a on the Cache tab', async () => {
+  const opened = await openLive([], { prepare: (home) => apiSession(home, [spent(1)]) });
+  const home = process.env.HOME!;
+  await caughtUp(home);
+  const db = new DatabaseSync(join(home, STORE_FILE));
+  db.exec('DROP VIEW daily_lines');
+  db.close();
+
+  await opened.openTab('cache', 'week');
+
+  assert.equal(figure(opened.html(), 'hitRate'), 'n/a');
+  for (const name of ['cold-expired', 'away-under5', 'compactions']) assert.equal(figure(opened.html(), name), 'n/a', name);
+  assert.deepEqual(parts(opened.html(), 'data-part', 'hint'), []);
 });

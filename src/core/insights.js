@@ -13,7 +13,8 @@ import { addSpan, newLane, pruneGaps } from './trace.js';
 //
 // The Cache tab's figures: for each miss cause (MISS_CAUSES), `cold<Cause>` the cold starts that
 // have it, `coldTokens<Cause>` the tokens they wrote to the cache again, `coldCost<Cause>` the
-// cost of those writes and `coldUnpriced<Cause>` the cold starts whose harness logs no such cost;
+// cost of those writes, `coldUnpriced<Cause>` the cold starts whose harness logs no such cost and
+// `coldCostNa<Cause>` those whose cost is n/a: a Copilot call the price table cannot price;
 // for each time away (AWAY_BANDS), `returns<Band>` the returns after a turn end and
 // `returnsCold<Band>` those whose next model call was a cold start; and the compactions by kind,
 // `compactionsIdle`, `compactionsFull` and `compactionsManual`, of which `compactionsInferred`
@@ -23,7 +24,7 @@ export const AWAY_BANDS = ['under5', 'to60', 'over60'];
 export const cap = (word) => word[0].toUpperCase() + word.slice(1);
 export const LINE_FIGURES = [
   'calls', 'tokens', 'uncached', 'read', 'write', 'output', 'cost', 'costNa', 'sideCost', 'sideTokens', 'copilotCost',
-  ...MISS_CAUSES.flatMap((cause) => ['cold', 'coldTokens', 'coldCost', 'coldUnpriced'].map((figure) => `${figure}${cap(cause)}`)),
+  ...MISS_CAUSES.flatMap((cause) => ['cold', 'coldTokens', 'coldCost', 'coldUnpriced', 'coldCostNa'].map((figure) => `${figure}${cap(cause)}`)),
   ...AWAY_BANDS.flatMap((band) => [`returns${cap(band)}`, `returnsCold${cap(band)}`]),
   'compactionsIdle', 'compactionsFull', 'compactionsManual', 'compactionsInferred',
 ];
@@ -112,7 +113,7 @@ function cacheEffects(ins, call, before, thread) {
     const cause = cap(missCause(ins, call, before, thread));
     effects.push([`cold${cause}`, 1], [`coldTokens${cause}`, call.write]);
     if (typeof call.writeCost === 'number') effects.push([`coldCost${cause}`, call.writeCost]);
-    else effects.push([`coldUnpriced${cause}`, 1]);
+    else effects.push([call.copilot ? `coldCostNa${cause}` : `coldUnpriced${cause}`, 1]);
   }
   if (ins.returned && ins.returned.thread === thread) {
     const { gap } = ins.returned;

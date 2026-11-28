@@ -150,7 +150,7 @@ export async function openStore(home: string): Promise<Store> {
     `);
     const has = new Set(db.prepare('SELECT name FROM pragma_table_info(?)').all('lines').map((column) => column.name));
     for (const name of LINE_FIGURES) {
-      if (!has.has(name)) db.exec(`ALTER TABLE lines ADD COLUMN "${name}" ${name === 'cost' || name.startsWith('coldCost') ? 'REAL' : 'INTEGER'} NOT NULL DEFAULT 0`);
+      if (!has.has(name)) db.exec(`ALTER TABLE lines ADD COLUMN "${name}" ${name === 'cost' || /^coldCost(?!Na)/.test(name) ? 'REAL' : 'INTEGER'} NOT NULL DEFAULT 0`);
     }
     db.exec(`
       DROP VIEW IF EXISTS daily_lines;
