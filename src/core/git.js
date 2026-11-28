@@ -38,9 +38,13 @@ async function ask(exec, args, options) {
 export async function readGit({ exec }, { cwd, on }) {
   if (!cwd) return { branch: null, origin: null };
   const options = on ? { cwd, on } : { cwd };
-  const [branch, origin] = await Promise.all([
-    ask(exec, ['branch', '--show-current'], options),
-    ask(exec, ['remote', 'get-url', 'origin'], options),
-  ]);
-  return { branch, origin: origin === null ? null : maskCredentials(origin) };
+  const [branch, origin] = await Promise.all([ask(exec, ['branch', '--show-current'], options), readOrigin({ exec }, { cwd, on })]);
+  return { branch, origin };
+}
+
+// The origin alone of the folder `cwd` on the host `on`, as `readGit` gives it: one git command.
+export async function readOrigin({ exec }, { cwd, on }) {
+  if (!cwd) return null;
+  const origin = await ask(exec, ['remote', 'get-url', 'origin'], on ? { cwd, on } : { cwd });
+  return origin === null ? null : maskCredentials(origin);
 }

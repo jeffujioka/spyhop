@@ -5,7 +5,7 @@
 // CLI's list commands run here, through `run` (src/exec.ts) on this computer; whatever cannot be
 // listed is left out or named by its id, never rejected. `orca` is also how the worker's palette
 // command asks Orca to show the panel, and how it switches to a paired server's terminal.
-import type { Run } from './exec.ts';
+import type { Run, RunResult } from './exec.ts';
 import type { FleetAgent } from './fleet.ts';
 import type { Pane } from './protocol.ts';
 import { splitWorktreeId } from './worktree-id.ts';
@@ -65,6 +65,16 @@ export type HistoryHost = { id: string; name: string; alias: string };
 export function historyHosts(lists: HostLists): HistoryHost[] {
   const sshIds = lists.hosts.filter((host) => host.kind === 'ssh').map((host) => `ssh:${host.id}`);
   return [...remoteHosts(lists, sshIds)].map(([id, { name, alias }]) => ({ id, name, alias }));
+}
+
+// An Orca host's place, from what `uname -s` and, on another host, `printenv HOME` answered
+// there: its operating system, for the `stat` a session listing runs, and its home folder,
+// `home` when given (this computer's, where `printenv` is null). Throws when either program
+// failed or the home is empty. Each caller runs the programs as it schedules its own.
+export function placeOf(uname: RunResult, printenv: RunResult | null, home: string | null): { os: string; home: string } {
+  const found = printenv ? printenv.stdout.trim() : home;
+  if (uname.code !== 0 || printenv?.code || !found) throw new Error('machine place unknown');
+  return { os: uname.stdout.trim(), home: found };
 }
 
 // An Orca agent of a paired server, in the server's group, with its pane, if any.

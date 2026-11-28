@@ -6,6 +6,7 @@
 // calls both log. The worker is the real one; every other program it runs is real.
 import { execFileSync } from 'node:child_process';
 import { mkdirSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, assert, mockHost, mountWorker, test, type TestWorker } from 'orca/testing';
 import { createAgentCards } from '../src/agent-cards.ts';
@@ -17,6 +18,7 @@ import * as workerModule from '../src/worker.ts';
 import { NOW, agent, costOf, ompSessionOf as ompSession } from './helpers/agent-cards.ts';
 import { useTempHome } from './helpers/env.ts';
 import { tempHome } from './helpers/files.ts';
+import { caughtUp } from './helpers/history.ts';
 import { recordingRun } from './core/helpers/recording-run.ts';
 import { DEVBOX, DEVBOX_HOST, JEFF_ENV, JEFF_SERVER_ENVIRONMENTS, JEFF_TARGET, LOCAL_HOST, environmentListOf, hostListOf } from './helpers/orca-answers.ts';
 import { readOnlyLine } from './helpers/read-only.ts';
@@ -63,9 +65,14 @@ const workspaceRow = (hostId: string, project: string, name: string, path: strin
 // An omp agent as `agents.list` gives one, its sessionId that of the helper's omp session.
 const ompAgent = (terminalId: string) => ({ terminalId, title: null, agent: 'omp', state: 'working', stateStartedAt: 0, sessionId: 's1' });
 
+// How many calls the `ssh` stand-in had logged when `fleetOf` asked for the fleet: those before
+// are the worker's first catch-up's, which asks every listed host.
+let catchUpCalls = 0;
+
 // The worker on an Orca host with `rows`, each with one omp agent in `agents.list`, which
-// `agent` changes; its fleet answer.
-async function fleetOf(rows: object[], agent: object = {}) {
+// `agent` changes; its fleet answer, asked once the worker's first catch-up has ended. `calls`:
+// the stand-ins whose ssh calls `catchUpCalls` counts.
+async function fleetOf(rows: object[], agent: object = {}, calls?: { ssh(): string[][] }) {
   const host = mockHost({
     results: {
       'workspace.list': { workspaces: rows, truncated: false },
@@ -73,6 +80,8 @@ async function fleetOf(rows: object[], agent: object = {}) {
     },
   });
   worker = await mountWorker(workerModule, { host });
+  await caughtUp(homedir());
+  catchUpCalls = calls?.ssh().length ?? 0;
   return (await worker.request('spyhop.fleet', { request: 1 })) as FleetAnswer;
 }
 
@@ -88,15 +97,14 @@ test('Agent on an SSH workspace', async () => {
     controlmaster: { devbox: 'false' },
   });
 
-  const fleet = await fleetOf([workspaceRow(`ssh:${DEVBOX}`, 'infra', 'main', folder)]);
+  const fleet = await fleetOf([workspaceRow(`ssh:${DEVBOX}`, 'infra', 'main', folder)], {}, calls);
 
   const [card] = cardsIn(fleet, 'devbox') ?? [];
   assert.ok(card, JSON.stringify(fleet.groups.map((group) => group.name)));
   assert.equal(costOf(card), '$0.10');
-  const ssh = calls.ssh();
-  // the card's sessions are read over `devbox`; the catch-up asks every listed host, `jeff` too
-  assert.ok(ssh.some(([alias]) => alias === 'devbox'));
-  assert.deepEqual(ssh.filter((args) => !readOnlyLine(args.at(-1)!)), []);
+  const ssh = calls.ssh().slice(catchUpCalls);
+  assert.ok(ssh.length > 0);
+  assert.deepEqual(ssh.filter((args) => args[0] !== 'devbox' || !readOnlyLine(args.at(-1)!)), []);
   assert.deepEqual(calls.orca().filter((args) => !/^(host|environment) list --json$/.test(args)), []);
 });
 
@@ -115,14 +123,14 @@ test('Session of a sub-folder on an SSH workspace', async () => {
   });
 
   const row = workspaceRow(`ssh:${DEVBOX}`, 'infra', 'main', folder);
-  const fleet = await fleetOf([row], { title: 'π - Ship the deploy script - tools', sessionId: null });
+  const fleet = await fleetOf([row], { title: 'π - Ship the deploy script - tools', sessionId: null }, calls);
 
   const [card] = cardsIn(fleet, 'devbox') ?? [];
   assert.ok(card, JSON.stringify(fleet.groups.map((group) => group.name)));
   assert.deepEqual([costOf(card), card.folder, card.branch], ['$0.10', 'tools', 'feat/deploy']);
-  const ssh = calls.ssh();
-  assert.ok(ssh.some(([alias]) => alias === 'devbox'));
-  assert.deepEqual(ssh.filter((args) => !readOnlyLine(args.at(-1)!)), []);
+  const ssh = calls.ssh().slice(catchUpCalls);
+  assert.ok(ssh.length > 0);
+  assert.deepEqual(ssh.filter((args) => args[0] !== 'devbox' || !readOnlyLine(args.at(-1)!)), []);
 });
 
 // The paired Orca server `jeff-server`, reached as `jeff`, with one omp agent in its workspace
@@ -177,7 +185,7 @@ function pairedServer(
 test('Agent on a paired Orca server', async () => {
   const { rows, calls } = pairedServer();
 
-  const fleet = await fleetOf(rows);
+  const fleet = await fleetOf(rows, {}, calls);
   // a refresh within a minute lists the server's agents again, not the hosts
   await worker!.request('spyhop.fleet', { request: 2 });
 
@@ -194,10 +202,9 @@ test('Agent on a paired Orca server', async () => {
   const [card] = cardsIn(fleet, 'jeff-server') ?? [];
   assert.ok(card);
   assert.equal(costOf(card), '$0.10');
-  const ssh = calls.ssh();
-  // the card's sessions are read over `jeff`; the catch-up asks every listed host, `devbox` too
-  assert.ok(ssh.some(([alias]) => alias === 'jeff'));
-  assert.deepEqual(ssh.filter((args) => !readOnlyLine(args.at(-1)!)), []);
+  const ssh = calls.ssh().slice(catchUpCalls);
+  assert.ok(ssh.length > 0);
+  assert.deepEqual(ssh.filter((args) => args[0] !== 'jeff' || !readOnlyLine(args.at(-1)!)), []);
   assert.deepEqual(calls.orca().filter((args) => !/^((host|environment) list|(agent|terminal) list --environment jeff-server) --json$/.test(args)), []);
   // and one terminal list of the server per refresh, for the panes of its agents
   assert.deepEqual(

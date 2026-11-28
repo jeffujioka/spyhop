@@ -33,10 +33,10 @@ export const caughtUp = (home: string, runs = 1) => until(() => catchUps(home) >
 
 // The worker's answer for the range tab `tab` over `range`, once its first catch-up has read the
 // session files `prepare` wrote under the home (test/helpers/live.ts mounts it, with the mock
-// clock at `now`), and the tab bar and the Spend tab drawn from it.
-export async function rangeOf(workspaces: HostWorkspace[], { tab, range, ...mounting }: Mounting & { tab: RangeTab; range: Range }): Promise<{ answer: RangeAnswer; html: string }> {
-  const { home, mounted } = await mountOn(workspaces, mounting);
+// clock at `now`), the tab bar and the Spend tab drawn from it, and the stand-ins' calls.
+export async function rangeOf(workspaces: HostWorkspace[], { tab, range, ...mounting }: Mounting & { tab: RangeTab; range: Range }) {
+  const { home, mounted, calls } = await mountOn(workspaces, mounting);
   await caughtUp(home);
   const answer = (await mounted.request('spyhop.range', { request: 1, tab, range })) as RangeAnswer;
-  return { answer, html: tabBar(tab, range) + spendTab(answer) };
+  return { answer, html: tabBar(tab, range) + spendTab(answer), calls };
 }

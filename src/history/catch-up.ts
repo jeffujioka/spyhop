@@ -22,7 +22,7 @@
 // host, of the folder the file itself records first (omp: its `session` entry), else that
 // folder, else `n/a`.
 import { type } from 'node:os';
-import { readGit } from '../core/git.js';
+import { readOrigin } from '../core/git.js';
 import { takeLines } from '../core/insights.js';
 import { claudeProvider } from '../core/providers/claude.js';
 import { claudeProjectsDir } from '../core/providers/claude-sources.js';
@@ -32,7 +32,7 @@ import { absoluteFolder, listFolder, mainSessionOf, SUBAGENT_DEPTH } from '../co
 import { scanFile } from '../core/refresh.js';
 import type { Run } from '../exec.ts';
 import { LOCAL } from '../fleet.ts';
-import type { HistoryHost } from '../hosts.ts';
+import { type HistoryHost, placeOf } from '../hosts.ts';
 import { HISTORY_VERSION, type Store } from './store.ts';
 
 // The meta key of the number of runs that have ended.
@@ -97,11 +97,13 @@ export function createCatchUp({
   async function repoOf(exec: Run, cwd: string | null) {
     const folder = absoluteFolder(cwd);
     if (!folder) return 'n/a';
-    const { origin } = await readGit({ exec }, { cwd: folder, on: null });
-    return origin ?? folder;
+    return (await readOrigin({ exec }, { cwd: folder, on: null })) ?? folder;
   }
 
-  async function catchUp({ host, exec }: Place, { harness, fold }: Harness, dir: string, file: { path: string; mtimeMs: number; size: number }) {
+  // A read is saved only while its host has been reached, so that a repo asked over a dropped
+  // connection (its origin none) is never kept for good.
+  async function catchUp(place: Place, { harness, fold }: Harness, dir: string, file: { path: string; mtimeMs: number; size: number }) {
+    const { host, exec } = place;
     const row = store.file(host, harness, file.path);
     const usable = row?.version === HISTORY_VERSION ? row : null;
     if (usable && usable.size === file.size && usable.mtimeMs === file.mtimeMs) return;
@@ -109,6 +111,7 @@ export function createCatchUp({
     const read = await scanFile(exec, fold, kept ? { state: kept.fold, pos: usable!.pos } : null, file.path, file.size);
     const restarted = read.restarted || !kept;
     const repo = restarted ? await repoOf(exec, read.scan.state?.cwd ?? null) : kept!.repo;
+    if (!place.reached()) throw new Error(`lost ${host} while reading ${file.path}`);
     const lines = read.scan.state ? takeLines(read.scan.state.insights) : [];
     store.saveRead(
       { host, harness, path: file.path, pos: read.scan.pos, size: file.size, mtimeMs: file.mtimeMs, version: HISTORY_VERSION, state: { fold: read.scan.state, repo } },
@@ -146,8 +149,8 @@ export function createCatchUp({
     return ended;
   }
 
-  // Reads the Orca host `host` over `ssh` to its alias: whether it was read, and whether every
-  // listing succeeded.
+  // Reads the Orca host `host` over `ssh` to its alias, from its place (`placeOf`): whether it
+  // was read, and whether every listing succeeded.
   async function readRemote({ id, name, alias }: HistoryHost) {
     let reached = true;
     const exec: Run = async (command, args, options) => {
@@ -155,18 +158,19 @@ export function createCatchUp({
       if (result.code === 255) reached = false;
       return result;
     };
+    // its programs one after the other, as every program of a host's read
+    let place: { os: string; home: string } | null = null;
     try {
       const uname = await exec('uname', ['-s']);
-      const printenv = uname.code === 0 ? await exec('printenv', ['HOME']) : null;
-      const hostHome = printenv?.code === 0 ? printenv.stdout.trim() : '';
-      if (hostHome) {
-        const ended = await readHost({ host: id, exec, os: uname.stdout.trim(), home: hostHome, reached: () => reached });
-        if (reached) return { name, read: true, ended };
-      }
+      place = placeOf(uname, uname.code === 0 ? await exec('printenv', ['HOME']) : null, null);
     } catch (error) {
       log(`spyhop: catch-up cannot ask the place of ${name}: ${(error as Error).message}`);
     }
-    log(`spyhop: catch-up cannot read ${name}`);
+    if (place) {
+      const ended = await readHost({ host: id, exec, ...place, reached: () => reached });
+      if (reached) return { name, read: true, ended };
+      log(`spyhop: catch-up cannot reach ${name}`);
+    }
     return { name, read: false, ended: true };
   }
 

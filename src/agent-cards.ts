@@ -14,6 +14,7 @@ import { NA, createSessions, readStats } from './core/providers/index.js';
 import { collapseBySession, linkAgents } from './core/session-link.js';
 import { createTtlCache } from './core/ttl-cache.js';
 import type { Run } from './exec.ts';
+import { placeOf } from './hosts.ts';
 import type { Num, Point } from './protocol.ts';
 
 // An agent as Orca reports it (`agents.list` of the worker host API, `orca agent list --json`),
@@ -217,18 +218,14 @@ export function createAgentCards({ run, home, kept = [] }: { run: Run; home: str
   // and none would read as a session without any
   const listedSubAgents = new Map<string, BuiltCard['subAgents']>();
 
-  // A machine's operating system, for the `stat` the session listing runs, and its home folder
-  // (this computer's is given; another host's is asked): asked once, and again after a failed
-  // ask or once the host could not be reached (see execOn).
+  // A machine's place (`placeOf`, src/hosts.ts; this computer's home is given, another host's is
+  // asked): asked once, and again after a failed ask or once the host could not be reached (see
+  // execOn).
   const places = new Map<Machine, Promise<{ os: string; home: string }>>();
   function placeOn(machine: Machine) {
     if (!places.has(machine)) {
       const exec = execOn(machine);
-      const place = Promise.all([exec('uname', ['-s']), machine ? exec('printenv', ['HOME']) : null]).then(([uname, printenv]) => {
-        const machineHome = printenv ? printenv.stdout.trim() : home;
-        if (uname.code !== 0 || printenv?.code || !machineHome) throw new Error('machine place unknown');
-        return { os: uname.stdout.trim(), home: machineHome };
-      });
+      const place = Promise.all([exec('uname', ['-s']), machine ? exec('printenv', ['HOME']) : null]).then(([uname, printenv]) => placeOf(uname, printenv, home));
       place.catch(() => places.delete(machine));
       places.set(machine, place);
     }

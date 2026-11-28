@@ -61,15 +61,16 @@ atTestEnd(async () => {
 // list and reach another Orca host.
 export type Mounting = { prepare?: (home: string) => void; now?: number; homes?: Record<string, string>; orca?: Record<string, string> };
 
-// The real worker mounted on this computer's Orca host with `workspaces`, and its home.
+// The real worker mounted on this computer's Orca host with `workspaces`, its home, and the
+// stand-ins' calls.
 export async function mountOn(workspaces: HostWorkspace[], { prepare, now = NOW, homes = {}, orca = {} }: Mounting) {
   setEnv('TZ', 'UTC');
   mock.timers.enable({ apis: ['Date'], now });
   const home = useTempHome();
   prepare?.(home);
-  standIns({ homes, orca });
+  const calls = standIns({ homes, orca });
   worker = await mountWorker(workerModule, { host: orcaHost(home, { workspaces }) });
-  return { home, mounted: worker };
+  return { home, mounted: worker, calls };
 }
 
 // The real worker mounted on this computer's Orca host with `workspaces`, and its fleet answer.
