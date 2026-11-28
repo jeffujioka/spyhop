@@ -17,12 +17,15 @@
 // stats, `detailOf(state)` gives the series of the whole file (src/core/series.js), from the same
 // state. Asked with `{ insights: true }` when the state starts, `fold` also notes in the state's
 // daily lines (src/core/insights.js) each response that logs its model, at no cost, and what each
-// `cost-state` adds to each model's cost (see `noteCostState`).
+// `cost-state` adds to each model's cost (see `noteCostState`), and the session's Trace lanes: a
+// response from the prompt or the tool result it answers to its last block, a tool use from its
+// block to its result, a turn's end at a block that stops for no tool use, and the prompts.
 
 import { add, parseEntries, tally } from './jsonl.js';
 import { burnRate, cacheRate, isNumber, tokenCount, wholeSession } from './shared.js';
 import { addCall, addMinute, detailOf, entryOf, newSeries, pushRecent, retractLastCall, toolAnswered, toolCalled } from '../series.js';
-import { newInsights, noteCall, noteCost } from '../insights.js';
+import { newInsights, noteCall, noteCost, notePrompt, noteToolEnd, noteToolStart, noteTurnEnd } from '../insights.js';
+import { SUBAGENT_TOOLS } from '../trace.js';
 import { absoluteFolder } from './session-files.js';
 
 // A user entry that carries a tool's result continues a turn; any other (not meta) one starts it.
@@ -98,6 +101,8 @@ function emptyState(opts) {
     models: {},
     minutes: [],
     last: undefined,
+    // the time of the latest prompt or tool result, which the next response answers and starts at
+    sent: undefined,
     // the folder of the first entry that records an absolute one (see `absoluteFolder`), null
     // before one
     cwd: null,
@@ -132,9 +137,10 @@ const lineModel = (name) =>
     .replace(/\[[^\]]*\]$/, '')
     .replace(/-\d{8}$/, '');
 
-// Counts the response `last` (`{ id, call, cold, model, tokens }`) in the calls, the series, the
-// minutes, the cold starts, the tokens by model and, when it logs its model, the daily lines, at
-// no cost; `sign` -1 takes it back out, which only the newest one can.
+// Counts the response `last` (`{ id, call, cold, model, tokens, start }`) in the calls, the
+// series, the minutes, the cold starts, the tokens by model and, when it logs its model, the
+// daily lines, at no cost, and the Trace lanes from `start`; `sign` -1 takes it back out, which
+// only the newest one can.
 function count(state, last, sign) {
   if (sign > 0) addCall(state.series, last.call);
   else retractLastCall(state.series, last.call);
@@ -145,7 +151,7 @@ function count(state, last, sign) {
     state.cold.tokens += sign * last.call.write;
   }
   if (last.model !== null) entryOf(state.models, last.model, () => ({ cost: null, tokens: 0 })).tokens += sign * last.tokens;
-  if (state.insights && last.model !== null) noteCall(state.insights, { ...last.call, end: last.call.t, model: lineModel(last.model), tokens: last.tokens, cost: 0 }, sign);
+  if (state.insights && last.model !== null) noteCall(state.insights, { ...last.call, start: last.start, end: last.call.t, model: lineModel(last.model), tokens: last.tokens, cost: 0 }, sign);
 }
 
 // Notes in the daily lines what the `cost-state` that gives `models` (see `costByModel`) adds to
@@ -177,7 +183,14 @@ function fold(state, entries, opts) {
     if ((entry.type === 'user' || entry.type === 'assistant') && message && typeof message === 'object' && isNumber(time)) {
       s.firstMessage ??= time;
       s.lastMessage = time;
-      if (entry.type === 'user' && isPrompt(entry)) s.began = time;
+      if (entry.type === 'user' && !entry.isMeta) {
+        // a prompt or a tool result, which the next response answers
+        s.sent = time;
+        if (isPrompt(entry)) {
+          s.began = time;
+          if (s.insights) notePrompt(s.insights, time);
+        }
+      }
       if (entry.type === 'assistant' && message.model !== SYNTHETIC_MODEL) {
         // the turn so far: this reply minus the prompt before it (none: unknown)
         s.latencyMs = isNumber(s.began) ? time - s.began : undefined;
@@ -197,6 +210,8 @@ function fold(state, entries, opts) {
         // block of an older one, written again after other responses, cannot be taken out of a
         // point merged since; its response is in the series already, so it adds nothing there.
         const newest = id !== undefined && id === s.last?.id;
+        // a response starts at what it answers; its later blocks keep its start
+        const start = newest ? s.last.start : (s.sent ?? time);
         if (newest) count(s, s.last, -1);
         if (newest || !earlier) {
           const call = {
@@ -211,17 +226,23 @@ function fold(state, entries, opts) {
           // a cold start: a response after the first that read nothing from the prompt cache
           const cold = s.calls > 0 && cacheRead(message) === 0;
           const model = typeof message.model === 'string' ? message.model : null;
-          s.last = { id, call, cold, model, tokens: tokenCount(responseTokens(message)) };
+          s.last = { id, call, cold, model, tokens: tokenCount(responseTokens(message)), start };
           count(s, s.last, 1);
         }
         for (const part of Array.isArray(message.content) ? message.content : []) {
-          if (part?.type === 'tool_use') toolCalled(s, part.id, part.name);
+          if (part?.type === 'tool_use') {
+            toolCalled(s, part.id, part.name);
+            if (s.insights) noteToolStart(s.insights, part.id, time, part.name);
+          }
         }
+        if (s.insights && typeof message.stop_reason === 'string' && message.stop_reason !== 'tool_use') noteTurnEnd(s.insights, time);
         if (s.logged) s.logged.stale = true;
       }
       if (entry.type === 'user' && Array.isArray(message.content)) {
         for (const part of message.content) {
-          if (part?.type === 'tool_result') toolAnswered(s, part.tool_use_id, part.is_error === true);
+          if (part?.type !== 'tool_result') continue;
+          if (s.insights) noteToolEnd(s.insights, part.tool_use_id, time, SUBAGENT_TOOLS['claude-code']);
+          toolAnswered(s, part.tool_use_id, part.is_error === true);
         }
       }
     } else if (entry.type === 'cost-state') {

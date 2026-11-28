@@ -18,7 +18,8 @@
 import { burnRate, isNumber, tokenCount } from './shared.js';
 import { addCall, addCost, addMinute, detailOf, entryOf, newSeries, pushRecent } from '../series.js';
 import { callCost, COPILOT } from '../copilot-prices.js';
-import { modelKey, noteCall } from '../insights.js';
+import { modelKey, noteCall, notePrompt, noteTool, noteTurnEnd } from '../insights.js';
+import { SUBAGENT_TOOLS } from '../trace.js';
 
 function parseSession({ messages, compactions, tools, loggedCost, sources }) {
   const rows = Array.isArray(messages) ? messages : [];
@@ -89,16 +90,31 @@ function callsCost(session) {
   return sumAssistants(session, costOf);
 }
 
-// Adds the model calls (see isCall) of `rows`, `historyRowsQuery`'s rows of opencode-sources.js,
-// to the daily lines of `ins` (src/core/insights.js), each on the day it was created, under its
-// model with its provider, at the cost of costOf, with the tokens `tokens` counts of it (none for
-// a call that logs no total and not all its parts). A row that logs no model is in no line.
+// Adds `rows`, `historyRowsQuery`'s rows of opencode-sources.js, to `ins` (src/core/insights.js):
+// the model calls (see isCall) to its daily lines, each on the day it ended, under its model with
+// its provider, at the cost of costOf, with the tokens `tokens` counts of it (none for a call that
+// logs no total and not all its parts); a row that logs no model is in no line. The rows of the
+// root session (`own`) also run in its Trace lanes: a call from its `created` to where its first
+// tool call starts, else to its `completed`; a tool call from its `start` (else its message's
+// `created`) to its `end` (else its message's `completed`); a turn ends when a call completes, and
+// a user message is a prompt.
 export function opencodeInsights(rows, ins) {
   for (const row of rows) {
-    if (!isCall(row) || typeof row.modelId !== 'string' || !isNumber(row.created)) continue;
-    const [uncached, read, write, output] = [row.input, row.cacheRead, row.cacheWrite, row.output].map(tokenCount);
-    const tokens = tokenCount(messageTotal(row));
-    noteCall(ins, { end: row.created, model: modelKey(row.providerId, row.modelId), tokens, uncached, read, write, output, cost: costOf(row), copilot: row.providerId === COPILOT });
+    const own = row.own === 1;
+    if (row.role === 'user') {
+      if (own && isNumber(row.created)) notePrompt(ins, row.created);
+    } else if (row.role === 'tool') {
+      const [start, end] = [isNumber(row.start) ? row.start : row.created, isNumber(row.end) ? row.end : row.completed];
+      if (own) noteTool(ins, start, end, SUBAGENT_TOOLS.opencode.includes(row.name));
+    } else {
+      if (isCall(row) && typeof row.modelId === 'string' && isNumber(row.created)) {
+        const [uncached, read, write, output] = [row.input, row.cacheRead, row.cacheWrite, row.output].map(tokenCount);
+        const tokens = tokenCount(messageTotal(row));
+        const end = [row.toolStart, row.completed, row.created].find(isNumber);
+        noteCall(ins, { start: own ? row.created : undefined, end, model: modelKey(row.providerId, row.modelId), tokens, uncached, read, write, output, cost: costOf(row), copilot: row.providerId === COPILOT });
+      }
+      if (own && isNumber(row.completed)) noteTurnEnd(ins, row.completed);
+    }
   }
 }
 

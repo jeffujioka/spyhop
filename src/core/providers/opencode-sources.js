@@ -159,31 +159,71 @@ function currentMessagesQuery(ids) {
   );
 }
 
-// The rows the history store keeps of the model calls of `sessions` (see sessionsIn), created
-// from `fromMs` on (epoch ms), after the row `afterId` of that time when given, `limit` of them,
-// by `time_created` and `id`: the current tables' `assistant` and `compaction` rows and the
-// legacy tables' assistant messages, a compaction's summary (`summary` 1) included; a legacy
-// session the current tables hold is read from them. Only the fields of the figures are read,
-// never a message's text: `{ id, created, sessionId, directory, modelId, providerId, cost, total,
-// input, output, reasoning, cacheRead, cacheWrite }`, `sessionId` the session's root (its
-// `parent_id` followed to a session without one, or whose parent the database lacks) and
-// `directory` the folder of the row's own session.
+// The columns of historyRowsQuery's rows.
+const HISTORY_COLUMNS = ['id', 'created', 'sessionId', 'directory', 'role', 'own', 'modelId', 'providerId', 'cost', 'total', 'input', 'output', 'reasoning', 'cacheRead', 'cacheWrite', 'completed', 'toolStart', 'name', 'start', 'end'];
+
+// The rows the history store keeps of `sessions` (see sessionsIn), created from `fromMs` on (epoch
+// ms), after the row `afterId` of that time when given, `limit` of them, by `created` and `id`; a
+// legacy session the current tables hold is read from them. Only the fields of the figures and of
+// the Trace lanes are read, never a message's text. Each row is one of:
+//   - a model call (`role` 'assistant'): the current tables' `assistant` and `compaction` rows and
+//     the legacy tables' assistant messages, a compaction's summary (`summary` 1) included, with
+//     `modelId, providerId, cost, total, input, output, reasoning, cacheRead, cacheWrite`, the time
+//     it `completed` and `toolStart`, the time the first of its tool calls started (null without
+//     one);
+//   - a user message (`role` 'user');
+//   - a tool call (`role` 'tool') of the message `created` and `completed`, of the tool `name`, that
+//     ran from `start` to `end` as opencode logs them (the current tables: its `time.ran`, else its
+//     `time.created`, to its `time.completed`; the legacy ones: its `state.time.start` to its
+//     `state.time.end`), each null when not logged.
+// `id` is the message's (a current tool call's with its place in the message's `content`, a legacy
+// one's that of its part), `created` the time the message was created, `sessionId` the session's
+// root (its `parent_id` followed to a session without one, or whose parent the database lacks),
+// `directory` the folder of the row's own session and `own` 1 when that session is the root.
 export function historyRowsQuery(sessions, fromMs, afterId, limit) {
   const from = Number(fromMs);
-  const after = afterId === null ? `m.time_created >= ${from}` : `(m.time_created > ${from} OR (m.time_created = ${from} AND m.id > ${literal(afterId)}))`;
-  const fields = (model, provider, total) =>
-    `m.id AS id, m.time_created AS created, tree.root AS sessionId, tree.directory AS directory, json_extract(m.data, '$.${model}') AS modelId, ` +
-    `json_extract(m.data, '$.${provider}') AS providerId, json_extract(m.data, '$.cost') AS cost, ${total} AS total, ` +
-    "json_extract(m.data, '$.tokens.input') AS input, json_extract(m.data, '$.tokens.output') AS output, " +
-    "json_extract(m.data, '$.tokens.reasoning') AS reasoning, json_extract(m.data, '$.tokens.cache.read') AS cacheRead, " +
-    "json_extract(m.data, '$.tokens.cache.write') AS cacheWrite";
-  const current =
-    `SELECT ${fields('model.id', 'model.providerID', 'NULL')} FROM session_message AS m JOIN tree ON tree.id = m.session_id AND tree.current = 1 ` +
-    `WHERE m.type IN ('assistant', 'compaction') AND ${after}`;
-  const legacy =
-    `SELECT ${fields('modelID', 'providerID', "json_extract(m.data, '$.tokens.total')")} FROM message AS m JOIN tree ON tree.id = m.session_id AND tree.current = 0 ` +
-    `WHERE json_extract(m.data, '$.role') = 'assistant' AND ${after}`;
-  const parts = { [BOTH]: [current, legacy], [CURRENT]: [current], [LEGACY]: [legacy] }[sessions];
+  const after = (id) => (afterId === null ? `m.time_created >= ${from}` : `(m.time_created > ${from} OR (m.time_created = ${from} AND ${id} > ${literal(afterId)}))`);
+  // the row of `values` (column -> SQL), NULL in the columns it does not give
+  const row = (values) => HISTORY_COLUMNS.map((name) => `${values[name] ?? 'NULL'} AS "${name}"`).join(', ');
+  const json = (path, of = 'm.data') => `json_extract(${of}, '$.${path}')`;
+  const message = (role) => ({
+    id: 'm.id',
+    created: 'm.time_created',
+    sessionId: 'tree.root',
+    directory: 'tree.directory',
+    role: literal(role),
+    own: '(tree.id = tree.root)',
+    completed: json('time.completed'),
+  });
+  const call = (model, provider, total, toolStart) => ({
+    ...message('assistant'),
+    modelId: json(model),
+    providerId: json(provider),
+    cost: json('cost'),
+    total,
+    ...Object.fromEntries(['input', 'output', 'reasoning'].map((name) => [name, json(`tokens.${name}`)])),
+    cacheRead: json('tokens.cache.read'),
+    cacheWrite: json('tokens.cache.write'),
+    toolStart,
+  });
+  const currentTool = `coalesce(${json('time.ran', 'c.value')}, ${json('time.created', 'c.value')})`;
+  const currentJoin = 'FROM session_message AS m JOIN tree ON tree.id = m.session_id AND tree.current = 1';
+  const current = [
+    `SELECT ${row(call('model.id', 'model.providerID', 'NULL', `(SELECT min(${currentTool}) FROM json_each(m.data, '$.content') AS c WHERE ${json('type', 'c.value')} = 'tool')`))} ` +
+      `${currentJoin} WHERE m.type IN ('assistant', 'compaction') AND ${after('m.id')}`,
+    `SELECT ${row(message('user'))} ${currentJoin} WHERE m.type = 'user' AND ${after('m.id')}`,
+    `SELECT ${row({ ...message('tool'), id: "m.id || '/' || c.key", name: json('name', 'c.value'), start: currentTool, end: json('time.completed', 'c.value') })} ` +
+      `${currentJoin}, json_each(m.data, '$.content') AS c WHERE m.type = 'assistant' AND ${json('type', 'c.value')} = 'tool' AND ${after("m.id || '/' || c.key")}`,
+  ];
+  const legacyJoin = 'FROM message AS m JOIN tree ON tree.id = m.session_id AND tree.current = 0';
+  const legacy = [
+    `SELECT ${row(call('modelID', 'providerID', json('tokens.total'), `(SELECT min(${json('state.time.start', 'p.data')}) FROM part AS p WHERE p.message_id = m.id AND ${json('type', 'p.data')} = 'tool')`))} ` +
+      `${legacyJoin} WHERE ${json('role')} = 'assistant' AND ${after('m.id')}`,
+    `SELECT ${row(message('user'))} ${legacyJoin} WHERE ${json('role')} = 'user' AND ${after('m.id')}`,
+    `SELECT ${row({ ...message('tool'), id: 'p.id', name: json('tool', 'p.data'), start: json('state.time.start', 'p.data'), end: json('state.time.end', 'p.data') })} ` +
+      `${legacyJoin} JOIN part AS p ON p.message_id = m.id WHERE ${json('type', 'p.data')} = 'tool' AND ${after('p.id')}`,
+  ];
+  const parts = { [BOTH]: [...current, ...legacy], [CURRENT]: current, [LEGACY]: legacy }[sessions];
   return (
     `WITH RECURSIVE s AS ${sessions}, tree(id, root, directory, current) AS (` +
     'SELECT id, id, directory, current FROM s WHERE parent_id IS NULL OR parent_id NOT IN (SELECT id FROM s) ' +

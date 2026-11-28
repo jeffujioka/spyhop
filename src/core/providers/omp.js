@@ -24,12 +24,16 @@
 // with the agent kind and the model a sub-agent's `session_init` entry records, and the times of
 // the file's first and last entry, a sub-agent's start and end. Asked with `{ insights: true }`
 // when the state starts, `fold` also notes each model call that logs its model in the state's
-// daily lines (src/core/insights.js), as `models` counts only such calls.
+// daily lines (src/core/insights.js), as `models` counts only such calls, and the session's Trace
+// lanes: a model call from its message's `timestamp` to its `completedAt`, a tool call from its
+// `tool_execution_start` to its result, a turn's end at a reply that stops it and the developer's
+// prompts, the user messages not attributed to an agent.
 
 import { add, parseEntries, tally } from './jsonl.js';
 import { burnRate, cacheRate, isNumber, tokenCount, wholeSession } from './shared.js';
 import { addCall, addCost, addMinute, detailOf, entryOf, newSeries, pushRecent, toolAnswered, toolCalled } from '../series.js';
-import { modelKey, newInsights, noteCall } from '../insights.js';
+import { modelKey, newInsights, noteCall, notePrompt, noteToolEnd, noteToolStart, noteTurnEnd } from '../insights.js';
+import { SUBAGENT_TOOLS } from '../trace.js';
 import { callCost, COPILOT, copilotWriteCost } from '../copilot-prices.js';
 
 // A fresh accumulator. Sums are `tally`s: undefined until an entry carries the value.
@@ -90,8 +94,8 @@ function emptyState(opts) {
     cwd: null,
     // whether a Copilot call's model is not in the Copilot price table, so the cost is unknown
     unpriced: false,
-    // the daily lines of the model calls (src/core/insights.js), when asked for when the state
-    // starts; else null
+    // the daily lines of the model calls and the Trace lanes (src/core/insights.js), when asked
+    // for when the state starts; else null
     insights: opts?.insights ? newInsights() : null,
     // whether the newest entry that opens or ends a turn left it open: a `message` other than an
     // assistant message that stopped (`stopReason` `stop` or `aborted`), or a `custom_message`;
@@ -126,8 +130,9 @@ function addSpent(s, logged, spent) {
 }
 
 // Adds `call`, a model call or a side call (`side`) of `logged` that spent tokens and ended at
-// `time`, to the minutes, and, when it logs its model, to the models and the daily lines.
-function addSpend(s, logged, time, call, side) {
+// `time`, to the minutes, and, when it logs its model, to the models and the daily lines; a model
+// call that `ran` from `start` to `end` (epoch ms) runs then in the Trace lanes.
+function addSpend(s, logged, time, call, side, ran = { start: undefined, end: time }) {
   const tokens = tokenCount(logged.usage.totalTokens);
   addMinute(s.minutes, time, { ...call, tokens });
   const { provider, model } = logged;
@@ -138,7 +143,7 @@ function addSpend(s, logged, time, call, side) {
   byModel.cost = addCost(byModel.cost, call.cost);
   byModel.tokens += tokens;
   byModel[side ? 'side' : 'main'] = true;
-  if (s.insights && isNumber(time)) noteCall(s.insights, { ...call, end: time, model: key, tokens, side, copilot: provider === COPILOT });
+  if (s.insights && isNumber(ran.end)) noteCall(s.insights, { ...call, start: ran.start, end: ran.end, model: key, tokens, side, copilot: provider === COPILOT });
 }
 
 // Adds `entries` (in file order, after those already in `state`) to `state`, which it changes
@@ -152,7 +157,8 @@ function fold(state, entries, opts) {
       s.firstEntry ??= at;
       s.lastEntry = at;
     }
-    if (e.type === 'message' && e.message) s.turnOpen = !(e.message.role === 'assistant' && TURN_ENDS.has(e.message.stopReason));
+    const ends = e.type === 'message' && e.message?.role === 'assistant' && TURN_ENDS.has(e.message.stopReason);
+    if (e.type === 'message' && e.message) s.turnOpen = !ends;
     else if (e.type === 'custom_message') s.turnOpen = true;
     else if (e.type === 'session_exit') s.turnOpen = false;
     if (e.type === 'session') {
@@ -162,6 +168,8 @@ function fold(state, entries, opts) {
     } else if (e.type === 'session_init') {
       if (typeof e.agent === 'string') s.kind = e.agent;
       if (typeof e.resolvedModel === 'string') s.model = e.resolvedModel;
+    } else if (e.type === 'custom' && e.customType === 'tool_execution_start') {
+      if (s.insights) noteToolStart(s.insights, e.data?.toolCallId, Date.parse(e.data?.startedAt), e.data?.toolName);
     } else if (e.type === 'model_usage') {
       // a side call (a title, a recap, a prediction of the next prompt): in the session's cost
       // and tokens and its own series, but no model call of the series, the cold starts or the
@@ -180,7 +188,11 @@ function fold(state, entries, opts) {
       s.lastMessage = time;
       if (e.message.role === 'user') {
         s.began = time;
+        if (s.insights && e.message.attribution !== 'agent') notePrompt(s.insights, time);
       } else if (e.message.role === 'assistant') {
+        // the call ran from its message's `timestamp` to its `completedAt`, each else the entry's
+        const { timestamp: started, completedAt } = e.message;
+        const ran = { start: isNumber(started) ? started : time, end: isNumber(completedAt) ? completedAt : time };
         // the turn so far: this reply minus the user message before it (none: unknown)
         const ms = time - s.began;
         s.latencyMs = isNumber(ms) ? ms : undefined;
@@ -223,12 +235,14 @@ function fold(state, entries, opts) {
             s.cold.cost = addCost(s.cold.cost, written);
           }
           s.calls += 1;
-          addSpend(s, e.message, time, call, false);
+          addSpend(s, e.message, time, call, false, ran);
         }
         for (const part of Array.isArray(e.message.content) ? e.message.content : []) {
           if (part?.type === 'toolCall') toolCalled(s, part.id, part.name);
         }
+        if (s.insights && ends) noteTurnEnd(s.insights, ran.end);
       } else if (e.message.role === 'toolResult') {
+        if (s.insights) noteToolEnd(s.insights, e.message.toolCallId, time, SUBAGENT_TOOLS.omp);
         toolAnswered(s, e.message.toolCallId, e.message.isError === true);
       }
     } else if (e.type === 'compaction') {

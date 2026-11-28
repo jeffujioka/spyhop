@@ -82,8 +82,14 @@ export function opencodeDatabase(home: string, name = 'basic') {
 export type OpencodeCalls = { provider: string; model: string; contexts: number[] };
 
 // The tokens of one model call of an opencode session: sent fresh, read from the cache, written
-// to it and output.
-export type OpencodeCall = { uncached: number; read: number; write: number; output: number };
+// to it and output; `took`: how long it ran, from its `created` to its `completed`, 1 s when not
+// given; `prompted`: the time of a user message before it, none when not given; `tools`: the
+// `tool` items of its `content`.
+export type OpencodeCall = { uncached: number; read: number; write: number; output: number; took?: number; prompted?: number; tools?: OpencodeTool[] };
+
+// A `tool` item of an opencode call, of the tool `name`, with the times of its `time` as this
+// Mac's database holds them (`created`, `ran`, `completed`), each left out when not given.
+export type OpencodeTool = { name: string; created?: number; ran?: number; completed?: number };
 
 // The session `id` (`ses_window` when not given) of the folder `folder` in opencode's database
 // under `home` (made from current.sql), in the current tables: `calls` of `model` of the provider
@@ -107,17 +113,28 @@ export function opencodeSession(
   }: { provider: string; model: string; calls: OpencodeCall[]; cost: number; id?: string; callCost?: number; last?: number; update?: boolean },
 ) {
   const at = (i: number) => last - 60_000 * (calls.length - 1 - i);
-  const rows = calls.map(({ uncached, read, write, output }, i) => {
+  const rows = calls.flatMap(({ uncached, read, write, output, took = 1000, prompted, tools = [] }, i) => {
+    const content = tools.map(({ name, created, ran, completed }, j) => ({
+      type: 'tool',
+      id: `toolu_${i}_${j}`,
+      name,
+      state: { status: 'completed' },
+      time: { ...(created === undefined ? {} : { created }), ...(ran === undefined ? {} : { ran }), ...(completed === undefined ? {} : { completed }) },
+    }));
     const data = {
-      time: { created: at(i), completed: at(i) + 1000 },
+      time: { created: at(i), completed: at(i) + took },
       agent: 'build',
       model: { id: model, providerID: provider, variant: 'high' },
-      content: [],
+      content,
       finish: 'stop',
       cost: callCost,
       tokens: { input: uncached, output, reasoning: 0, cache: { read, write } },
     };
-    return `INSERT OR REPLACE INTO session_message VALUES ('w${i}', ${sqlText(id)}, 'assistant', ${i + 1}, ${at(i)}, ${at(i) + 1000}, ${sqlText(JSON.stringify(data))});`;
+    const prompt = { time: { created: prompted }, files: [], agents: [] };
+    return [
+      ...(prompted === undefined ? [] : [`INSERT OR REPLACE INTO session_message VALUES ('u${i}', ${sqlText(id)}, 'user', ${2 * i + 1}, ${prompted}, ${prompted}, ${sqlText(JSON.stringify(prompt))});`]),
+      `INSERT OR REPLACE INTO session_message VALUES ('w${i}', ${sqlText(id)}, 'assistant', ${2 * i + 2}, ${at(i)}, ${at(i) + took}, ${sqlText(JSON.stringify(data))});`,
+    ];
   });
   const session = `INSERT OR REPLACE INTO session_v2 VALUES (${sqlText(id)}, 'prj', NULL, 's', ${sqlText(folder)}, 't', '2.0.0', ${cost}, NULL, NULL, ${at(0)}, ${at(calls.length - 1) + 1000}, NULL);`;
   const database = update ? join(home, '.local/share/opencode/opencode.db') : opencodeDatabase(home, 'current');
