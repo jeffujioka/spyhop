@@ -9,7 +9,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { NOW, opencodeSession, type OpencodeCall, workspace } from '../helpers/agent-cards.ts';
 import { claudeSession, claudeSubAgent, FIX, folderOf, ompSession, sessionOf, type OmpCall } from '../helpers/live.ts';
-import { figure, parts, text } from '../helpers/markup.ts';
+import { figure, parts, text, textOutsideFigures } from '../helpers/markup.ts';
 import { withCopilotPrices } from '../helpers/prices.ts';
 
 const MINUTE = 60_000;
@@ -118,14 +118,33 @@ test('Models section of a Claude Code session', async () => {
       claudeSession(home, path, {
         calls: [{ at: NOW - 2 * MINUTE, uncached: 500_000 }],
         model: 'claude-opus-5-5[1m]',
-        cost: 6.22,
-        modelUsage: { 'claude-sonnet-5': 0.77, 'claude-haiku-4-5-20251001': 0.21, 'claude-opus-5-5[1m]': 5.24 },
+        costStates: [{ at: NOW - MINUTE, models: { 'claude-sonnet-5': 0.77, 'claude-haiku-4-5-20251001': 0.21, 'claude-opus-5-5[1m]': 5.24 } }],
       });
       claudeSubAgent(home, path, 'a1', { calls: [{ at: NOW - MINUTE, uncached: 74_880 }], model: 'claude-sonnet-5' });
     },
   });
 
   assert.deepEqual(models(html), ['claude-opus-5-5[1m] · $5.24', 'claude-sonnet-5 · $0.77', 'claude-haiku-4-5-20251001 · $0.21']);
+  // each model's name is text, in the text font, and its cost a figure
+  assert.equal(textOutsideFigures(parts(html, 'data-part', 'models')[0]), 'Models by cost claude-opus-5-5[1m] · claude-sonnet-5 · claude-haiku-4-5-20251001 ·');
   const [bar] = parts(parts(html, 'data-part', 'subagents')[0], 'data-agent');
   assert.equal(text(parts(bar, 'class', 'row label')[0]).split(' · ').at(-1), 'n/a');
+});
+
+// A guard of the carry-over, no scenario of the spec: a newer `cost-state` without `modelUsage`
+// keeps the cost by model of the one before it, as n/a is only for a session none of whose
+// `cost-state` entries holds one.
+test('a cost-state without modelUsage keeps the cost by model before it', async () => {
+  const { html } = await sessionOf([{ project: 'web', name: 'main', agents: ['working'], harness: 'claude' }], {
+    prepare: (home) =>
+      claudeSession(home, workspace(home, 'web-main'), {
+        calls: [{ at: NOW - 3 * MINUTE, uncached: 1000 }],
+        costStates: [
+          { at: NOW - 2 * MINUTE, models: { 'claude-opus-4-6': 1.25 } },
+          { at: NOW - MINUTE, models: null },
+        ],
+      }),
+  });
+
+  assert.deepEqual(models(html), ['claude-opus-4-6 · $1.25']);
 });

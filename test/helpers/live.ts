@@ -455,9 +455,14 @@ export function claudeCalls(home: string, path: string, contexts: number[]) {
 // the tool uses it makes, each answered right after it.
 export type ClaudeCall = { at: number; read?: number; write?: number; uncached?: number; output?: number; tools?: ToolCall[] };
 
-// The lines of a Claude Code transcript of the folder `path` that log `calls` of `model` and
-// `compactions` (automatic ones), in the order of their times, each line an entry.
-function claudeEntries(path: string, calls: ClaudeCall[], compactions: Compaction[], model: string) {
+// A `cost-state` Claude Code logs at `at`: the cost, USD, it gives each model in its `modelUsage`,
+// and its total their sum; null: it holds no `modelUsage`.
+export type CostState = { at: number; models: Record<string, number> | null };
+
+// The lines of a Claude Code transcript of the folder `path` that log `calls` of `model`,
+// `compactions` (automatic ones) and `costStates`, in the order of their times, each line an
+// entry. A `cost-state` has no timestamp, as Claude Code writes none.
+function claudeEntries(path: string, calls: ClaudeCall[], compactions: Compaction[], model: string, costStates: CostState[] = []) {
   const entry = (at: number) => ({ sessionId: 'c1', isSidechain: false, cwd: path, timestamp: new Date(at).toISOString() });
   const response = ({ at, read = 0, write = 0, uncached = 0, output = 0, tools = [] }: ClaudeCall, i: number) => {
     const id = (j: number) => `toolu_${i}_${j}`;
@@ -486,16 +491,26 @@ function claudeEntries(path: string, calls: ClaudeCall[], compactions: Compactio
     at,
     lines: [{ type: 'system', subtype: 'compact_boundary', ...entry(at), compactMetadata: { trigger: 'auto', preTokens: before, postTokens: after } }],
   });
-  return [...calls.map(response), ...compactions.map(boundary)].sort((a, b) => a.at - b.at).flatMap(({ lines }) => lines);
+  const logged = ({ at, models }: CostState) => ({
+    at,
+    lines: [
+      {
+        type: 'cost-state',
+        sessionId: 'c1',
+        totalCostUSD: Object.values(models ?? {}).reduce((sum, usd) => sum + usd, 0),
+        ...(models && { modelUsage: Object.fromEntries(Object.entries(models).map(([name, costUSD]) => [name, { costUSD }])) }),
+      },
+    ],
+  });
+  return [...calls.map(response), ...compactions.map(boundary), ...costStates.map(logged)].sort((a, b) => a.at - b.at).flatMap(({ lines }) => lines);
 }
 
 // Claude Code's folder of the sessions of the folder `path` under `home`.
 const claudeDir = (home: string, path: string) => join(home, '.claude/projects', claudeSlug(path));
 
-// A Claude Code session of the folder `path`, which it records, with `calls` of `model` and
-// `compactions` (automatic ones), in the order of their times; `cost`: the session's total cost,
-// USD, which Claude Code logs after them, none when not given, and `modelUsage` the cost, USD, its
-// `cost-state` gives each model, none when not given.
+// A Claude Code session of the folder `path`, which it records, with `calls` of `model`,
+// `compactions` (automatic ones) and `costStates`, in the order of their times; `cost`: the
+// session's total cost, USD, which Claude Code logs after them, none when not given.
 export function claudeSession(
   home: string,
   path: string,
@@ -504,14 +519,13 @@ export function claudeSession(
     compactions = [],
     model = 'claude-opus-4-6',
     cost,
-    modelUsage,
-  }: { calls: ClaudeCall[]; compactions?: Compaction[]; model?: string; cost?: number; modelUsage?: Record<string, number> },
+    costStates = [],
+  }: { calls: ClaudeCall[]; compactions?: Compaction[]; model?: string; cost?: number; costStates?: CostState[] },
 ) {
   const dir = claudeDir(home, path);
   mkdirSync(dir, { recursive: true });
-  const usage = modelUsage && { modelUsage: Object.fromEntries(Object.entries(modelUsage).map(([name, costUSD]) => [name, { costUSD }])) };
-  const logged = cost === undefined ? [] : [{ type: 'cost-state', sessionId: 'c1', totalCostUSD: cost, ...usage }];
-  const lines = [...claudeEntries(path, calls, compactions, model), ...logged];
+  const logged = cost === undefined ? [] : [{ type: 'cost-state', sessionId: 'c1', totalCostUSD: cost }];
+  const lines = [...claudeEntries(path, calls, compactions, model, costStates), ...logged];
   writeFileSync(join(dir, 'c1.jsonl'), lines.map((line) => `${JSON.stringify(line)}\n`).join(''));
 }
 
