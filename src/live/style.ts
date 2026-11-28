@@ -151,7 +151,7 @@ button:hover { background: var(--orca-accent); color: var(--orca-accent-foregrou
 .cost-card > .headline > .num { font-size: 22px; font-weight: 650; }
 .box .head { margin-bottom: 4px; }
 .box .head .muted { font-size: 11px; }
-.box .item { font-size: 12px; padding: 2px 0; }
+.box .item, [data-list] .item { font-size: 12px; padding: 2px 0; }
 .failed { color: var(--spy-critical); font-size: 11px; }
 /* the Sub-agents section: each bar under its label, in the colour of its kind */
 .kind-1 { --k: var(--spy-k1); }

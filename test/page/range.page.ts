@@ -12,12 +12,17 @@ import { openPanel } from './helpers/page.ts';
 // The local start of the day `day` of November 2026.
 const november = (day: number) => new Date(2026, 10, day).getTime();
 
-// The week to 28 November 2026, whose 27th cost 2.00 USD.
+// The week to 28 November 2026, whose 27th cost 2.00 USD, all of it in the repo `api`.
 const WEEK: SpendView = {
   cost: 2,
   tokens: 300,
   calls: 3,
   chart: [22, 23, 24, 25, 26, 27, 28].map((day) => ({ key: `2026-11-${day}`, v: day === 27 ? 2 : 0 })),
+  byRepo: [{ name: 'api', cost: 2 }],
+  byModel: [],
+  byHarness: [],
+  sideCost: 0,
+  sources: null,
 };
 
 test('Box of the Week cost chart', async () => {
@@ -34,4 +39,19 @@ test('Box of the Week cost chart', async () => {
     boxes.map(({ lines }) => lines),
     [['27 November', '$2.00']],
   );
+});
+
+// The look of the Spend tab's lists: each row as Live's Tools section draws its rows.
+test("A Spend list's rows look like the Tools rows", async () => {
+  const { page } = await openPanel(answersOf(() => ({ cards: [card(FIX)] }), { week: WEEK }));
+  await page.locator('[data-press="tab:spend"]').click();
+  await page.locator('[data-press="range:week"]').click();
+  const row = page.locator('[data-list="repo"] .item');
+  await row.waitFor();
+
+  const look = await row.evaluate((element) => {
+    const style = getComputedStyle(element);
+    return { fontSize: style.fontSize, padding: style.padding };
+  });
+  assert.deepEqual(look, { fontSize: '12px', padding: '2px 0px' });
 });
