@@ -133,7 +133,7 @@ test('an opencode session end to end', async () => {
         database,
         `INSERT INTO session_v2 VALUES ('ses_child', 'prj', 'ses_window', 's', ${sqlText(folder)}, 'Explore the repo', '2.0.0', 0.05, 'general', ${sqlText(JSON.stringify(model))}, ${NOW - 100_000}, ${NOW - 89_000}, NULL);\n` +
           `INSERT INTO session_message VALUES ('k1', 'ses_child', 'assistant', 1, ${NOW - 90_000}, ${NOW - 89_000}, ${sqlText(JSON.stringify(call))});\n` +
-          `UPDATE session_message SET data = json_set(data, '$.content', json('[{"type":"tool","id":"t1","name":"task","state":{"status":"completed"}}]')) WHERE id = 'w3';`,
+          `UPDATE session_message SET data = json_set(data, '$.content', json('[{"type":"tool","id":"t1","name":"task","state":{"status":"completed"}}]')) WHERE id = 'ses_window/w3';`,
       ]);
       opencodeCatalogue(home);
     },

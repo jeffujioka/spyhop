@@ -43,13 +43,14 @@ function startFolder(text) {
 }
 
 // What the meta file of a sub-agent, `text`, tells: its name (the `description`), its kind (the
-// `agentType`) and its model, each null when the file holds no string for it. A text that is
-// not a JSON object throws: the file may not be written out yet, and is read again.
-function metaIn(text) {
+// `agentType`), its model and the id of the tool use that started it (`toolUseId`), each null
+// when the file holds no string for it. A text that is not a JSON object throws: the file may not
+// be written out yet, and is read again.
+export function metaIn(text) {
   const meta = JSON.parse(text);
   if (meta === null || typeof meta !== 'object') throw new Error('no meta object');
   const told = (value) => (typeof value === 'string' ? value : null);
-  return { name: told(meta.description), kind: told(meta.agentType), model: told(meta.model) };
+  return { name: told(meta.description), kind: told(meta.agentType), model: told(meta.model), toolUseId: told(meta.toolUseId) };
 }
 
 // `execOn(machine)` and `readTextOn(machine)`: the plugin's runner and text reader bound to an

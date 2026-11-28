@@ -1,6 +1,8 @@
 // The daily lines of the model calls a fold reads: their figures summed by the local day each
-// call ended and its model, until the caller takes them (src/core/days.js); and the Trace lanes of
-// the session it reads (src/core/trace.js).
+// call ended and its model, until the caller takes them (src/core/days.js); the Trace lanes of
+// the session it reads (src/core/trace.js); and what its summary needs: its title, cost, tokens,
+// models and the statuses its harness logged of the sub-agents it started. No text of a prompt,
+// a reply, a task or a tool call is kept.
 
 import { dayOf } from './days.js';
 import { addSpan, newLane, pruneGaps } from './trace.js';
@@ -16,7 +18,10 @@ export const LINE_FIGURES = ['calls', 'tokens', 'uncached', 'read', 'write', 'ou
 // `firstMs` and `lastMs`: the first and the last time noted (see noteEntry), null before one;
 // `turnEnd`: the end of the turn the session waits on the developer since, null when it does not;
 // `started`: the tool calls started and not ended yet, id -> `{ at, name }`, the time it started
-// (epoch ms) and its tool's name.
+// (epoch ms) and its tool's name. `title`: the newest title the harness logged, null before one;
+// `cost`, `costNa` and `tokens`: the sums of all the calls noted, as the daily lines sum them;
+// `models`: each model a call noted, -> true; `statuses`: the status of each sub-agent, by its key
+// (see noteStatus).
 export const newInsights = () => ({
   open: new Map(),
   lanes: { thinking: newLane(), tools: newLane(), busy: newLane(), developer: newLane() },
@@ -24,6 +29,12 @@ export const newInsights = () => ({
   lastMs: null,
   turnEnd: null,
   started: new Map(),
+  title: null,
+  cost: 0,
+  costNa: 0,
+  tokens: 0,
+  models: {},
+  statuses: new Map(),
 });
 
 // Widens the time `ins` noted to `start` and `end`.
@@ -64,14 +75,19 @@ function lineOf(ins, t, model) {
 export function noteCall(ins, call, sign = 1) {
   const { figures } = lineOf(ins, call.end, call.model);
   figures.tokens += sign * call.tokens;
+  ins.tokens += sign * call.tokens;
+  ins.models[call.model] = true;
   if (call.side) figures.sideTokens += sign * call.tokens;
   else {
     figures.calls += sign;
     for (const name of ['uncached', 'read', 'write', 'output']) figures[name] += sign * call[name];
   }
-  if (call.cost === null) figures.costNa += sign;
-  else {
+  if (call.cost === null) {
+    figures.costNa += sign;
+    ins.costNa += sign;
+  } else {
     figures.cost += sign * call.cost;
+    ins.cost += sign * call.cost;
     if (call.side) figures.sideCost += sign * call.cost;
     if (call.copilot) figures.copilotCost += sign * call.cost;
   }
@@ -138,6 +154,13 @@ export function notePrompt(ins, t) {
 // harness logs apart from its calls.
 export function noteCost(ins, t, model, usd) {
   lineOf(ins, t, model).figures.cost += usd;
+  ins.cost += usd;
+}
+
+// The harness logged `status` for the sub-agent `key` (its name or id where the harness keys its
+// sub-agents); the newest stands. A key or status that is no string is none.
+export function noteStatus(ins, key, status) {
+  if (typeof key === 'string' && typeof status === 'string') ins.statuses.set(key, status);
 }
 
 // The lines noted since the last take, which it empties.

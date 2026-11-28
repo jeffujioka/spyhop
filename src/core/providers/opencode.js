@@ -18,7 +18,7 @@
 import { burnRate, isNumber, tokenCount } from './shared.js';
 import { addCall, addCost, addMinute, detailOf, entryOf, newSeries, pushRecent } from '../series.js';
 import { callCost, COPILOT } from '../copilot-prices.js';
-import { modelKey, noteCall, noteEntry, noteHorizon, notePrompt, noteThinking, noteTool, noteTurnEnd } from '../insights.js';
+import { modelKey, noteCall, noteEntry, noteHorizon, notePrompt, noteStatus, noteThinking, noteTool, noteTurnEnd } from '../insights.js';
 import { SUBAGENT_TOOLS } from '../trace.js';
 
 function parseSession({ messages, compactions, tools, loggedCost, sources }) {
@@ -100,7 +100,8 @@ function callsCost(session) {
 // `created`) to its `end` (else its message's `completed`); a turn ends when a call that is no
 // compaction summary completes with a `finish` other than `tool-calls`, or none (an aborted or a
 // failed one), and a user message is a prompt. No span of a later row starts before this one's
-// `created`, as the rows come by `created`.
+// `created`, as the rows come by `created`. The root session's `title` is the summary's, and a
+// tool call that starts sub-agents (SUBAGENT_TOOLS) notes the status of the session it started.
 export function opencodeInsights(rows, ins) {
   for (const row of rows) {
     noteHorizon(ins, row.created);
@@ -108,12 +109,15 @@ export function opencodeInsights(rows, ins) {
     if (own) {
       noteEntry(ins, row.created);
       noteEntry(ins, row.completed);
+      if (typeof row.title === 'string') ins.title = row.title;
     }
     if (row.role === 'user') {
       if (own && isNumber(row.created)) notePrompt(ins, row.created);
     } else if (row.role === 'tool') {
       const [start, end] = [isNumber(row.start) ? row.start : row.created, isNumber(row.end) ? row.end : row.completed];
-      if (own) noteTool(ins, start, end, SUBAGENT_TOOLS.opencode.includes(row.name));
+      const startsSubAgents = SUBAGENT_TOOLS.opencode.includes(row.name);
+      if (own) noteTool(ins, start, end, startsSubAgents);
+      if (startsSubAgents) noteStatus(ins, row.child, row.status);
     } else {
       if (isCall(row) && typeof row.modelId === 'string' && isNumber(row.created)) {
         const [uncached, read, write, output] = [row.input, row.cacheRead, row.cacheWrite, row.output].map(tokenCount);

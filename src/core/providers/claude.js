@@ -19,12 +19,14 @@
 // daily lines (src/core/insights.js) each response that logs its model, at no cost, and what each
 // `cost-state` adds to each model's cost (see `noteCostState`), and the session's Trace lanes: a
 // response from the prompt or the tool result it answers to its last block, a tool use from its
-// block to its result, a turn's end at a block that stops for no tool use, and the prompts.
+// block to its result, a turn's end at a block that stops for no tool use, and the prompts; and
+// for the session's summary, the newest `custom-title` and the status of each tool use's result
+// (`toolUseResult.status`, a sub-agent's keyed by the id of the tool use that started it).
 
 import { add, parseEntries, tally } from './jsonl.js';
 import { burnRate, cacheRate, isNumber, tokenCount, wholeSession } from './shared.js';
 import { addCall, addMinute, detailOf, entryOf, newSeries, pushRecent, retractLastCall, toolAnswered, toolCalled } from '../series.js';
-import { newInsights, noteCall, noteCost, noteEntry, noteHorizon, notePrompt, noteToolEnd, noteToolStart, noteTurnEnd } from '../insights.js';
+import { newInsights, noteCall, noteCost, noteEntry, noteHorizon, notePrompt, noteStatus, noteToolEnd, noteToolStart, noteTurnEnd } from '../insights.js';
 import { SUBAGENT_TOOLS } from '../trace.js';
 import { absoluteFolder } from './session-files.js';
 
@@ -242,7 +244,10 @@ function fold(state, entries, opts) {
       if (entry.type === 'user' && Array.isArray(message.content)) {
         for (const part of message.content) {
           if (part?.type !== 'tool_result') continue;
-          if (s.insights) noteToolEnd(s.insights, part.tool_use_id, time, SUBAGENT_TOOLS['claude-code']);
+          if (s.insights) {
+            noteToolEnd(s.insights, part.tool_use_id, time, SUBAGENT_TOOLS['claude-code']);
+            noteStatus(s.insights, part.tool_use_id, entry.toolUseResult?.status);
+          }
           toolAnswered(s, part.tool_use_id, part.is_error === true);
         }
       }
@@ -250,6 +255,8 @@ function fold(state, entries, opts) {
       const models = costByModel(entry.modelUsage);
       if (models) noteCostState(s, models);
       s.logged = { usd: entry.totalCostUSD, stale: false, models: models ?? s.logged?.models };
+    } else if (entry.type === 'custom-title') {
+      if (s.insights && typeof entry.customTitle === 'string') s.insights.title = entry.customTitle;
     } else if (entry.type === 'system' && entry.subtype === 'compact_boundary') {
       const { trigger, preTokens, postTokens } = entry.compactMetadata ?? {};
       if (trigger === 'auto') s.compactions += 1;

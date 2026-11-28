@@ -87,3 +87,36 @@ export function minus(spans, busy) {
   }
   return left;
 }
+
+// The Trace of a session (TraceView of src/protocol.ts, but its axis): of its `lanes` (`thinking`,
+// `tools`, `busy` and `developer`, see newInsights of src/core/insights.js), all but `busy`, and
+// `subagents`, the main agent's wait on its sub-agents: the spans of the sub-agents it started
+// itself not covered by `busy`, joined to TRACE_SPANS. `agents`: its sub-agents, `{ key, parent,
+// name, startMs, endMs, cost, running }` each, `parent` the key of the one that started it, null
+// (or a key none has) for the main agent, a time or `cost` null when not known; each row under
+// the agent that started it, in the order they started, with its status: `running` while it runs,
+// else the one `statuses` (key -> status) holds, else n/a.
+export function traceOf(lanes, agents, statuses) {
+  const keys = new Set(agents.map(({ key }) => key));
+  const parentOf = ({ parent }) => (parent !== null && keys.has(parent) ? parent : null);
+  const started = newLane();
+  for (const agent of agents) if (parentOf(agent) === null) addSpan(started, agent.startMs, agent.endMs);
+  const waiting = newLane();
+  for (const [start, end] of minus(started.spans, lanes.busy.spans)) addSpan(waiting, start, end);
+  const rows = [];
+  const seen = new Set();
+  const under = (parent, depth) => {
+    const children = agents.filter((agent) => parentOf(agent) === parent && !seen.has(agent.key)).sort((a, b) => (a.startMs ?? Infinity) - (b.startMs ?? Infinity));
+    for (const { key, name, startMs, endMs, cost, running } of children) {
+      seen.add(key);
+      rows.push({ name, status: running ? 'running' : (statuses.get(key) ?? 'n/a'), cost: cost ?? 'n/a', startMs: startMs ?? 'n/a', endMs: endMs ?? 'n/a', depth });
+      under(key, depth + 1);
+    }
+  };
+  under(null, 0);
+  const view = (lane, { totalMs, spans }) => ({ lane, totalMs, spans });
+  return {
+    lanes: [view('thinking', lanes.thinking), view('tools', lanes.tools), view('subagents', waiting), view('developer', lanes.developer)],
+    agents: rows,
+  };
+}

@@ -165,7 +165,7 @@ export const ompSessionsDir = (home) => `${home}/.omp/agent/sessions`;
 // `title` entry there and rewrites it in place when the title changes (it always equals the
 // latest `title_change` entry). '' when the line is not a title entry: the session then matches
 // no agent title (see shareSessions).
-function titleIn(text) {
+export function titleIn(text) {
   const [entry] = parseEntries(text.split('\n', 1)[0]);
   return entry?.type === 'title' && typeof entry.title === 'string' ? entry.title : '';
 }
@@ -230,7 +230,7 @@ function subAgentsIn(folder, listed) {
 // older than the session, as in a transcript omp copied beside the file of a session it
 // continued. Null, which the counts read as n/a, when the transcript is not known whole, or its
 // turn is open and either time is not known.
-function runs(turn, started) {
+export function runs(turn, started) {
   if (!turn) return null;
   if (!turn.open) return false;
   return turn.last === null || started === null ? null : turn.last >= started;

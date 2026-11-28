@@ -78,7 +78,7 @@ test('a compressed answer is no larger than a raw one could be', async () => {
   });
   execFileSync('sqlite3', [
     database,
-    "WITH RECURSIVE c(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM c WHERE n < 2499) INSERT INTO session_message SELECT 'w' || n, session_id, type, seq + n, time_created + n, time_updated + n, data FROM session_message, c WHERE id = 'w0'",
+    "WITH RECURSIVE c(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM c WHERE n < 2499) INSERT INTO session_message SELECT 'w' || n, session_id, type, seq + n, time_created + n, time_updated + n, data FROM session_message, c WHERE id = 'ses_window/w0'",
   ]);
   standIns({ homes: { 'starfish-bs': remoteHome }, orca: STARFISH_LISTS });
   const logs: string[] = [];

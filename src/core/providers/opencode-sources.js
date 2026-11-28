@@ -34,11 +34,11 @@ const literal = (text) => `'${String(text).replace(/'/g, "''")}'`;
 // is the session's total cost opencode keeps in it (null on a legacy row). CURRENT and LEGACY
 // are the same of a database that has only one of the two tables (see sessionsIn).
 const BOTH =
-  '(SELECT id, parent_id, directory, time_updated, time_archived, 1 AS current, cost FROM session_v2 ' +
-  'UNION ALL SELECT id, parent_id, directory, time_updated, time_archived, 0 AS current, NULL AS cost FROM session ' +
+  '(SELECT id, parent_id, directory, title, time_updated, time_archived, 1 AS current, cost FROM session_v2 ' +
+  'UNION ALL SELECT id, parent_id, directory, title, time_updated, time_archived, 0 AS current, NULL AS cost FROM session ' +
   'WHERE id NOT IN (SELECT id FROM session_v2))';
-const CURRENT = '(SELECT id, parent_id, directory, time_updated, time_archived, 1 AS current, cost FROM session_v2)';
-const LEGACY = '(SELECT id, parent_id, directory, time_updated, time_archived, 0 AS current, NULL AS cost FROM session)';
+const CURRENT = '(SELECT id, parent_id, directory, title, time_updated, time_archived, 1 AS current, cost FROM session_v2)';
+const LEGACY = '(SELECT id, parent_id, directory, title, time_updated, time_archived, 0 AS current, NULL AS cost FROM session)';
 
 // Which of the two session tables a database has.
 export const SCHEMA_QUERY = "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('session_v2', 'session')";
@@ -160,12 +160,41 @@ function currentMessagesQuery(ids) {
 }
 
 // The columns of historyRowsQuery's rows.
-const HISTORY_COLUMNS = ['id', 'created', 'sessionId', 'directory', 'role', 'own', 'modelId', 'providerId', 'cost', 'total', 'input', 'output', 'reasoning', 'cacheRead', 'cacheWrite', 'completed', 'toolStart', 'finish', 'summary', 'name', 'start', 'end'];
+const HISTORY_COLUMNS = [
+  'id',
+  'created',
+  'sessionId',
+  'ownId',
+  'parentId',
+  'title',
+  'directory',
+  'role',
+  'own',
+  'modelId',
+  'providerId',
+  'cost',
+  'total',
+  'input',
+  'output',
+  'reasoning',
+  'cacheRead',
+  'cacheWrite',
+  'completed',
+  'toolStart',
+  'finish',
+  'summary',
+  'name',
+  'start',
+  'end',
+  'status',
+  'child',
+];
 
 // The rows the history store keeps of `sessions` (see sessionsIn), created from `fromMs` on (epoch
-// ms), after the row `afterId` of that time when given, `limit` of them, by `created` and `id`; a
-// legacy session the current tables hold is read from them. Only the fields of the figures and of
-// the Trace lanes are read, never a message's text. Each row is one of:
+// ms), after the row `afterId` of that time when given, `limit` of them (-1: all), by `created`
+// and `id`, those of the root session `root` only when given; a legacy session the current tables
+// hold is read from them. Only the fields of the figures, of the Trace and of the session's
+// summary are read, never a message's text. Each row is one of:
 //   - a model call (`role` 'assistant'): the current tables' `assistant` and `compaction` rows and
 //     the legacy tables' assistant messages, a compaction's summary (`summary` 1) included, with
 //     `modelId, providerId, cost, total, input, output, reasoning, cacheRead, cacheWrite`, the time
@@ -176,14 +205,18 @@ const HISTORY_COLUMNS = ['id', 'created', 'sessionId', 'directory', 'role', 'own
 //   - a tool call (`role` 'tool') of the message `created` and `completed`, of the tool `name`, that
 //     ran from `start` to `end` as opencode logs them (the current tables: its `time.ran`, else its
 //     `time.created`, to its `time.completed`; the legacy ones: its `state.time.start` to its
-//     `state.time.end`), each null when not logged.
+//     `state.time.end`), each null when not logged, with its `state.status` (`status`) and the
+//     session it started (`child`, its `state.metadata.sessionID`), null when none.
 // `id` is the message's (a current tool call's with its place in the message's `content`, a legacy
 // one's that of its part), `created` the time the message was created, `sessionId` the session's
 // root (its `parent_id` followed to a session without one, or whose parent the database lacks),
-// `directory` the folder of the row's own session and `own` 1 when that session is the root.
-export function historyRowsQuery(sessions, fromMs, afterId, limit) {
+// `ownId`, `parentId`, `title` and `directory` the id, the parent's id, the title and the folder
+// of the row's own session, and `own` 1 when that session is the root.
+/** @param {string | null} [root] */
+export function historyRowsQuery(sessions, fromMs, afterId, limit, root = null) {
   const from = Number(fromMs);
-  const after = (id) => (afterId === null ? `m.time_created >= ${from}` : `(m.time_created > ${from} OR (m.time_created = ${from} AND ${id} > ${literal(afterId)}))`);
+  const inRoot = root === null ? '' : ` AND tree.root = ${literal(root)}`;
+  const after = (id) => (afterId === null ? `m.time_created >= ${from}${inRoot}` : `(m.time_created > ${from} OR (m.time_created = ${from} AND ${id} > ${literal(afterId)}))${inRoot}`);
   // the row of `values` (column -> SQL), NULL in the columns it does not give
   const row = (values) => HISTORY_COLUMNS.map((name) => `${values[name] ?? 'NULL'} AS "${name}"`).join(', ');
   const json = (path, of = 'm.data') => `json_extract(${of}, '$.${path}')`;
@@ -191,6 +224,9 @@ export function historyRowsQuery(sessions, fromMs, afterId, limit) {
     id: 'm.id',
     created: 'm.time_created',
     sessionId: 'tree.root',
+    ownId: 'tree.id',
+    parentId: 'tree.parent',
+    title: 'tree.title',
     directory: 'tree.directory',
     role: literal(role),
     own: '(tree.id = tree.root)',
@@ -215,22 +251,36 @@ export function historyRowsQuery(sessions, fromMs, afterId, limit) {
     `SELECT ${row(call('model.id', 'model.providerID', 'NULL', `(SELECT min(${currentTool}) FROM json_each(m.data, '$.content') AS c WHERE ${json('type', 'c.value')} = 'tool')`, "(m.type = 'compaction')"))} ` +
       `${currentJoin} WHERE m.type IN ('assistant', 'compaction') AND ${after('m.id')}`,
     `SELECT ${row(message('user'))} ${currentJoin} WHERE m.type = 'user' AND ${after('m.id')}`,
-    `SELECT ${row({ ...message('tool'), id: "m.id || '/' || c.key", name: json('name', 'c.value'), start: currentTool, end: json('time.completed', 'c.value') })} ` +
-      `${currentJoin}, json_each(m.data, '$.content') AS c WHERE m.type = 'assistant' AND ${json('type', 'c.value')} = 'tool' AND ${after("m.id || '/' || c.key")}`,
+    `SELECT ${row({
+      ...message('tool'),
+      id: "m.id || '/' || c.key",
+      name: json('name', 'c.value'),
+      start: currentTool,
+      end: json('time.completed', 'c.value'),
+      status: json('state.status', 'c.value'),
+      child: json('state.metadata.sessionID', 'c.value'),
+    })} ` + `${currentJoin}, json_each(m.data, '$.content') AS c WHERE m.type = 'assistant' AND ${json('type', 'c.value')} = 'tool' AND ${after("m.id || '/' || c.key")}`,
   ];
   const legacyJoin = 'FROM message AS m JOIN tree ON tree.id = m.session_id AND tree.current = 0';
   const legacy = [
     `SELECT ${row(call('modelID', 'providerID', json('tokens.total'), `(SELECT min(${json('state.time.start', 'p.data')}) FROM part AS p WHERE p.message_id = m.id AND ${json('type', 'p.data')} = 'tool')`, `(${json('summary')} = 1)`))} ` +
       `${legacyJoin} WHERE ${json('role')} = 'assistant' AND ${after('m.id')}`,
     `SELECT ${row(message('user'))} ${legacyJoin} WHERE ${json('role')} = 'user' AND ${after('m.id')}`,
-    `SELECT ${row({ ...message('tool'), id: 'p.id', name: json('tool', 'p.data'), start: json('state.time.start', 'p.data'), end: json('state.time.end', 'p.data') })} ` +
-      `${legacyJoin} JOIN part AS p ON p.message_id = m.id WHERE ${json('type', 'p.data')} = 'tool' AND ${after('p.id')}`,
+    `SELECT ${row({
+      ...message('tool'),
+      id: 'p.id',
+      name: json('tool', 'p.data'),
+      start: json('state.time.start', 'p.data'),
+      end: json('state.time.end', 'p.data'),
+      status: json('state.status', 'p.data'),
+      child: json('state.metadata.sessionID', 'p.data'),
+    })} ` + `${legacyJoin} JOIN part AS p ON p.message_id = m.id WHERE ${json('type', 'p.data')} = 'tool' AND ${after('p.id')}`,
   ];
   const parts = { [BOTH]: [...current, ...legacy], [CURRENT]: current, [LEGACY]: legacy }[sessions];
   return (
-    `WITH RECURSIVE s AS ${sessions}, tree(id, root, directory, current) AS (` +
-    'SELECT id, id, directory, current FROM s WHERE parent_id IS NULL OR parent_id NOT IN (SELECT id FROM s) ' +
-    'UNION SELECT s.id, tree.root, s.directory, s.current FROM s JOIN tree ON s.parent_id = tree.id) ' +
+    `WITH RECURSIVE s AS ${sessions}, tree(id, root, parent, title, directory, current) AS (` +
+    'SELECT id, id, NULL, title, directory, current FROM s WHERE parent_id IS NULL OR parent_id NOT IN (SELECT id FROM s) ' +
+    'UNION SELECT s.id, tree.root, s.parent_id, s.title, s.directory, s.current FROM s JOIN tree ON s.parent_id = tree.id) ' +
     `${parts.join(' UNION ALL ')} ORDER BY created, id LIMIT ${Number(limit)}`
   );
 }

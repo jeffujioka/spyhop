@@ -69,8 +69,9 @@ export async function mountOn(workspaces: HostWorkspace[], { prepare, now = NOW,
   const home = useTempHome();
   prepare?.(home);
   const calls = standIns({ homes, orca, noZstd });
-  worker = await mountWorker(workerModule, { host: orcaHost(home, { workspaces }) });
-  return { home, mounted: worker, calls };
+  const host = orcaHost(home, { workspaces });
+  worker = await mountWorker(workerModule, { host });
+  return { home, mounted: worker, host, calls };
 }
 
 // The real worker mounted on this computer's Orca host with `workspaces`, and its fleet answer.
@@ -309,8 +310,9 @@ export function ompCalls(home: string, path: string, { title, contexts, cost = 0
 // `provider` and `model`: those it logs, when not the session's; `side`: a side call of that
 // purpose (omp's `model_usage` entry), not a model call of the session; `prompted`: the time of
 // the user message the call answers, none when not given, attributed to `promptedBy` (the
-// developer, `user`, when not given); `started`: the time the call started (omp's
-// `message.timestamp`), none when not given; `stop`: its stop reason, none when not given;
+// developer, `user`, when not given) and reading `prompt` (`[text]` when not given); `started`:
+// the time the call started (omp's `message.timestamp`), none when not given; `stop`: its stop
+// reason, none when not given;
 // `tools`: the tool calls it makes; `cttl`: it ended at `at` and wrote to a prompt cache that
 // lasts 5 minutes or an hour (omp's `usage.cttl` of `ephemeral5m` or `ephemeral1h`), so the cache
 // goes cold that long after it.
@@ -328,6 +330,7 @@ export type OmpCall = {
   premium?: number;
   context?: number;
   prompted?: number;
+  prompt?: string;
   promptedBy?: 'user' | 'agent';
   started?: number;
   stop?: 'stop' | 'aborted' | 'toolUse';
@@ -336,8 +339,11 @@ export type OmpCall = {
 };
 // A tool call of the tool `name`, whose result says it failed when `failed`; `started`: the time
 // it started running (omp's `tool_execution_start` entry, none when not given; Claude Code's
-// starts at its `tool_use` block); `answered`: the time of its result, its call's when not given.
-export type ToolCall = { name: string; failed?: boolean; started?: number; answered?: number };
+// starts at its `tool_use` block); `answered`: the time of its result, its call's when not given;
+// `args`: the `command` of its arguments, and `output` the text of its result, none when not
+// given (omp only); `status`: the `toolUseResult.status` of its result, none when not given
+// (Claude Code only).
+export type ToolCall = { name: string; failed?: boolean; started?: number; answered?: number; args?: string; output?: string; status?: string };
 // A compaction at `at` (epoch ms) from `before` tokens of context to `after`.
 export type Compaction = { at: number; before: number; after: number };
 
@@ -363,11 +369,15 @@ export function ompEntries(calls: OmpCall[], compactions: Compaction[], model: s
     };
     if (side) return { at, lines: [{ type: 'model_usage', timestamp: timestamp(at), purpose: side, provider, model: own, usage, stopReason: 'stop' }] };
     const id = (j: number) => `call-${i}-${j}`;
-    const content = tools.map(({ name }, j) => ({ type: 'toolCall', id: id(j), name }));
+    const content = tools.map(({ name, args }, j) => ({ type: 'toolCall', id: id(j), name, ...(args === undefined ? {} : { arguments: { command: args } }) }));
     const starts = tools.flatMap(({ name, started: from }, j) =>
       from === undefined ? [] : [{ type: 'custom', customType: 'tool_execution_start', data: { toolCallId: id(j), toolName: name, startedAt: timestamp(from) } }],
     );
-    const results = tools.map(({ name, failed = false, answered = at }, j) => ({ type: 'message', timestamp: timestamp(answered), message: { role: 'toolResult', toolCallId: id(j), toolName: name, isError: failed } }));
+    const results = tools.map(({ name, failed = false, answered = at, output }, j) => ({
+      type: 'message',
+      timestamp: timestamp(answered),
+      message: { role: 'toolResult', toolCallId: id(j), toolName: name, isError: failed, ...(output === undefined ? {} : { content: [{ type: 'text', text: output }] }) },
+    }));
     return {
       at,
       lines: [
@@ -391,12 +401,29 @@ export function ompEntries(calls: OmpCall[], compactions: Compaction[], model: s
       ],
     };
   };
-  const prompts = calls.flatMap(({ prompted, promptedBy = 'user' }) =>
-    prompted === undefined ? [] : [{ at: prompted, lines: [{ type: 'message', timestamp: timestamp(prompted), message: { role: 'user', content: '[text]', attribution: promptedBy } }] }],
+  const prompts = calls.flatMap(({ prompted, promptedBy = 'user', prompt = '[text]' }) =>
+    prompted === undefined ? [] : [{ at: prompted, lines: [{ type: 'message', timestamp: timestamp(prompted), message: { role: 'user', content: prompt, attribution: promptedBy } }] }],
   );
   const compaction = ({ at, before, after }: Compaction) => ({ at, lines: [{ type: 'compaction', timestamp: timestamp(at), tokensBefore: before, tokensAfter: after }] });
   return [...calls.map(message), ...prompts, ...compactions.map(compaction)].sort((a, b) => a.at - b.at).flatMap(({ lines }) => lines);
 }
+
+// The background jobs whose results omp delivered at `at` (epoch ms): each job's id (the name of
+// its sub-agent) and its status, with `text` as the delivery's content.
+export type AsyncResult = { at: number; jobs: { jobId: string; status: string }[]; text?: string };
+
+// The `async-result` entries of `results`, oldest first.
+const asyncResultLines = (results: AsyncResult[]) =>
+  results.map(({ at, jobs, text = '[text]' }) => ({
+    type: 'custom_message',
+    timestamp: new Date(at).toISOString(),
+    customType: 'async-result',
+    content: text,
+    details: { jobs: jobs.map((job) => ({ ...job, type: 'task', agentId: job.jobId, label: job.jobId })) },
+  }));
+
+// Lines in the order of their timestamps, those without one first.
+const byTime = (lines: { timestamp?: string }[]) => [...lines].sort((a, b) => (a.timestamp === undefined ? 0 : Date.parse(a.timestamp)) - (b.timestamp === undefined ? 0 : Date.parse(b.timestamp)));
 
 // The omp session file of the folder `path` under `home` that `ompSession` writes, and the time of
 // its `session` entry.
@@ -405,18 +432,32 @@ const OMP_SESSION_START = '2026-11-25T11:58:00.000Z';
 
 // The folder `path`, with an omp session of it titled `title`, which records it as its folder and
 // logs `calls` of `model` and `compactions`, in the order of their times; `thinking`: the
-// thinking level it was set to at its start, none when not given.
+// thinking level it was set to at its start, none when not given; `titles`: the `title_change`
+// entries omp logged, `results` the `async-result` entries, none when not given. Returns the
+// session file.
 export function ompSession(
   home: string,
   path: string,
-  { title, calls, compactions = [], model = MODEL, thinking }: { title: string; calls: OmpCall[]; compactions?: Compaction[]; model?: string; thinking?: string },
+  {
+    title,
+    calls,
+    compactions = [],
+    model = MODEL,
+    thinking,
+    titles = [],
+    results = [],
+  }: { title: string; calls: OmpCall[]; compactions?: Compaction[]; model?: string; thinking?: string; titles?: { at: number; title: string }[]; results?: AsyncResult[] },
 ) {
   mkdirSync(path, { recursive: true });
   mkdirSync(ompSessionDir(home, path), { recursive: true });
   const start = OMP_SESSION_START;
   const level = thinking === undefined ? [] : [{ type: 'thinking_level_change', timestamp: start, thinkingLevel: thinking }];
-  const lines = [{ type: 'title', title }, { type: 'session', version: 3, id: 's1', timestamp: start, cwd: path }, ...level, ...ompEntries(calls, compactions, model)];
-  writeFileSync(ompSessionFile(home, path), lines.map((line) => `${JSON.stringify(line)}\n`).join(''));
+  const changes = titles.map(({ at, title: changed }) => ({ type: 'title_change', timestamp: new Date(at).toISOString(), title: changed }));
+  const body = byTime([...ompEntries(calls, compactions, model), ...changes, ...asyncResultLines(results)]);
+  const lines = [{ type: 'title', title }, { type: 'session', version: 3, id: 's1', timestamp: start, cwd: path }, ...level, ...body];
+  const file = ompSessionFile(home, path);
+  writeFileSync(file, lines.map((line) => `${JSON.stringify(line)}\n`).join(''));
+  return file;
 }
 
 // The sub-agent `name` (`Impl1`, or `Impl1/Rev1` for one that `Impl1` started) of the omp session
@@ -425,7 +466,9 @@ export function ompSession(
 // first, at `at` (epoch ms), with the agent kind `kind`, the task `task` and the model, none when
 // not given; `running`: whether it runs, as omp tells it: its transcript then ends with a
 // `custom_message`, not older than the session's start, which leaves its turn open, and else with
-// a `session_exit`, at its last entry's time. The transcript's path.
+// a `session_exit`, at its last entry's time; `parent`: the transcript of the agent that started
+// it, which a `session` entry first names as its `parentSession`, none when not given; `results`:
+// its `async-result` entries. The transcript's path.
 export function ompSubAgent(
   home: string,
   path: string,
@@ -436,14 +479,17 @@ export function ompSubAgent(
     model = MODEL,
     init,
     running = false,
-  }: { calls: OmpCall[]; compactions?: Compaction[]; model?: string; init?: { at: number; kind: string; task?: string }; running?: boolean },
+    parent,
+    results = [],
+  }: { calls: OmpCall[]; compactions?: Compaction[]; model?: string; init?: { at: number; kind: string; task?: string }; running?: boolean; parent?: string; results?: AsyncResult[] },
 ) {
+  const header = parent === undefined ? [] : [{ type: 'session', version: 3, id: name, timestamp: OMP_SESSION_START, cwd: path, parentSession: parent }];
   const head = init ? [{ type: 'session_init', timestamp: new Date(init.at).toISOString(), agent: init.kind, readOnly: false, resolvedModel: model, spawns: '*', task: init.task ?? '' }] : [];
-  const last = Math.max(...[init?.at, ...calls.map(({ at }) => at), ...compactions.map(({ at }) => at)].filter((at) => at !== undefined));
+  const last = Math.max(...[init?.at, ...calls.map(({ at }) => at), ...compactions.map(({ at }) => at), ...results.map(({ at }) => at)].filter((at) => at !== undefined));
   const end = running
     ? { type: 'custom_message', timestamp: new Date(Math.max(last, Date.parse(OMP_SESSION_START))).toISOString(), customType: 'irc', content: 'Go on.' }
     : { type: 'session_exit', timestamp: new Date(last).toISOString() };
-  const lines = [...head, ...ompEntries(calls, compactions, model), end].map((line) => `${JSON.stringify(line)}\n`);
+  const lines = [...header, ...head, ...byTime([...ompEntries(calls, compactions, model), ...asyncResultLines(results)]), end].map((line) => `${JSON.stringify(line)}\n`);
   return subAgentFile(ompSessionFile(home, path), name, lines);
 }
 
@@ -490,11 +536,12 @@ export function claudeEntries(path: string, calls: ClaudeCall[], compactions: Co
   const response = ({ at, read = 0, write = 0, uncached = 0, output = 0, tools = [], blocks = [], stop }: ClaudeCall, i: number) => {
     const id = (j: number) => `toolu_${i}_${j}`;
     const uses = tools.map(({ name }, j) => ({ type: 'tool_use', id: id(j), name, input: {} }));
-    const results = tools.map(({ failed = false, answered = at }, j) => ({
+    const results = tools.map(({ failed = false, answered = at, status }, j) => ({
       type: 'user',
       uuid: `u${i}_${j}`,
       ...entry(answered),
       message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id(j), is_error: failed, content: '[text]' }] },
+      ...(status === undefined ? {} : { toolUseResult: { status } }),
     }));
     const block = (time: number, content: object[], k: number) => ({
       type: 'assistant',
@@ -538,7 +585,8 @@ const claudeDir = (home: string, path: string) => join(home, '.claude/projects',
 
 // A Claude Code session of the folder `path`, which it records, with `calls` of `model`,
 // `compactions` (automatic ones) and `costStates`, in the order of their times; `cost`: the
-// session's total cost, USD, which Claude Code logs after them, none when not given.
+// session's total cost, USD, which Claude Code logs after them, none when not given; `title`: the
+// title of a `custom-title` entry after them, none when not given.
 export function claudeSession(
   home: string,
   path: string,
@@ -548,24 +596,29 @@ export function claudeSession(
     model = 'claude-opus-4-6',
     cost,
     costStates = [],
-  }: { calls: ClaudeCall[]; compactions?: Compaction[]; model?: string; cost?: number; costStates?: CostState[] },
+    title,
+  }: { calls: ClaudeCall[]; compactions?: Compaction[]; model?: string; cost?: number; costStates?: CostState[]; title?: string },
 ) {
   const dir = claudeDir(home, path);
   mkdirSync(dir, { recursive: true });
   const logged = cost === undefined ? [] : [{ type: 'cost-state', sessionId: 'c1', totalCostUSD: cost }];
-  const lines = [...claudeEntries(path, calls, compactions, model, costStates), ...logged];
-  writeFileSync(join(dir, 'c1.jsonl'), lines.map((line) => `${JSON.stringify(line)}\n`).join(''));
+  const titled = title === undefined ? [] : [{ type: 'custom-title', customTitle: title, sessionId: 'c1' }];
+  const lines = [...claudeEntries(path, calls, compactions, model, costStates), ...logged, ...titled];
+  const file = join(dir, 'c1.jsonl');
+  writeFileSync(file, lines.map((line) => `${JSON.stringify(line)}\n`).join(''));
+  return file;
 }
 
 // The sub-agent `agent-<id>` of the Claude Code session `claudeSession` wrote for the folder
 // `path` under `home`, whose transcript logs `calls` of `model`; with `meta`, the meta file
-// Claude Code writes beside it, which names it by `description` and types it by `agentType`, with
-// the model `model`; without, none. The transcript's path.
+// Claude Code writes beside it, which names it by `description`, types it by `agentType` and
+// names the `tool_use` that started it by `toolUseId`, when given, with the model `model`;
+// without, none. The transcript's path.
 export function claudeSubAgent(
   home: string,
   path: string,
   id: string,
-  { calls, model, meta }: { calls: ClaudeCall[]; model: string; meta?: { agentType: string; description: string } },
+  { calls, model, meta }: { calls: ClaudeCall[]; model: string; meta?: { agentType: string; description: string; toolUseId?: string } },
 ) {
   const file = join(claudeDir(home, path), 'c1/subagents', `agent-${id}.jsonl`);
   mkdirSync(dirname(file), { recursive: true });

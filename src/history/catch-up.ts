@@ -47,6 +47,17 @@
 // host, of the folder the file itself records first (omp: its `session` entry), else that
 // folder, else `n/a`.
 //
+// A main session file's read also saves its session's summary row (src/history/store.ts): its
+// title (omp: the newest `title_change`, else the title of the file's first line, which omp
+// rewrites in place, so that line is read again at each read; Claude Code: its newest
+// `custom-title`), repo, times, own cost, tokens, models, Trace lanes and the statuses it logged
+// of its sub-agents. A sub-agent's transcript saves its sub-agent's row instead: omp's keyed and
+// named by its file name, under the agent whose transcript its `session` entry names as its
+// `parentSession`, else the one whose folder holds it, running by omp's rule (`runs`,
+// src/core/providers/omp-sources.js); Claude Code's keyed by the id of the tool use that started
+// it and named by the `description` of its meta file (read once), else by its file name, under the
+// main agent, its cost n/a, as Claude Code logs none per sub-agent.
+//
 // On each host, the run then reads opencode's database (`databaseOf`, src/core/providers/
 // opencode-sources.js), a `files` row of its own, with `sqlite3 -readonly`; a host without one
 // has none to read, and one there that cannot be read (`stat` finds it) is logged. Its first read
@@ -60,7 +71,10 @@
 // costs that once per page. A call counts on the day it was created, in its root session (its
 // `parent_id` followed up), `<host>\0opencode\0<root session id>`, and in the repo of its own
 // session's folder: the git origin as above, asked when a read first meets the folder and kept,
-// by folder, in the row's state.
+// by folder, in the row's state. Each run rebuilds the summary and sub-agent rows of every root
+// session whose calls it read from all of that session's rows (an older session's rows are not
+// all among those a later run reads again): one sub-agent row per session below it, keyed by its
+// id and titled by its title, under the session of its `parent_id`.
 import { hostname, type } from 'node:os';
 import { zstdDecompressSync } from 'node:zlib';
 import { HARNESS_NAMES } from '../agent-cards.ts';
@@ -68,19 +82,20 @@ import { dayOf, midnightBefore } from '../core/days.js';
 import { readOrigin } from '../core/git.js';
 import { newInsights, takeLines } from '../core/insights.js';
 import { claudeProvider } from '../core/providers/claude.js';
-import { claudeProjectsDir } from '../core/providers/claude-sources.js';
+import { claudeProjectsDir, metaIn } from '../core/providers/claude-sources.js';
+import { parseEntries } from '../core/providers/jsonl.js';
 import { opencodeInsights } from '../core/providers/opencode.js';
 import { databaseOf, historyRowsQuery, SCHEMA_QUERY, select, sessionsIn } from '../core/providers/opencode-sources.js';
-import { ompProvider } from '../core/providers/omp.js';
-import { ompSessionsDir } from '../core/providers/omp-sources.js';
-import { absoluteFolder, listFolder, mainSessionOf, SUBAGENT_DEPTH } from '../core/providers/session-files.js';
+import { ompProvider, turnOf } from '../core/providers/omp.js';
+import { ompSessionsDir, runs, titleIn } from '../core/providers/omp-sources.js';
+import { absoluteFolder, listFolder, mainSessionOf, readOnce, SUBAGENT_DEPTH } from '../core/providers/session-files.js';
 import { scanFile } from '../core/refresh.js';
 import { newestFirst } from '../core/session-link.js';
 import { MAX_OUTPUT_BYTES, type Run, type RunBytes } from '../exec.ts';
 import { LOCAL } from '../fleet.ts';
 import { type HistoryHost, machineOf, placeOf } from '../hosts.ts';
 import type { ReadProgress } from '../protocol.ts';
-import { type FileMark, HISTORY_VERSION, type SessionLine, type Store } from './store.ts';
+import { type AgentRow, type FileMark, HISTORY_VERSION, type SessionLine, type SessionRow, type Store } from './store.ts';
 
 // The meta key of the number of runs that have ended.
 const CATCH_UPS = 'catch-ups';
@@ -104,6 +119,33 @@ type Kept = { fold: { cwd: string | null; insights: object }; repo: string };
 // The state an opencode database's row keeps: the repo of each folder its calls are of (a
 // session without a folder is under null).
 type OpencodeKept = { repos: Map<string | null, string> };
+
+// The insights of a fold (newInsights of src/core/insights.js), as far as a row reads them.
+type Insights = {
+  lanes: SessionRow['lanes'];
+  firstMs: number | null;
+  lastMs: number | null;
+  title: string | null;
+  cost: number;
+  costNa: number;
+  tokens: number;
+  models: Record<string, true>;
+  statuses: Map<string, string>;
+};
+
+// What a session's and a sub-agent's rows read of the insights `ins`.
+const figuresOf = (ins: Insights) => ({
+  startMs: ins.firstMs,
+  endMs: ins.lastMs,
+  cost: ins.cost,
+  costNa: ins.costNa,
+  tokens: ins.tokens,
+  models: Object.keys(ins.models),
+  statuses: ins.statuses,
+});
+
+// The name of the transcript `path`: its file name without `.jsonl`.
+const stemOf = (path: string) => path.slice(path.lastIndexOf('/') + 1).replace(/\.jsonl$/, '');
 
 // Each harness the catch-up reads: its name in the store, its sessions folder under a home, how
 // many folders deep its files lie, its sub-agents' included, and its fold with daily lines.
@@ -199,6 +241,41 @@ export function createCatchUp({
     return (await readOrigin({ exec }, { cwd: folder, on: null })) ?? folder;
   }
 
+  // The runner of each host a read has met, by its key, for `metaOf`.
+  const execOf = new Map<string, Run>();
+  // What the meta file `path` of a Claude Code sub-agent on the host `host` tells (`metaIn`):
+  // Claude Code writes it once, when the sub-agent starts, so it is read once, and again only
+  // after a read that failed; null when it cannot be read.
+  const metaOf = readOnce(async (host: string, path: string) => {
+    const { code, stdout } = await execOf.get(host)!('cat', [path]);
+    if (code !== 0) throw new Error(`cannot read ${path}`);
+    return metaIn(stdout);
+  });
+
+  // The row the read of the file `path` of `harness` in its sessions folder `dir` on the host of
+  // `place` saves (see the header), from its fold state `state`, in `repo`: its session's
+  // (`main`) for a main session file, else its sub-agent's (`agent`); none without a state.
+  async function rowOf(place: Place, harness: string, dir: string, path: string, state: { insights: Insights } | null, repo: string, session: string) {
+    if (!state) return {};
+    const ins = state.insights;
+    const main = mainSessionOf(path, dir);
+    // omp's `title` and `session` entries, its first lines, the title rewritten in place
+    const head = harness === 'omp' ? await place.read('head', ['-n', '2', '--', path]) : null;
+    const told = head?.code === 0 ? head.stdout : '';
+    if (path === main) return { main: { ...figuresOf(ins), title: ins.title ?? titleIn(told), repo, lanes: ins.lanes } satisfies SessionRow };
+    const name = stemOf(path);
+    if (harness === 'omp') {
+      const named = parseEntries(told).find(({ type }) => type === 'session')?.parentSession;
+      const parent = typeof named === 'string' ? named : `${path.slice(0, path.lastIndexOf('/'))}.jsonl`;
+      const running = runs(turnOf({ state }), store.trace(session)?.startMs ?? null);
+      return { agent: { ...figuresOf(ins), key: name, name, parent: parent === main ? null : stemOf(parent), running } satisfies AgentRow };
+    }
+    execOf.set(place.host, place.exec);
+    const meta = await metaOf(place.host, path.replace(/\.jsonl$/, '.meta.json'));
+    // Claude Code logs no cost of a sub-agent: its session's holds it
+    return { agent: { ...figuresOf(ins), costNa: 1, key: meta?.toolUseId ?? name, name: meta?.name ?? name, parent: null, running: null } satisfies AgentRow };
+  }
+
   // A read is saved only while its host has been reached, so that a repo asked over a dropped
   // connection (its origin none) is never kept for good.
   async function catchUp(place: Place, { harness: { harness, fold }, dir, row, path, size, mtimeMs }: Listed) {
@@ -207,11 +284,13 @@ export function createCatchUp({
     const read = await scanFile(place.read, fold, kept ? { state: kept.fold, pos: row!.pos } : null, path, size);
     const restarted = read.restarted || !kept;
     const repo = restarted ? await repoOf(exec, read.scan.state?.cwd ?? null) : kept!.repo;
+    const session = `${host}\0${harness}\0${mainSessionOf(path, dir)}`;
+    const saved = await rowOf(place, harness, dir, path, read.scan.state, repo, session);
     if (!place.reached()) throw new Error(`lost ${host} while reading ${path}`);
     const lines = read.scan.state ? takeLines(read.scan.state.insights) : [];
     store.saveRead(
       { host, harness, path, pos: read.scan.pos, size, mtimeMs, version: HISTORY_VERSION, state: { fold: read.scan.state, repo } },
-      { session: `${host}\0${harness}\0${mainSessionOf(path, dir)}`, repo, lines, restarted },
+      { session, repo, lines, restarted, ...saved },
     );
   }
 
@@ -308,6 +387,32 @@ export function createCatchUp({
     return lines;
   }
 
+  // Rebuilds the summary and sub-agent rows (see the header) of each session of `lines` in
+  // `database` on the host of `place`, whose row's id is `id`, from all its rows, the root's repo
+  // as `repos` has it, else asked and added to it.
+  async function saveOpencodeSessions(place: Place, database: string, sessions: string, id: number, lines: SessionLine[], repos: Map<string | null, string>) {
+    for (const session of new Set(lines.map((line) => line.session))) {
+      const root = session.slice(session.lastIndexOf('\0') + 1);
+      const rows = await select(place.read, database, historyRowsQuery(sessions, 0, null, -1, root));
+      if (!rows) throw new Error(`cannot read the session ${root} of ${database}`);
+      // each session's own rows, read as the root's are, by its id
+      const own = new Map<string, { parent: string | null; title: string | null; directory: string | null; insights: Insights }>();
+      for (const row of rows) {
+        let found = own.get(row.ownId);
+        if (!found) own.set(row.ownId, (found = { parent: row.parentId ?? null, title: row.title ?? null, directory: row.directory ?? null, insights: newInsights() }));
+        opencodeInsights([{ ...row, own: 1 }], found.insights);
+      }
+      const main = own.get(root);
+      if (!main) continue;
+      if (!repos.has(main.directory)) repos.set(main.directory, await repoOf(place.exec, main.directory));
+      const agents = [...own].flatMap(([key, { parent, title, insights }]): AgentRow[] =>
+        key === root ? [] : [{ ...figuresOf(insights), key, name: title ?? key, parent: parent === root ? null : parent, running: null }],
+      );
+      if (!place.reached()) throw new Error(`lost ${place.host} while reading ${database}`);
+      store.saveSession(id, session, { ...figuresOf(main.insights), title: main.title ?? '', repo: repos.get(main.directory)!, lanes: main.insights.lanes }, agents);
+    }
+  }
+
   // The first phase of the read of the opencode database of the host of `place` (see the header),
   // whose first read reads the calls created from `recentMs` on: the lines of the days it reads
   // replaced with those read now, once they are all read and the host was reached. What a first
@@ -338,6 +443,7 @@ export function createCatchUp({
     if (!place.reached()) throw new Error(`lost ${host} while reading ${database}`);
     const id = row?.id ?? saveOpencode(host, database, repos, 0);
     store.replaceDays(id, first ? '' : dayOf(open), { lines });
+    await saveOpencodeSessions(place, database, sessions, id, lines, repos);
     if (first) return { database, sessions, id, repos, lines };
     saveOpencode(host, database, repos, HISTORY_VERSION);
     store.setMeta(readThrough(host, 'opencode'), '1');
@@ -351,6 +457,7 @@ export function createCatchUp({
     const older = await opencodeLines(place, database, sessions, 0, recentMs, repos);
     if (!place.reached()) throw new Error(`lost ${place.host} while reading ${database}`);
     store.replaceDays(id, '', { lines: [...older, ...lines] });
+    await saveOpencodeSessions(place, database, sessions, id, older, repos);
     saveOpencode(place.host, database, repos, HISTORY_VERSION);
     store.setMeta(readThrough(place.host, 'opencode'), '1');
   }

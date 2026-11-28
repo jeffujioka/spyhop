@@ -27,12 +27,14 @@
 // daily lines (src/core/insights.js), as `models` counts only such calls, and the session's Trace
 // lanes: a model call from its message's `timestamp` to its `completedAt`, a tool call from its
 // `tool_execution_start` to its result, a turn's end at a reply that stops it and the developer's
-// prompts, the user messages not attributed to an agent.
+// prompts, the user messages not attributed to an agent; and for the session's summary, the
+// newest `title_change` and each status of a background job (a sub-agent, keyed by its name) its
+// `async-result` entries deliver.
 
 import { add, parseEntries, tally } from './jsonl.js';
 import { burnRate, cacheRate, isNumber, tokenCount, wholeSession } from './shared.js';
 import { addCall, addCost, addMinute, detailOf, entryOf, newSeries, pushRecent, toolAnswered, toolCalled } from '../series.js';
-import { modelKey, newInsights, noteCall, noteEntry, noteHorizon, notePrompt, noteToolEnd, noteToolStart, noteTurnEnd } from '../insights.js';
+import { modelKey, newInsights, noteCall, noteEntry, noteHorizon, notePrompt, noteStatus, noteToolEnd, noteToolStart, noteTurnEnd } from '../insights.js';
 import { SUBAGENT_TOOLS } from '../trace.js';
 import { callCost, COPILOT, copilotWriteCost } from '../copilot-prices.js';
 
@@ -173,6 +175,10 @@ function fold(state, entries, opts) {
       if (typeof e.resolvedModel === 'string') s.model = e.resolvedModel;
     } else if (e.type === 'custom' && e.customType === 'tool_execution_start') {
       if (s.insights) noteToolStart(s.insights, e.data?.toolCallId, Date.parse(e.data?.startedAt), e.data?.toolName);
+    } else if (e.type === 'custom_message' && e.customType === 'async-result') {
+      if (s.insights) for (const job of Array.isArray(e.details?.jobs) ? e.details.jobs : []) noteStatus(s.insights, job?.jobId, job?.status);
+    } else if (e.type === 'title_change') {
+      if (s.insights && typeof e.title === 'string') s.insights.title = e.title;
     } else if (e.type === 'model_usage') {
       // a side call (a title, a recap, a prediction of the next prompt): in the session's cost
       // and tokens and its own series, but no model call of the series, the cold starts or the

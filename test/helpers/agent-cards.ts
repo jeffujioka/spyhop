@@ -88,11 +88,14 @@ export type OpencodeCalls = { provider: string; model: string; contexts: number[
 export type OpencodeCall = { uncached: number; read: number; write: number; output: number; took?: number; prompted?: number; tools?: OpencodeTool[]; finish?: string | null };
 
 // A `tool` item of an opencode call, of the tool `name`, with the times of its `time` as this
-// Mac's database holds them (`created`, `ran`, `completed`), each left out when not given.
-export type OpencodeTool = { name: string; created?: number; ran?: number; completed?: number };
+// Mac's database holds them (`created`, `ran`, `completed`), each left out when not given; its
+// `state.status`, `completed` when not given, and the session it started (`child`, its
+// `state.metadata.sessionID`), none when not given.
+export type OpencodeTool = { name: string; created?: number; ran?: number; completed?: number; status?: string; child?: string };
 
 // The session `id` (`ses_window` when not given) of the folder `folder` in opencode's database
-// under `home` (made from current.sql), in the current tables: `calls` of `model` of the provider
+// under `home` (made from current.sql), in the current tables, titled `title` (`t` when not
+// given), a sub-agent of the session `parent` when given: `calls` of `model` of the provider
 // `provider`, one a minute, the last created at `last` (a minute ago when not given), at
 // `callCost` USD each (0.10 when not given), and opencode's own total of `cost` USD; returns the
 // database's path. With `update`, the database is not made again: the session and its calls are
@@ -110,15 +113,17 @@ export function opencodeSession(
     callCost = 0.1,
     last = NOW - 60_000,
     update = false,
-  }: { provider: string; model: string; calls: OpencodeCall[]; cost: number; id?: string; callCost?: number; last?: number; update?: boolean },
+    title = 't',
+    parent,
+  }: { provider: string; model: string; calls: OpencodeCall[]; cost: number; id?: string; callCost?: number; last?: number; update?: boolean; title?: string; parent?: string },
 ) {
   const at = (i: number) => last - 60_000 * (calls.length - 1 - i);
   const rows = calls.flatMap(({ uncached, read, write, output, took = 1000, prompted, tools = [], finish = 'stop' }, i) => {
-    const content = tools.map(({ name, created, ran, completed }, j) => ({
+    const content = tools.map(({ name, created, ran, completed, status = 'completed', child }, j) => ({
       type: 'tool',
       id: `toolu_${i}_${j}`,
       name,
-      state: { status: 'completed' },
+      state: { status, ...(child === undefined ? {} : { metadata: { sessionID: child } }) },
       time: { ...(created === undefined ? {} : { created }), ...(ran === undefined ? {} : { ran }), ...(completed === undefined ? {} : { completed }) },
     }));
     const data = {
@@ -132,11 +137,11 @@ export function opencodeSession(
     };
     const prompt = { time: { created: prompted }, files: [], agents: [] };
     return [
-      ...(prompted === undefined ? [] : [`INSERT OR REPLACE INTO session_message VALUES ('u${i}', ${sqlText(id)}, 'user', ${2 * i + 1}, ${prompted}, ${prompted}, ${sqlText(JSON.stringify(prompt))});`]),
-      `INSERT OR REPLACE INTO session_message VALUES ('w${i}', ${sqlText(id)}, 'assistant', ${2 * i + 2}, ${at(i)}, ${at(i) + took}, ${sqlText(JSON.stringify(data))});`,
+      ...(prompted === undefined ? [] : [`INSERT OR REPLACE INTO session_message VALUES ('${id}/u${i}', ${sqlText(id)}, 'user', ${2 * i + 1}, ${prompted}, ${prompted}, ${sqlText(JSON.stringify(prompt))});`]),
+      `INSERT OR REPLACE INTO session_message VALUES ('${id}/w${i}', ${sqlText(id)}, 'assistant', ${2 * i + 2}, ${at(i)}, ${at(i) + took}, ${sqlText(JSON.stringify(data))});`,
     ];
   });
-  const session = `INSERT OR REPLACE INTO session_v2 VALUES (${sqlText(id)}, 'prj', NULL, 's', ${sqlText(folder)}, 't', '2.0.0', ${cost}, NULL, NULL, ${at(0)}, ${at(calls.length - 1) + 1000}, NULL);`;
+  const session = `INSERT OR REPLACE INTO session_v2 VALUES (${sqlText(id)}, 'prj', ${parent === undefined ? 'NULL' : sqlText(parent)}, 's', ${sqlText(folder)}, ${sqlText(title)}, '2.0.0', ${cost}, NULL, NULL, ${at(0)}, ${at(calls.length - 1) + 1000}, NULL);`;
   const database = update ? join(home, '.local/share/opencode/opencode.db') : opencodeDatabase(home, 'current');
   execFileSync('sqlite3', [database, [session, ...rows].join('\n')]);
   return database;

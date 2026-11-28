@@ -105,6 +105,24 @@ export type Point = { t: number; n: number; read: number; write: number; uncache
 // sub-agent).
 export type SubAgentView = { name: string; kind: string; model: string; task: string; running: boolean | null; startMs: Num; endMs: Num; cost: Num };
 
+// The Trace of a session the history store keeps (src/history/store.ts): its axis, from its start
+// to its end (epoch ms); its lanes, each with its spans (`[start, end]`, epoch ms, oldest first)
+// and its total time, `subagents` the main agent's wait on its sub-agents; and its sub-agents,
+// each under the agent that started it (`depth` 0 for one the main agent started), with its
+// status as the harness logs it (`running` while it runs, n/a when not logged), its cost and its
+// times (n/a when not known).
+export type TraceView = {
+  startMs: number;
+  endMs: number;
+  lanes: { lane: 'thinking' | 'tools' | 'subagents' | 'developer'; totalMs: number; spans: [number, number][] }[];
+  agents: { name: string; status: string; cost: Num; startMs: Num; endMs: Num; depth: number }[];
+};
+
+// A session summary the history store keeps: its id (`<host>\0<harness>\0<main file or opencode
+// root id>`), title, repo, harness, Orca host (its key in the store), models, its cost and tokens
+// with its sub-agents', how long it ran and how many sub-agents it has.
+export type SessionSummary = { id: string; title: string; repo: string; harness: string; host: string; models: string[]; cost: Num; tokens: Num; durationMs: Num; subAgents: number };
+
 // One card's session as the session screen draws it (src/session-detail.ts). `linked`: whether
 // the card links to a session; `path`: its folder for reading. `figures`: the figures row, its
 // cost and tokens as the card's cost is summed, `subShare` the sub-agents' share of the cost (n/a
