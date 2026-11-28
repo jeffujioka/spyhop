@@ -231,6 +231,8 @@ export type CatchUp = {
   // harness `harness` (Orca's kind) on the Orca host `host` (Orca's host id) up to date in the
   // store (see the header); its session id, null when its host cannot be read now.
   readSession(host: string, harness: string, path: string): Promise<string | null>;
+  // The id of that session, without reading it; null when its host cannot be reached now.
+  sessionId(host: string, harness: string, path: string): Promise<string | null>;
 };
 
 // `run` and `runBytes`: the plugin's runners; `log`: the worker's log, which a file that cannot
@@ -712,10 +714,21 @@ export function createCatchUp({
     for (const file of files) await catchUp(place, { ...file, harness, dir: harness.dirOf(place.home), row: null, toRead: 0 });
   }
 
+  // The harness of the store's rows of Orca's kind `kind`: opencode's second kind is opencode.
+  const harnessOf = (kind: string) => (kind === 'opencode2' ? 'opencode' : kind);
+
+  // The id of the session of the main session file `path` of `kind` on the host of `place`.
+  const idOf = (place: Place, kind: string, path: string) => `${place.host}\0${harnessOf(kind)}\0${path}`;
+
+  async function sessionId(hostId: string, kind: string, path: string) {
+    const place = await placeOfHost(hostId);
+    return place && idOf(place, kind, path);
+  }
+
   async function readSession(hostId: string, kind: string, path: string) {
     const place = await placeOfHost(hostId);
     if (!place) return null;
-    const harness = kind === 'opencode2' ? 'opencode' : kind;
+    const harness = harnessOf(kind);
     const files = HARNESSES.find((found) => found.harness === harness);
     if (!files && harness !== 'opencode') return null;
     try {
@@ -725,7 +738,7 @@ export function createCatchUp({
       if (!place.reached()) return null;
       log(`spyhop: cannot bring the session ${path} up to date: ${(error as Error).message}`);
     }
-    return `${place.host}\0${harness}\0${path}`;
+    return idOf(place, kind, path);
   }
 
   return {
@@ -751,5 +764,6 @@ export function createCatchUp({
       return reading ? { host: reading.name, harness: HARNESS_NAMES[reading.harness] ?? reading.harness, share: Math.min(reading.read / reading.toRead, 0.99) } : null;
     },
     readSession,
+    sessionId,
   };
 }

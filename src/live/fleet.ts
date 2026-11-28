@@ -14,7 +14,7 @@ import { NA } from '../core/providers/index.js';
 import { atAttention, STATES } from '../fleet.ts';
 import type { AttentionRow, BurnCard, CardView, FleetAnswer, HostGroup } from '../protocol.ts';
 import { BURN_TITLE, burnChart, contextBar, sparkLine } from './charts.ts';
-import { esc, num } from './html.ts';
+import { esc, num, pressable } from './html.ts';
 import { levelOf } from './levels.ts';
 import { tabBar } from './tabs.ts';
 
@@ -80,11 +80,8 @@ export function readingNote({ read, total }: NonNullable<CardView['reading']>): 
   return `reading <span class="num">${read}</span> of <span class="num">${total}</span> sub-agent${total === 1 ? '' : 's'}`;
 }
 
-// The attributes that make a card, a folded line or a row of the attention list the control that
-// opens the session screen of the card `id`: a block cannot go inside a <button>, so it is a
-// button by its role, which the keyboard reaches (`tabindex`) and presses (src/panel.ts). Its
-// `data-press` value is encoded, since the id holds a NUL, `::` and slashes.
-const opens = (id: string) => `role="button" tabindex="0" data-press="${esc(`open:${encodeURIComponent(id)}`)}"`;
+// The control that opens the session screen of the card `id`.
+const opens = (id: string) => pressable('open', id);
 
 function card(view: CardView) {
   const where = [view.folder, view.branch, view.harness, view.model].filter((part) => part !== null).map(esc).join(' · ');

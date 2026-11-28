@@ -45,3 +45,11 @@ export function num(name: string, value: string, classes = ''): string {
 export function titled(title: string, meaning: string, body: string): string {
   return `<section data-part="figure" data-name="${esc(title)}"><b data-title>${esc(title)}</b><p data-meaning class="muted">${esc(meaning)}</p>${body}</section>`;
 }
+
+// The attributes that make a block the control whose `data-press` is `kind:` and the encoded id
+// `id` (which holds a NUL, `::` and slashes): a block cannot go inside a <button>, so it is a
+// button by its role, which the keyboard reaches (`tabindex`) and presses (src/panel.ts). `open`
+// opens the session screen of a card, `past` that of a past session.
+export function pressable(kind: 'open' | 'past', id: string): string {
+  return `role="button" tabindex="0" data-press="${esc(`${kind}:${encodeURIComponent(id)}`)}"`;
+}

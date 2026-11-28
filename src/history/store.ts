@@ -89,6 +89,9 @@ export type Store = {
   saveSession(file: number, session: string, main: SessionRow, agents: AgentRow[]): void;
   // The daily lines of the days `from` to `to` (YYYY-MM-DD, both included).
   dailyLines(from: string, to: string): DailyLine[];
+  // The ids of the sessions with a daily line of a model call (`calls` over 0) on the days `from`
+  // to `to` (YYYY-MM-DD, both included).
+  sessionsOf(from: string, to: string): string[];
   // The summary of the session `id`, its sub-agents counted in it; null when none is kept. A
   // Claude Code session's own cost holds its sub-agents' already.
   summary(id: string): SessionSummary | null;
@@ -185,6 +188,7 @@ export async function openStore(home: string): Promise<Store> {
     INSERT INTO lines (file, session, day, repo, model, ${COLUMNS.join(', ')}) VALUES (?, ?, ?, ?, ?, ${COLUMNS.map(() => '?').join(', ')})
     ON CONFLICT (file, session, day, repo, model) DO UPDATE SET ${COLUMNS.map((column) => `${column} = ${column} + excluded.${column}`).join(', ')}`);
   const selectLines = db.prepare('SELECT * FROM daily_lines WHERE day BETWEEN ? AND ? ORDER BY day, host, repo, harness, model');
+  const selectSessions = db.prepare('SELECT DISTINCT session FROM lines WHERE day BETWEEN ? AND ? AND calls > 0');
   const selectMeta = db.prepare('SELECT value FROM meta WHERE key = ?');
   const upsertMeta = db.prepare('INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value');
   const deleteSessions = db.prepare('DELETE FROM sessions WHERE file = ?');
@@ -284,6 +288,9 @@ export async function openStore(home: string): Promise<Store> {
         model: String(row.model),
         figures: Object.fromEntries(LINE_FIGURES.map((name) => [name, Number(row[name])])),
       }));
+    },
+    sessionsOf(from, to) {
+      return selectSessions.all(from, to).map((row) => String(row.session));
     },
     summary(id) {
       const row = selectSession.get(id);

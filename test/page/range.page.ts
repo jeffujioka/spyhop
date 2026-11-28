@@ -21,6 +21,7 @@ const WEEK: SpendView = {
   byRepo: [{ name: 'api', cost: 2 }],
   byModel: [],
   byHarness: [],
+  costliest: [],
   sideCost: 0,
   sources: null,
 };

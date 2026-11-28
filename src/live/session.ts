@@ -7,10 +7,12 @@
 // with nothing to show is not drawn; a figure that cannot be read reads n/a. While the session's
 // sub-agents are being read, its cost says how many are. Until the session is answered, the
 // header is the fleet's card's and the screen says it is loading.
+// A past session, one with no Live card, has its own screen (`pastScreen`).
 // Pure: an answer in, a markup string out (src/panel.ts draws it).
 
 import { formatAge, formatCost, formatCostPerHour, formatCount, formatDate, formatDay, formatDuration, formatPercent, formatSeconds, formatTokens, orNa } from '../core/format.js';
-import type { CardView, SessionView, SubAgentView } from '../protocol.ts';
+import { HARNESS_NAMES } from '../agent-cards.ts';
+import type { CardView, PastAnswer, Range, RangeTab, SessionView, SubAgentView } from '../protocol.ts';
 import { agentBars, contextChart, costChart, tokensChart } from './charts.ts';
 import { readingNote } from './fleet.ts';
 import { costPart, esc, NAMED_ROWS, num, topRows } from './html.ts';
@@ -171,5 +173,27 @@ export function sessionScreen(view: SessionView | null, ui: SessionUi): string {
     `${top}${figures(view.figures, view.card.reading)}` +
     `${view.context ? contextChart(view.context) : ''}${view.tokens ? tokensChart(view.tokens) : ''}${view.cost ? costCard(view.cost, view.costFrom) : ''}` +
     `${view.subAgents ? subAgents(view.subAgents, ui) : ''}${view.tools ? tools(view.tools) : ''}${models(view.models)}${session(view.session)}</main>`
+  );
+}
+
+// The screen of a past session, one with no Live card, under the tab bar with the tab it was opened
+// from shown: the header, with the back control and its title, repo, harness and models; the cost,
+// tokens, duration and sub-agents of its summary; then its Trace, with no Figures and Trace switch.
+// `past` null: not answered yet, a line that says it is being read.
+export function pastScreen(past: PastAnswer['past'], from: { tab: RangeTab; range: Range }): string {
+  const tabs = tabBar(from.tab, null);
+  if (!past) return `<main data-screen="past">${tabs}<header data-part="header"><div class="row">${BACK}</div></header><p data-part="loading" class="muted">Reading the session…</p></main>`;
+  const { summary, trace } = past;
+  const word = (name: string, value: string) => `<span data-figure="${name}">${esc(value)}</span>`;
+  const meta = [word('repo', summary.repo), word('harness', HARNESS_NAMES[summary.harness] ?? summary.harness), word('models', summary.models.join(', '))].join(' · ');
+  const items = [
+    ['Cost', num('cost', formatCost(summary.cost))],
+    ['Tokens', num('tokens', orNa(summary.tokens, formatTokens))],
+    ['Duration', num('duration', formatDuration(summary.durationMs))],
+    ['Sub-agents', num('subAgents', `${summary.subAgents} sub-agent${summary.subAgents === 1 ? '' : 's'}`)],
+  ];
+  return (
+    `<main data-screen="past">${tabs}<header data-part="header"><div class="row">${BACK}<b class="title grow">${esc(summary.title)}</b></div><div class="meta">${meta}</div></header>` +
+    `<div class="figures">${items.map(([caption, value]) => `<div class="figure"><div class="muted">${caption}</div>${value}</div>`).join('')}</div>${traceOf(trace)}</main>`
   );
 }

@@ -18,6 +18,10 @@
 // tab or the range shown does nothing. The range is Day when the controller starts, and a range
 // tab keeps the one pressed last. An answer is drawn only on the screen, the card, the tab and the
 // range it was asked for.
+// A costliest session of the Spend tab without a Live card opens as a past session
+// (`past:<id>`): its screen is drawn at once and asks the worker for its summary and Trace, on
+// the range tabs' schedule; back, or an answer that holds none, draws the tab and range it was
+// opened from.
 // A change of Orca's theme draws nothing: the stylesheet's variables follow it in place. A failed
 // answer keeps what is drawn; a draw that fails is left uncaught, for Orca to log as the frame's
 // error. Each drawing says whether it is of the screen drawn before it, the fleet, the session
@@ -27,9 +31,9 @@
 import { RANGE_REFRESH_MS, REFRESH_INTERVAL_MS } from '../core/refresh.js';
 import { withGroup } from '../fleet.ts';
 import type { OrcaFrameApi } from 'orca/frame';
-import type { CardView, Range, RangeAnswer, RangeTab, SessionView } from '../protocol.ts';
+import type { CardView, PastAnswer, Range, RangeAnswer, RangeTab, SessionView } from '../protocol.ts';
 import { type FleetView, fleetScreen } from './fleet.ts';
-import { sessionScreen } from './session.ts';
+import { pastScreen, sessionScreen } from './session.ts';
 import { spendTab } from './spend.ts';
 import { tabBar } from './tabs.ts';
 
@@ -54,6 +58,7 @@ export type Drawing = { sameScreen: boolean };
 type Screen =
   | { name: 'fleet' }
   | { name: 'session'; id: string; card: CardView | null; session: SessionView | null; showAll: boolean; trace: boolean }
+  | { name: 'past'; id: string; from: { tab: RangeTab; range: Range }; past: PastAnswer['past'] }
   | { name: 'range'; tab: RangeTab; range: Range; answer: RangeAnswer | null };
 
 const LIVE_TABS = tabBar('live', null);
@@ -86,10 +91,18 @@ export function createLive(frame: Frame, draw: (html: string, drawing: Drawing) 
   let drawn: string | null = null;
 
   function redraw() {
-    const now = screen.name === 'session' ? `session:${screen.id}:${screen.trace}` : screen.name === 'range' ? `range:${screen.tab}` : 'fleet';
+    const now =
+      screen.name === 'session'
+        ? `session:${screen.id}:${screen.trace}`
+        : screen.name === 'past'
+          ? `past:${screen.id}`
+          : screen.name === 'range'
+            ? `range:${screen.tab}`
+            : 'fleet';
     const drawing = { sameScreen: now === drawn };
     drawn = now;
     if (screen.name === 'session') draw(sessionScreen(screen.session, { card: screen.card, showAll: screen.showAll, now: Date.now(), trace: screen.trace }), drawing);
+    else if (screen.name === 'past') draw(pastScreen(screen.past, screen.from), drawing);
     else if (screen.name === 'range') draw(rangeScreen(screen), drawing);
     else if (view.groups.length > 0) draw(fleetScreen(view), drawing);
     else draw(view.whole ? EMPTY : LOADING, drawing);
@@ -105,7 +118,7 @@ export function createLive(frame: Frame, draw: (html: string, drawing: Drawing) 
         timer = null;
         if (!asking) ask();
       },
-      screen.name === 'range' ? RANGE_REFRESH_MS : REFRESH_INTERVAL_MS,
+      screen.name === 'range' || screen.name === 'past' ? RANGE_REFRESH_MS : REFRESH_INTERVAL_MS,
     );
     asking = true;
     due = false;
@@ -121,6 +134,14 @@ export function createLive(frame: Frame, draw: (html: string, drawing: Drawing) 
             else showFleet();
             redraw();
           }, kept)
+        : asked.name === 'past'
+          ? frame.plugin.request('spyhop.past', { request, session: asked.id }).then(({ past }) => {
+              if (closed || screen.name !== 'past' || screen.id !== asked.id) return;
+              if (past) {
+                screen = { ...screen, past };
+                redraw();
+              } else switchTo({ name: 'range', tab: screen.from.tab, range: screen.from.range, answer: null });
+            }, kept)
         : asked.name === 'range'
           ? frame.plugin.request('spyhop.range', { request, tab: asked.tab, range: asked.range }).then((answer) => {
               if (closed || screen.name !== 'range' || screen.tab !== asked.tab || screen.range !== asked.range) return;
@@ -183,6 +204,11 @@ export function createLive(frame: Frame, draw: (html: string, drawing: Drawing) 
       screen = { name: 'session', id, card, session: null, showAll: false, trace: false };
       askSoon();
       redraw();
+    } else if (target.startsWith('past:') && screen.name === 'range') {
+      const id = decodeURIComponent(target.slice('past:'.length));
+      screen = { name: 'past', id, from: { tab: screen.tab, range: screen.range }, past: null };
+      askSoon();
+      redraw();
     } else if (target === 'tab:live') {
       if (screen.name !== 'fleet') switchTo(FLEET);
     } else if (target.startsWith('tab:')) {
@@ -191,6 +217,8 @@ export function createLive(frame: Frame, draw: (html: string, drawing: Drawing) 
     } else if (target.startsWith('range:') && screen.name === 'range' && target !== `range:${screen.range}`) {
       range = target.slice('range:'.length) as Range;
       switchTo({ ...screen, range, answer: null });
+    } else if (target === 'back' && screen.name === 'past') {
+      switchTo({ name: 'range', tab: screen.from.tab, range: screen.from.range, answer: null });
     } else if (target === 'back' && screen.name === 'session') {
       showFleet();
       redraw();

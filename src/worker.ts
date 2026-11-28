@@ -31,6 +31,9 @@
 // A history store that cannot be opened is logged once; no catch-up runs then, and each range
 // tab's figures are n/a, while the fleet and the sessions are answered as ever. A range the store
 // cannot read is logged and answered n/a.
+// `spyhop.past` answers a past session's summary and Trace from the history store alone. Each build
+// notes the sessions its cards show (`shown`), which the Spend tab's costliest sessions open as
+// their Live card, and the names of the hosts they ran on.
 // `spyhop.focus` focuses a card's pane
 // in this computer's Orca window: an agent on this computer or an SSH workspace by Orca's
 // `terminal.focus`, one on a paired Orca server by `orca terminal switch` to the server's
@@ -50,7 +53,7 @@ import { createTtlCache } from './core/ttl-cache.js';
 import { run, runBytes } from './exec.ts';
 import { attentionRows, burnCard, type FleetAgent, groupCards, LOCAL, stateCounts } from './fleet.ts';
 import { orca as cli, historyHosts, type HostLists, listHosts, readServerAgents, type RemoteHost, remoteHosts, type ServerAgent } from './hosts.ts';
-import type { CardView, FleetAnswer, HostGroup, Num, Pane, RangeAnswer, SessionAnswer, SpendView } from './protocol.ts';
+import type { CardView, FleetAnswer, HostGroup, Num, PastAnswer, Pane, RangeAnswer, SessionAnswer, SpendView } from './protocol.ts';
 import { type CatchUp, createCatchUp } from './history/catch-up.ts';
 import { openStore, type Store } from './history/store.ts';
 import { spendView } from './history/views.ts';
@@ -67,7 +70,10 @@ const keptKey = (part: number) => (part === 0 ? KEPT_KEY : `${KEPT_KEY}.${part}`
 const KEPT_WRITE_MS = 30 * 1000;
 
 // The Spend tab's view when the history store cannot be opened or read.
-const SPEND_NA: SpendView = { cost: 'n/a', tokens: 'n/a', calls: 'n/a', chart: null, byRepo: [], byModel: [], byHarness: [], sideCost: 'n/a', sources: null };
+const SPEND_NA: SpendView = { cost: 'n/a', tokens: 'n/a', calls: 'n/a', chart: null, byRepo: [], byModel: [], byHarness: [], costliest: [], sideCost: 'n/a', sources: null };
+
+// How many characters of a machine's id name its Orca host when no card gave the host's name.
+const HOST_ID_CHARS = 8;
 
 // A range ask runs a catch-up when the last one started this long ago or more: less than the
 // panel's RANGE_REFRESH_MS by a margin, since the panel times its asks from when it sends them and
@@ -219,6 +225,39 @@ export default function activate(orca: OrcaWorkerApi): void {
   // One Orca host's agents, in the order Orca lists them, and their cards.
   type HostBuilt = { agents: (FleetAgent & { pane?: Pane | null })[]; cards: BuiltCard[] };
 
+  // The id of each session a built card shows -> the card's id, as of the last build, and the name
+  // of each other Orca host's store key (`machine:<id>:<home>`) the cards of it gave.
+  let shown = new Map<string, string>();
+  const hostNames = new Map<string, string>();
+
+  // The name of the Orca host of the store key `key`: this computer `local`, another host the name
+  // of a card on it, else the machine's id shortened.
+  function hostName(key: string) {
+    return hostNames.get(key) ?? (key.startsWith('machine:') ? key.split(':')[1].slice(0, HOST_ID_CHARS) : key);
+  }
+
+  // Notes in `shown` and `hostNames` the sessions `cards` link to, and their hosts' names from
+  // `names`; a card whose host cannot be placed now shows no session.
+  async function noteShown(cards: BuiltCard[], names: Map<string, string>) {
+    const history = await opening;
+    if (!history) return;
+    const next = new Map<string, string>();
+    await Promise.all(
+      cards.map(async (card) => {
+        if (card.file === null || card.harness === null) return;
+        const id = await history.catchUp.sessionId(card.hostId, card.harness, card.file).catch((error) => {
+          log(`spyhop: cannot place the session of ${card.id}: ${(error as Error).message}`);
+          return null;
+        });
+        if (id === null) return;
+        next.set(id, card.id);
+        const key = id.slice(0, id.indexOf('\0'));
+        if (key !== LOCAL) hostNames.set(key, names.get(card.hostId) ?? card.hostId);
+      }),
+    );
+    shown = next;
+  }
+
   // The cards of every Orca agent, built once per request: the agents in the order Orca lists
   // them, the built cards, each card's view by its id and each remote host's name by its id.
   // `post` is given each Orca host's group as soon as its cards are built; a host with no agent
@@ -307,11 +346,13 @@ export default function activate(orca: OrcaWorkerApi): void {
         }
       }
     }
+    const built = [...others, ...servers].flatMap((host) => host.cards);
+    await noteShown(built, names);
     return {
       // in the order Orca lists them, which is the order of the groups
       agents: [...(await Promise.all(listing)).flat(), ...servers.flatMap(({ agents }) => agents)],
       views,
-      cards: [...others, ...servers].flatMap((built) => built.cards),
+      cards: built,
       names,
     };
   }
@@ -369,10 +410,24 @@ export default function activate(orca: OrcaWorkerApi): void {
     if (tab !== 'spend') return { request, tab, range, spend: null, ...read };
     // a read that fails, such as a store held past its busy timeout, is n/a until one succeeds
     try {
-      return { request, tab, range, spend: spendView(store, range, Date.now()), ...read };
+      return { request, tab, range, spend: spendView(store, range, Date.now(), { shown, hostName }), ...read };
     } catch (error) {
       log(`spyhop: cannot read the history store: ${(error as Error).message}`);
       return { request, tab, range, spend: SPEND_NA, ...read };
+    }
+  });
+
+  // A past session's summary and Trace, from the history store alone: the harness may have deleted
+  // its files since. Null when the store cannot be opened or read, or keeps none of it.
+  orca.panels.handle('spyhop.past', async ({ request, session }): Promise<PastAnswer> => {
+    const history = await opening;
+    if (!history) return { request, past: null };
+    try {
+      const summary = history.store.summary(session);
+      return { request, past: summary && { summary, trace: history.store.trace(session) } };
+    } catch (error) {
+      log(`spyhop: cannot read the history store: ${(error as Error).message}`);
+      return { request, past: null };
     }
   });
 

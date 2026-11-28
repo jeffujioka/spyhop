@@ -180,10 +180,18 @@ export type RangePoint = { key: string; v: Num };
 // A row of a Spend tab's list: what it is of (a repo, a model, a harness) and its cost.
 export type SpendRow = { name: string; cost: Num };
 
+// A row of the Spend tab's costliest sessions: the session's id (`<host>\0<harness>\0<main file or
+// opencode root id>`), title, repo, harness, the Orca host's name and whole cost, with its
+// sub-agents'; `card`: the id of the Live card of the session, null for a past session, which has
+// none.
+export type CostlySession = { id: string; title: string; repo: string; harness: string; host: string; cost: Num; card: string | null };
+
 // The Spend tab of a range (src/history/views.ts), over every session the history store holds,
 // sub-agents included: its cost (n/a when a model call of it logged none), tokens and model calls,
 // and its cost by day or month, null for Day; its cost by repo, by model (with its provider where
-// the harness logs one) and by harness, each costliest first, a cost n/a last; the cost of omp's
+// the harness logs one) and by harness, each costliest first, a cost n/a last; `costliest`: the
+// COSTLIEST costliest sessions that logged a model call in the range, costliest first, a cost n/a
+// last; the cost of omp's
 // side calls; and where the cost comes from, the Copilot calls' cost from the Copilot price table
 // and the rest as the harnesses logged it (both n/a when the cost is). Every figure n/a, the lists
 // empty, no chart and no sources when the store cannot be opened.
@@ -195,6 +203,7 @@ export type SpendView = {
   byRepo: SpendRow[];
   byModel: SpendRow[];
   byHarness: SpendRow[];
+  costliest: CostlySession[];
   sideCost: Num;
   sources: { copilot: Num; logged: Num } | null;
 };
@@ -209,6 +218,11 @@ export type ReadProgress = { host: string; harness: string; share: number };
 // a host and harness never read through, else null; `request`: the panel's number of the request.
 export type RangeAnswer = { request: number; tab: RangeTab; range: Range; spend: SpendView | null; notRead: string[]; progress: ReadProgress | null };
 
+// A past session, one with no Live card: what the history store keeps of it, its summary and its
+// Trace (null when it has none), or null when the store keeps none. `request`: the panel's number
+// of the request.
+export type PastAnswer = { request: number; past: { summary: SessionSummary; trace: TraceView | null } | null };
+
 declare module 'orca' {
   interface PluginRequests {
     /** The fleet of the Orca agents' cards on every Orca host, built once per request.
@@ -222,6 +236,9 @@ declare module 'orca' {
     /** The range tab `tab` over `range`, from the history store as it is now. `request`: the
      *  panel's number of the request. */
     'spyhop.range': { input: { request: number; tab: RangeTab; range: Range }; output: RangeAnswer };
+    /** The summary and Trace of the session `session` (its id), from the history store as it is
+     *  now, whatever the harness has deleted since. `request`: the panel's number of the request. */
+    'spyhop.past': { input: { request: number; session: string }; output: PastAnswer };
     /** Focuses the pane in this computer's Orca window; `focused` false when it could not, the
      *  reason in the worker's log. */
     'spyhop.focus': { input: Pane; output: { focused: boolean } };

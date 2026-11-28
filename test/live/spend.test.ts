@@ -47,7 +47,7 @@ test('Week by day', async () => {
   assert.equal(figure(html, 'cost'), '$3.50');
   // every figure and chart under its title and the line of what it means
   const figures = parts(html, 'data-part', 'figure');
-  assert.equal(figures.length, 8);
+  assert.equal(figures.length, 9);
   for (const titled of figures) {
     assert.notEqual(text(parts(titled, 'data-title')[0] ?? ''), '', titled);
     assert.notEqual(text(parts(titled, 'data-meaning')[0] ?? ''), '', titled);
