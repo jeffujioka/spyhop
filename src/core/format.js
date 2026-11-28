@@ -37,6 +37,15 @@ export function formatDuration(ms) {
   return `${Math.floor(seconds / 3600)}h ${pad(Math.floor(seconds / 60) % 60)}m`;
 }
 
+// A Trace lane's total time, as the Trace writes it: "25s", "5m 0s", "9m 49s", "1h 2m 3s".
+// Takes a number.
+export function formatLaneTime(ms) {
+  const seconds = Math.max(0, Math.floor(ms / 1000));
+  if (seconds < 60) return `${seconds}s`;
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
+  return `${Math.floor(seconds / 3600)}h ${Math.floor(seconds / 60) % 60}m ${seconds % 60}s`;
+}
+
 // How long an agent has been in its state, as the live panel writes it: "45s", "3m", "2h 05m".
 // Takes a number or 'n/a'.
 export function formatAge(ms) {

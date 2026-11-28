@@ -9,7 +9,9 @@
 // counts. Pressing a card or a folded line draws that session's screen at once, from the fleet's
 // card, and asks for the session as soon as no ask is out; back draws the last fleet and asks for
 // the fleet the same way, as does a session answer that says Orca no longer lists the agent. Show
-// all lists every sub-agent of the open session until the screen changes. Focus
+// all lists every sub-agent of the open session until the screen changes. A session screen opens
+// on Figures; Trace draws the session's Trace and asks for the session with its Trace as soon as
+// no ask is out, then on the session's schedule; Figures draws the figures again. Focus
 // asks the worker to focus the pane of the open session's agent; its answer, and its failure,
 // change nothing drawn. The Live tab draws the last fleet, a range tab or range draws that tab
 // over the range at once, and each asks for what it draws as soon as no ask is out; pressing the
@@ -46,11 +48,12 @@ export type Live = { show(visible: boolean): void; press(target: string): void; 
 export type Drawing = { sameScreen: boolean };
 
 // The screen drawn: the fleet, the session of the card `id`, with the fleet's card of it (null
-// when the fleet drawn has none), its answer once one is in, and whether every sub-agent is
-// listed (`showAll`), or the range tab `tab` over `range`, with its answer once one is in.
+// when the fleet drawn has none), its answer once one is in, whether every sub-agent is listed
+// (`showAll`) and whether Trace is pressed (`trace`), or the range tab `tab` over `range`, with
+// its answer once one is in.
 type Screen =
   | { name: 'fleet' }
-  | { name: 'session'; id: string; card: CardView | null; session: SessionView | null; showAll: boolean }
+  | { name: 'session'; id: string; card: CardView | null; session: SessionView | null; showAll: boolean; trace: boolean }
   | { name: 'range'; tab: RangeTab; range: Range; answer: RangeAnswer | null };
 
 const LIVE_TABS = tabBar('live', null);
@@ -83,10 +86,10 @@ export function createLive(frame: Frame, draw: (html: string, drawing: Drawing) 
   let drawn: string | null = null;
 
   function redraw() {
-    const now = screen.name === 'session' ? `session:${screen.id}` : screen.name === 'range' ? `range:${screen.tab}` : 'fleet';
+    const now = screen.name === 'session' ? `session:${screen.id}:${screen.trace}` : screen.name === 'range' ? `range:${screen.tab}` : 'fleet';
     const drawing = { sameScreen: now === drawn };
     drawn = now;
-    if (screen.name === 'session') draw(sessionScreen(screen.session, { card: screen.card, showAll: screen.showAll, now: Date.now() }), drawing);
+    if (screen.name === 'session') draw(sessionScreen(screen.session, { card: screen.card, showAll: screen.showAll, now: Date.now(), trace: screen.trace }), drawing);
     else if (screen.name === 'range') draw(rangeScreen(screen), drawing);
     else if (view.groups.length > 0) draw(fleetScreen(view), drawing);
     else draw(view.whole ? EMPTY : LOADING, drawing);
@@ -112,7 +115,7 @@ export function createLive(frame: Frame, draw: (html: string, drawing: Drawing) 
     const kept = () => undefined;
     const answered =
       asked.name === 'session'
-        ? frame.plugin.request('spyhop.session', { request, card: asked.id }).then(({ session }) => {
+        ? frame.plugin.request('spyhop.session', { request, card: asked.id, trace: asked.trace }).then(({ session }) => {
             if (closed || screen.name !== 'session' || screen.id !== asked.id) return;
             if (session) screen = { ...screen, session };
             else showFleet();
@@ -177,7 +180,7 @@ export function createLive(frame: Frame, draw: (html: string, drawing: Drawing) 
     if (target.startsWith('open:')) {
       const id = decodeURIComponent(target.slice('open:'.length));
       const card = view.groups.flatMap((group) => group.cards).find((found) => found.id === id) ?? null;
-      screen = { name: 'session', id, card, session: null, showAll: false };
+      screen = { name: 'session', id, card, session: null, showAll: false, trace: false };
       askSoon();
       redraw();
     } else if (target === 'tab:live') {
@@ -193,6 +196,13 @@ export function createLive(frame: Frame, draw: (html: string, drawing: Drawing) 
       redraw();
     } else if (target === 'all' && screen.name === 'session') {
       screen = { ...screen, showAll: true };
+      redraw();
+    } else if (target === 'view:trace' && screen.name === 'session' && !screen.trace) {
+      screen = { ...screen, trace: true };
+      redraw();
+      askSoon();
+    } else if (target === 'view:figures' && screen.name === 'session' && screen.trace) {
+      screen = { ...screen, trace: false };
       redraw();
     } else if (target === 'focus' && screen.name === 'session') {
       // the pane of the card the screen's header is drawn from; whether Orca focused it, or why

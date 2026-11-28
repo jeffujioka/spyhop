@@ -167,10 +167,11 @@ button:hover { background: var(--orca-accent); color: var(--orca-accent-foregrou
 [data-chart="subagents"] { height: 8px; margin-top: 2px; }
 [data-chart="subagents"] rect { fill: var(--k); }
 .more { margin-top: 6px; font-size: 11px; }
-/* the tab bar, the range control, and a range tab's titled figures and charts: each its title,
-   the line of what it means under it, then its figure or chart */
-[data-part="tabs"], [data-part="range"] { gap: 4px; margin-bottom: 8px; }
-[data-part="tabs"] [aria-selected="true"], [data-part="range"] [aria-pressed="true"] {
+/* the tab bar, the range control, the session screen's Figures and Trace switch, and a range
+   tab's or the Trace's titled figures and charts: each its title, the line of what it means
+   under it, then its figure or chart */
+[data-part="tabs"], [data-part="range"], [data-part="switch"] { gap: 4px; margin-bottom: 8px; }
+[data-part="tabs"] [aria-selected="true"], [data-part="range"] [aria-pressed="true"], [data-part="switch"] [aria-pressed="true"] {
   background: var(--orca-accent); color: var(--orca-accent-foreground); border-color: var(--orca-primary);
 }
 section[data-part="figure"] {
@@ -183,4 +184,11 @@ section[data-part="figure"] > .num { display: block; font-size: 17px; font-weigh
 [data-chart^="range-"] { height: 100px; }
 [data-chart^="range-"] path { stroke: var(--spy-s1); stroke-width: 1.5; }
 [data-chart^="range-"] path[data-key] { stroke-width: 4; }
+/* the Trace: each lane's spans on one time axis; each sub-agent's row set in by its depth */
+[data-chart^="lane-"] { height: 12px; margin-top: 2px; }
+[data-chart^="lane-"] rect { fill: var(--spy-s1); }
+[data-chart="lane-tools"] rect { fill: var(--spy-s2); }
+[data-chart="lane-subagents"] rect { fill: var(--spy-k1); }
+[data-chart="lane-developer"] rect { fill: var(--spy-others); }
+[data-agent][data-depth] { margin-left: calc((var(--depth) - 1) * 12px); }
 `;

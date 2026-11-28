@@ -1,7 +1,9 @@
 // The session screen of the live panel, as markup, under the tab bar with Live shown: the header,
 // with the back control, the Orca
-// state and the title, and the Focus button when the agent has a pane; the four figures; the
-// context, tokens and cost cards; then the Sub-agents, Tools, Models and Session sections. A part
+// state and the title, and the Focus button when the agent has a pane; under it, the Figures and
+// Trace switch. With Figures: the four figures; the
+// context, tokens and cost cards; then the Sub-agents, Tools, Models and Session sections. With
+// Trace: the session's Trace (src/live/trace.ts), once an answer brings it. A part
 // with nothing to show is not drawn; a figure that cannot be read reads n/a. While the session's
 // sub-agents are being read, its cost says how many are. Until the session is answered, the
 // header is the fleet's card's and the screen says it is loading.
@@ -13,6 +15,7 @@ import { agentBars, contextChart, costChart, tokensChart } from './charts.ts';
 import { readingNote } from './fleet.ts';
 import { costPart, esc, NAMED_ROWS, num, topRows } from './html.ts';
 import { tabBar } from './tabs.ts';
+import { traceScreen } from './trace.ts';
 
 // The sub-agents the Sub-agents section draws a bar of, those that started last, unless every
 // one is asked for.
@@ -24,7 +27,8 @@ const KIND_COLOURS = 6;
 // What the screen is drawn with besides the answer: the fleet's card of the session, for the
 // header before the answer is in; `showAll`: whether every sub-agent is listed; `now`: epoch ms,
 // from which a running sub-agent's time is told.
-export type SessionUi = { card: CardView | null; showAll: boolean; now: number };
+// `trace`: whether Trace is pressed, else Figures.
+export type SessionUi = { card: CardView | null; showAll: boolean; now: number; trace: boolean };
 
 const BACK = '<button type="button" data-press="back" class="back" aria-label="Back">‹</button>';
 
@@ -141,11 +145,30 @@ function session({ startedMs, thinking, latencyMs, premium, branch, remote, host
   return `<section data-part="session" class="box">${heading('Session', '')}${drawn.join('')}</section>`;
 }
 
+// The Figures and Trace switch, `trace` pressed or Figures.
+function viewSwitch(trace: boolean) {
+  const views = [
+    ['figures', 'Figures', !trace],
+    ['trace', 'Trace', trace],
+  ] as const;
+  return `<div data-part="switch" class="row">${views.map(([name, label, pressed]) => `<button type="button" data-press="view:${name}" aria-pressed="${pressed}">${label}</button>`).join('')}</div>`;
+}
+
+// The session's Trace (src/live/trace.ts): until an answer brings it, a line that says it is
+// being read; one that cannot be read, a line that says so.
+function traceOf(trace: SessionView['trace']) {
+  if (trace === undefined) return '<p data-part="trace-loading" class="muted">Reading the Trace…</p>';
+  if (trace === null) return '<p data-part="trace-none" class="muted">The Trace of this session cannot be read.</p>';
+  return traceScreen(trace);
+}
+
 export function sessionScreen(view: SessionView | null, ui: SessionUi): string {
   const { card } = ui;
   if (!view) return `<main data-screen="session">${tabBar('live', null)}${header(card, card?.folder ?? '')}<p data-part="loading" class="muted">Reading the session…</p></main>`;
+  const top = `<main data-screen="session">${tabBar('live', null)}${header(view.card, view.path)}${viewSwitch(ui.trace)}`;
+  if (ui.trace) return `${top}${traceOf(view.trace)}</main>`;
   return (
-    `<main data-screen="session">${tabBar('live', null)}${header(view.card, view.path)}${figures(view.figures, view.card.reading)}` +
+    `${top}${figures(view.figures, view.card.reading)}` +
     `${view.context ? contextChart(view.context) : ''}${view.tokens ? tokensChart(view.tokens) : ''}${view.cost ? costCard(view.cost, view.costFrom) : ''}` +
     `${view.subAgents ? subAgents(view.subAgents, ui) : ''}${view.tools ? tools(view.tools) : ''}${models(view.models)}${session(view.session)}</main>`
   );

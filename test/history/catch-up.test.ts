@@ -38,7 +38,7 @@ async function catchUpOf() {
   const { exec, calls } = recordingRun();
   const logs: string[] = [];
   store = await openStore(home);
-  const catchUp = createCatchUp({ run: exec, runBytes, store, home, log: (message) => logs.push(message), hosts: async () => [] });
+  const catchUp = createCatchUp({ run: exec, runBytes, store, home, log: (message) => logs.push(message), hosts: async () => [], aliasOf: async () => null });
   return { home, calls, logs, store, catchUp };
 }
 

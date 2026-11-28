@@ -79,6 +79,14 @@
 // session's rows (an older session's rows are not all among those a later run reads again),
 // paged as above, PAGE_ROOTS root sessions at a time: one sub-agent row per session below it,
 // keyed by its id and titled by its title, under the session of its `parent_id`.
+//
+// Between runs, `readSession` brings one session up to date, as the session screen's Trace asks:
+// on the place of its Orca host (this computer for `local`; else, by its ssh alias, the machine
+// of that alias's latest probe, probed once when it has none, this computer when it is this
+// computer's), it reads the main session file and its sub-agents' transcripts as a run reads
+// them, or rebuilds an opencode root session's rows, as above. A file's reads, a run's or
+// `readSession`'s, run one at a time. An alias Orca does not name, a probe that fails, an
+// unknown identity of this computer and a host `ssh` no longer reaches read nothing.
 import { hostname, type } from 'node:os';
 import { zstdDecompressSync } from 'node:zlib';
 import { HARNESS_NAMES } from '../agent-cards.ts';
@@ -205,6 +213,9 @@ type HostRead = { place: Place; ended: boolean; harnesses: string[]; files: List
 // read.
 type Share = { host: string; name: string; rank: number; harness: string; toRead: number; read: number };
 
+// An Orca host as `probe` found it: the machine it reaches, and its place, asked when called.
+type Probed = { machine: string; place(): Promise<Place> };
+
 export type CatchUp = {
   // Runs a catch-up, or gives the one running.
   run(): Promise<void>;
@@ -216,10 +227,15 @@ export type CatchUp = {
   // The host and harness the running run is reading that were never read through, and the share
   // of it read (see the header); null when there is none, or no run is running.
   progress(): ReadProgress | null;
+  // Brings the session of the main session file `path` (opencode: the root session id) of the
+  // harness `harness` (Orca's kind) on the Orca host `host` (Orca's host id) up to date in the
+  // store (see the header); its session id, null when its host cannot be read now.
+  readSession(host: string, harness: string, path: string): Promise<string | null>;
 };
 
 // `run` and `runBytes`: the plugin's runners; `log`: the worker's log, which a file that cannot
-// be read is written to, left for the next run; `hosts`: the Orca hosts other than this computer.
+// be read is written to, left for the next run; `hosts`: the Orca hosts other than this computer;
+// `aliasOf`: the ssh alias of the Orca host of an Orca host id, null when Orca lists none.
 export function createCatchUp({
   run,
   runBytes,
@@ -227,6 +243,7 @@ export function createCatchUp({
   home,
   log,
   hosts,
+  aliasOf,
 }: {
   run: Run;
   runBytes: RunBytes;
@@ -234,6 +251,7 @@ export function createCatchUp({
   home: string;
   log: (message: string) => void;
   hosts: () => Promise<HistoryHost[]>;
+  aliasOf: (hostId: string) => Promise<string | null>;
 }): CatchUp {
   let current: Promise<void> | null = null;
   let started: number | null = null;
@@ -293,10 +311,30 @@ export function createCatchUp({
     return { agent: { ...figuresOf(ins), costNa: 1, key: meta?.toolUseId ?? name, name: meta?.name ?? name, parent: null, running: null } satisfies AgentRow };
   }
 
+  // A file's reads, one at a time: host and path -> the end of the last one asked for.
+  const fileReads = new Map<string, Promise<void>>();
+
+  // Reads the file of `listed` on the host of `place` once the read of it asked for before has
+  // ended, so that two reads never go on from the same position.
+  function catchUp(place: Place, listed: Listed) {
+    const key = `${place.host}\0${listed.path}`;
+    const read = (fileReads.get(key) ?? Promise.resolve()).then(() => readFile(place, listed));
+    const ended = read.catch(() => {});
+    fileReads.set(key, ended);
+    ended.then(() => {
+      if (fileReads.get(key) === ended) fileReads.delete(key);
+    });
+    return read;
+  }
+
   // A read is saved only while its host has been reached, so that a repo asked over a dropped
-  // connection (its origin none) is never kept for good.
-  async function catchUp(place: Place, { harness: { harness, fold }, dir, row, path, size, mtimeMs }: Listed) {
+  // connection (its origin none) is never kept for good. A file whose size and time are those of
+  // its last read is not read.
+  async function readFile(place: Place, { harness: { harness, fold }, dir, path, size, mtimeMs }: Listed) {
     const { host, exec } = place;
+    const found = store.file(host, harness, path);
+    const row = found?.version === HISTORY_VERSION ? found : null;
+    if (row && row.size === size && row.mtimeMs === mtimeMs) return;
     const kept = row ? (store.state(row.id) as Kept) : undefined;
     const read = await scanFile(place.read, fold, kept ? { state: kept.fold, pos: row!.pos } : null, path, size);
     const restarted = read.restarted || !kept;
@@ -528,7 +566,7 @@ export function createCatchUp({
   // (`placeOf` of `uname -sn` and `printenv HOME`, then `machineOf`), and its place, `rank` in
   // `progress`'s order, keyed by that machine, with `zstd -V` asked; null when its place or its
   // machine cannot be asked, an empty identity or home included.
-  async function probe({ name, alias }: HistoryHost, rank: number) {
+  async function probe({ name, alias }: HistoryHost, rank: number): Promise<Probed | null> {
     let reached = true;
     const noted = <Result extends { code: number }>(result: Result) => {
       if (result.code === 255) reached = false;
@@ -565,11 +603,31 @@ export function createCatchUp({
 
   // This computer's machine, as `probe` keys another host's, once asked; a failed ask is not kept.
   let thisMachine: string | null = null;
+  async function askThisMachine() {
+    thisMachine ??= await machineOf(run, type(), hostname().toLowerCase()).then(
+      (identity) => `machine:${identity}:${home}`,
+      (error) => {
+        log(`spyhop: catch-up cannot ask this computer's machine: ${(error as Error).message}`);
+        return null;
+      },
+    );
+    return thisMachine;
+  }
+
+  const local: Place = { host: LOCAL, name: LOCAL, rank: 0, exec: run, read: run, os: type(), home, reached: () => true };
+
+  // ssh alias -> the machine its latest probe found, and its place, asked once
+  const probes = new Map<string, Probed>();
+  function remember(alias: string, found: Probed) {
+    let placing: Promise<Place> | null = null;
+    const known = { machine: found.machine, place: () => (placing ??= found.place()) };
+    probes.set(alias, known);
+    return known;
+  }
 
   async function runOnce() {
     shares = [];
     const recent = midnightBefore(Date.now(), FIRST_DAYS);
-    const local: Place = { host: LOCAL, name: LOCAL, rank: 0, exec: run, read: run, os: type(), home, reached: () => true };
     // the first phase on every host at once, every other host's machine asked first: a machine is
     // read once, over its first alias in Orca's order, and this computer, read here, never over
     // ssh; a host whose machine cannot be asked is not read, nor is any while this computer's
@@ -578,13 +636,8 @@ export function createCatchUp({
       phaseOne(local, recent),
       hosts().then(async (listed) => {
         const probed = await Promise.all(listed.map((host, i) => probe(host, i + 1)));
-        thisMachine ??= await machineOf(run, type(), hostname().toLowerCase()).then(
-          (identity) => `machine:${identity}:${home}`,
-          (error) => {
-            log(`spyhop: catch-up cannot ask this computer's machine: ${(error as Error).message}`);
-            return null;
-          },
-        );
+        listed.forEach(({ alias }, i) => (probed[i] ? remember(alias, probed[i]) : probes.delete(alias)));
+        await askThisMachine();
         const machines = new Set([thisMachine]);
         const kept = listed.flatMap((host, i) => {
           const machine = thisMachine === null ? undefined : probed[i]?.machine;
@@ -612,6 +665,69 @@ export function createCatchUp({
     if (reads.every((read, i) => !done[i] || read!.ended)) store.setMeta(CATCH_UPS, String(Number(store.meta(CATCH_UPS) ?? 0) + 1));
   }
 
+  // The place of the Orca host `hostId`: this computer's for `local` and for a host whose machine
+  // is this computer; else that of the machine its alias reached at its latest probe, probed now
+  // when it never was; null when Orca names no alias of it, its machine cannot be asked, or
+  // `ssh` no longer reaches it.
+  async function placeOfHost(hostId: string) {
+    if (hostId === LOCAL) return local;
+    const alias = await aliasOf(hostId);
+    if (alias === null) return null;
+    let known = probes.get(alias);
+    if (!known) {
+      const found = await probe({ name: alias, alias }, 0);
+      if (!found) return null;
+      known = remember(alias, found);
+    }
+    const machine = await askThisMachine();
+    if (machine === null) return null;
+    if (known.machine === machine) return local;
+    const place = await known.place();
+    if (place.reached()) return place;
+    probes.delete(alias);
+    return null;
+  }
+
+  // Rebuilds the summary and sub-agent rows of the opencode root session `root` in the database
+  // of the host of `place` from all its rows, under the database's row, made as a first read
+  // makes it when there is none yet.
+  async function readOpencodeSession(place: Place, root: string) {
+    const database = databaseOf(place.home);
+    const tables = await select(place.read, database, SCHEMA_QUERY);
+    const sessions = tables && sessionsIn(tables);
+    if (!sessions) return;
+    const row = store.file(place.host, 'opencode', database);
+    const repos = row?.version === HISTORY_VERSION ? (store.state(row.id) as OpencodeKept).repos : new Map<string | null, string>();
+    const id = row?.id ?? saveOpencode(place.host, database, repos, 0);
+    await saveOpencodeSessions(place, database, sessions, id, new Set([root]), repos);
+  }
+
+  // Reads the main session file `path` of `harness` on the host of `place`, then the transcripts
+  // of its sub-agents, each from where its last read ended.
+  async function readSessionFiles(place: Place, harness: Harness, path: string) {
+    const stem = path.replace(/\.jsonl$/, '');
+    const listed = await listFolder(place.read, { dir: path.slice(0, path.lastIndexOf('/')), os: place.os, depth: harness.depth - 1, path: `${stem}*.jsonl`, strict: true });
+    const files = listed.filter((file) => (file.path === path || file.path.startsWith(`${stem}/`)) && !file.path.endsWith('/changes.jsonl'));
+    files.sort((a, b) => Number(b.path === path) - Number(a.path === path));
+    for (const file of files) await catchUp(place, { ...file, harness, dir: harness.dirOf(place.home), row: null, toRead: 0 });
+  }
+
+  async function readSession(hostId: string, kind: string, path: string) {
+    const place = await placeOfHost(hostId);
+    if (!place) return null;
+    const harness = kind === 'opencode2' ? 'opencode' : kind;
+    const files = HARNESSES.find((found) => found.harness === harness);
+    if (!files && harness !== 'opencode') return null;
+    try {
+      if (files) await readSessionFiles(place, files, path);
+      else await readOpencodeSession(place, path);
+    } catch (error) {
+      if (!place.reached()) return null;
+      log(`spyhop: cannot bring the session ${path} up to date: ${(error as Error).message}`);
+    }
+    return `${place.host}\0${harness}\0${path}`;
+  }
+
   return {
     run() {
       if (!current) {
@@ -634,5 +750,6 @@ export function createCatchUp({
       // 99% at most while it reads, the rounded percent never 100% before it ends
       return reading ? { host: reading.name, harness: HARNESS_NAMES[reading.harness] ?? reading.harness, share: Math.min(reading.read / reading.toRead, 0.99) } : null;
     },
+    readSession,
   };
 }

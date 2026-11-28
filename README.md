@@ -111,7 +111,8 @@ the cold starts or the cache figures. The Models section names them among what u
 
 A session's screen has a header with the back control, the agent's state, the title, the
 harness, model, folder and how long the agent has been in its state, and a Focus button when
-the agent has a pane (see Focus pane). Under it:
+the agent has a pane (see Focus pane). Under it a switch, Figures and Trace, set to Figures when
+the screen opens. Figures shows:
 
 - **Four figures**: the cost, with the share its sub-agents spent; the tokens, with the share
   read from the prompt cache; the model calls, with the tool calls that failed; and how long
@@ -148,6 +149,25 @@ A model call is a call that logged usage. An omp call that logged none, or a usa
 (one omp aborted, or that failed before the model answered), is not counted: not in the model
 calls, the charts or the cold starts. A part with nothing to show, such as the charts of a
 session without a model call, is not drawn.
+
+### Trace
+
+Trace shows the session's Trace, kept fresh with the screen: on each refresh the history store
+brings the session's files up to date (opencode: rebuilds its root session from all its rows)
+and answers its Trace. On one time axis, from the session's first entry to its last, four
+lanes, each titled, with a line of what it means and its total time (`25s`, `5m 0s`, `9m 49s`):
+
+- **Thinking**: the main agent's model calls.
+- **Tools**: its tool calls.
+- **Waiting on sub-agents**: when a sub-agent it started runs while it runs no model call and no
+  tool call but one that starts or awaits sub-agents.
+- **Waiting on you**: from a reply that ends a turn to the developer's next prompt.
+
+Under them, a row of each sub-agent, sub-agents of sub-agents included, nested under the agent
+that started it in the order they started: a bar from its start to its end, its name, its status
+as the harness logs it (`running` while it runs) and its cost, n/a when the harness logs none. A
+session on another Orca host is read over its ssh alias, as the catch-up reads it; when that
+host cannot be reached, the screen says the Trace cannot be read.
 
 ### Chart axes
 

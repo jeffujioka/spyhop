@@ -38,7 +38,8 @@ test('Each chart one Tab stop', async () => {
     cost: { harness: 'omp', total: 1, perHour: 'n/a', own: FOUR.map((clock, i) => ({ t: at(clock), v: i + 1 })), noCall: null, sub: 'n/a' },
   };
   const page = await sessionWith(charts, 'cost', true);
-  await page.locator('[data-press="focus"]').focus();
+  // the last Tab stop before the charts: the switch's Trace, under the header
+  await page.locator('[data-press="view:trace"]').focus();
 
   await page.keyboard.press('Tab');
 
@@ -89,8 +90,8 @@ test('Escape hides the box', async () => {
   assert.equal(boxes.length, 1);
 });
 
-// Out to the header's Focus button, not to another chart, whose own crosshair would take the
-// place of this one's whether or not the focus leaving hides it.
+// Out to the switch's Trace button under the header, not to another chart, whose own crosshair
+// would take the place of this one's whether or not the focus leaving hides it.
 test('Tab out of a chart takes its crosshair away', async () => {
   const page = await sessionWith({ context: contextAt(...FOUR) }, 'context', true);
   await chartNamed(page, 'Context').focus();
@@ -98,7 +99,7 @@ test('Tab out of a chart takes its crosshair away', async () => {
 
   await page.keyboard.press('Shift+Tab');
 
-  assert.ok(await isFocused(page.locator('[data-press="focus"]')));
+  assert.ok(await isFocused(page.locator('[data-press="view:trace"]')));
   assert.deepEqual(await shownOnce(page, 'context', ({ crosshairs, boxes }) => crosshairs.length + boxes.length === 0), { crosshairs: [], xs: [], dots: 0, boxes: [] });
 });
 

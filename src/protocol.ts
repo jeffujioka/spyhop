@@ -137,7 +137,9 @@ export type SessionSummary = { id: string; title: string; repo: string; harness:
 // `models`: the cost of the session and its sub-agents by model, each with what used it where the
 // harness says (Claude Code does not): the main agent, how many sub-agents, and the session's side
 // calls;
-// `session`: the Session section, `host` the Orca host's name when it is not this computer.
+// `session`: the Session section, `host` the Orca host's name when it is not this computer;
+// `trace`: the session's Trace when the request asks for it, null when it cannot be read, absent
+// when not asked for.
 export type SessionView = {
   card: CardView;
   linked: boolean;
@@ -159,6 +161,7 @@ export type SessionView = {
   tools: { calls: number; failed: number; byTool: { name: string; calls: number; failed: number }[] } | null;
   models: { by: 'cost'; rows: { model: string; main: boolean; subAgents: number; sideCalls: boolean; value: Num }[] };
   session: { startedMs: Num; thinking: string; latencyMs: Num; premium: Num; branch: string | null; remote: string | null; host: string | null };
+  trace?: TraceView | null;
 };
 
 // The session of the card a session request asks for, or null when Orca no longer lists its
@@ -213,8 +216,9 @@ declare module 'orca' {
      *  (`spyhop.group`). */
     'spyhop.fleet': { input: { request: number }; output: FleetAnswer };
     /** The session of one card, built as the fleet is, which posts nothing. `request`: the
-     *  panel's number of the request; `card`: the card's id. */
-    'spyhop.session': { input: { request: number; card: string }; output: SessionAnswer };
+     *  panel's number of the request; `card`: the card's id; `trace`: whether to answer the
+     *  session's Trace too, its session file brought up to date in the history store first. */
+    'spyhop.session': { input: { request: number; card: string; trace?: boolean }; output: SessionAnswer };
     /** The range tab `tab` over `range`, from the history store as it is now. `request`: the
      *  panel's number of the request. */
     'spyhop.range': { input: { request: number; tab: RangeTab; range: Range }; output: RangeAnswer };

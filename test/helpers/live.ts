@@ -108,7 +108,7 @@ export async function sessionOf(
   const cards = fleet.groups.flatMap((group) => group.cards);
   const id = card(cards);
   const answer = (await mounted.request('spyhop.session', { request: request + 1, card: id })) as SessionAnswer;
-  const ui = { card: cards.find((found) => found.id === id) ?? null, showAll: false, now: Date.now() };
+  const ui = { card: cards.find((found) => found.id === id) ?? null, showAll: false, now: Date.now(), trace: false };
   return { answer, fleet, html: sessionScreen(answer.session, ui) };
 }
 

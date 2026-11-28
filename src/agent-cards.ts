@@ -19,9 +19,9 @@ import type { Num, Point } from './protocol.ts';
 
 // An agent as Orca reports it (`agents.list` of the worker host API, `orca agent list --json`),
 // with the path of its workspace folder; `id` is the one the caller names the agent by.
-// `machine`: the ssh alias of the Orca host it is on, null or absent for this computer.
-// `stateSince`: when the agent entered its state, epoch ms, as Orca gives it; null or absent
-// when Orca gives none.
+// `machine`: the ssh alias of the Orca host it is on, null or absent for this computer; `hostId`:
+// Orca's id of that host, `local` when absent. `stateSince`: when the agent entered its state,
+// epoch ms, as Orca gives it; null or absent when Orca gives none.
 export type OrcaAgent = {
   id: string;
   agent: string | null;
@@ -31,6 +31,7 @@ export type OrcaAgent = {
   path: string | null;
   machine?: string | null;
   stateSince?: number | null;
+  hostId?: string;
 };
 
 // The series and tallies a provider's fold keeps over a whole session file (src/core/series.js):
@@ -97,7 +98,9 @@ export type SubAgentInput = { name: string; kind: string | null; model: string |
 
 // A card as `build` returns it. `agents`: the ids of the agents that share it, in the order of
 // the agents, the first being the card's own `id`. `linked`: whether its agent links to a
-// session. `folder`: the one its session records, else its workspace's; `harness`: Orca's kind
+// session, `file` its main session file's path (opencode's: its session id), null without one;
+// `hostId`: Orca's id of the agent's host. `folder`: the one its session records, else its
+// workspace's; `harness`: Orca's kind
 // of the agent, `harnessName` the name a card gives it; `status`: the agent's Orca state;
 // `stateSince`: the agent's. `subAgents`: the sub-agents of its session, null when the session
 // tells none (no session, a provider without sub-agents, a listing that failed with none
@@ -110,6 +113,8 @@ export type BuiltCard = {
   id: string;
   agents: string[];
   linked: boolean;
+  file: string | null;
+  hostId: string;
   folder: string | null;
   branch: string | null;
   origin: string | null;
@@ -349,6 +354,8 @@ export function createAgentCards({ run, home, kept = [] }: { run: Run; home: str
             id: agent.id,
             agents: [agent.id],
             linked: Boolean(link),
+            file: link ? link.file.path : null,
+            hostId: agent.hostId ?? 'local',
             folder,
             branch: git.branch,
             origin: git.origin,

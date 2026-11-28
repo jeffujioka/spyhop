@@ -1,7 +1,8 @@
 // The charts of the live panel, as markup: on the fleet screen, the burn rate of the last hour
 // stacked by session; on a card, the spark line of a session's recent contexts and the bar of its
 // context; on the session screen, the context over the whole session,
-// the tokens of each model call, the cost, and the bars of its sub-agents on one time axis; on a
+// the tokens of each model call, the cost, and the bars of its sub-agents on one time axis; on
+// the Trace, its lanes on one time axis (`laneChart`); on a
 // range tab, a figure by day or month (`rangeChart`). A
 // chart is an SVG as wide as its box (`width="100%"` over a `viewBox` 360 wide, stretched with
 // `preserveAspectRatio="none"`) with no text of its own: its headline, times, labels and notes are
@@ -42,6 +43,7 @@ const COST_HEIGHT = 100;
 const BURN_HEIGHT = 80;
 const RANGE_HEIGHT = 100;
 const AGENT_HEIGHT = 10;
+const LANE_HEIGHT = 12;
 // Room of a session chart, in bars or points, unless its caller gives another.
 const ROOM = 120;
 // Space kept inside a session chart's edges, so the dots of its first and last points show whole.
@@ -519,18 +521,32 @@ export function rangeChart(name: string, points: RangePoint[], format: (v: numbe
 
 // The bars of the sub-agents `agents`, in their order, each on its own line of one time axis that
 // spans them all: from its start to its end, in the colour of its kind (`kind-<k>`, k from
-// `kinds`), under its label: its name, kind, model and cost. One whose start or end is not known
-// has its label and no bar.
-export function agentBars(agents: SubAgentView[], kinds: Map<string, number>): string {
+// `kinds`), under its label: its name, kind, model and cost; with `status`, its name, status and
+// cost; with `depth`, set in by its depth under the main agent (`data-depth`). One whose start or
+// end is not known has its label and no bar.
+export function agentBars(agents: (SubAgentView & { status?: string; depth?: number })[], kinds: Map<string, number>, opts: { status?: boolean; depth?: boolean } = {}): string {
   const times = agents.flatMap(({ startMs, endMs }) => (startMs === 'n/a' || endMs === 'n/a' ? [] : [startMs, endMs]));
   const x = timeScale(times);
-  const drawn = agents.map(({ name, kind, model, startMs, endMs, cost }) => {
+  const drawn = agents.map(({ name, kind, model, startMs, endMs, cost, status, depth }) => {
     const bar = startMs === 'n/a' || endMs === 'n/a' ? '' : `<rect x="${x(startMs)}" y="1" width="${Math.max(1, at(x(endMs) - x(startMs)))}" height="${AGENT_HEIGHT - 2}" rx="2"/>`;
+    const label = opts.status ? [name, status ?? 'n/a'] : [name, kind, model];
+    const nested = opts.depth ? ` data-depth="${depth}" style="--depth:${depth}"` : '';
     return (
-      `<div data-agent data-kind="${esc(kind)}" data-start="${startMs}" data-end="${endMs}" data-cost="${cost === 'n/a' ? cost : valueText(cost)}" class="agent kind-${kinds.get(kind)}">` +
-      `<div class="row label"><i></i><span class="grow">${[name, kind, model].map(esc).join(' · ')}</span> · <span class="num">${formatCost(cost)}</span></div>` +
+      `<div data-agent data-kind="${esc(kind)}" data-start="${startMs}" data-end="${endMs}" data-cost="${cost === 'n/a' ? cost : valueText(cost)}"${nested} class="agent kind-${kinds.get(kind)}">` +
+      `<div class="row label"><i></i><span class="grow">${label.map(esc).join(' · ')}</span> · <span class="num">${formatCost(cost)}</span></div>` +
       `${svgOf('subagents', AGENT_HEIGHT)}${bar}</svg></div>`
     );
   });
   return `${drawn.join('')}${times.length > 0 ? axis(times) : ''}`;
 }
+
+// A Trace lane (`lane-<lane>`) on the time axis from `startMs` to `endMs`: a bar of each of its
+// spans (`data-span`, with its start and end).
+export function laneChart(lane: string, spans: [number, number][], startMs: number, endMs: number): string {
+  const x = timeScale([startMs, endMs]);
+  const bars = spans.map(([start, end]) => `<rect data-span data-start="${start}" data-end="${end}" x="${x(start)}" y="1" width="${Math.max(1, at(x(end) - x(start)))}" height="${LANE_HEIGHT - 2}" rx="2"/>`);
+  return `${svgOf(`lane-${lane}`, LANE_HEIGHT)}${bars.join('')}</svg>`;
+}
+
+// The times of day under the Trace lanes, on their axis from `startMs` to `endMs`.
+export const laneTimes = (startMs: number, endMs: number) => clockMarks([startMs, endMs], timeScale([startMs, endMs]));

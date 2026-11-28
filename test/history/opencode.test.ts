@@ -46,7 +46,7 @@ async function twoCatchUps(write: (home: string) => void, between: (home: string
   write(home);
   const logs: string[] = [];
   store = await openStore(home);
-  const catchUp = createCatchUp({ run, runBytes, store, home, log: (message) => logs.push(message), hosts: async () => [] });
+  const catchUp = createCatchUp({ run, runBytes, store, home, log: (message) => logs.push(message), hosts: async () => [], aliasOf: async () => null });
   await catchUp.run();
   between(home);
   await catchUp.run();

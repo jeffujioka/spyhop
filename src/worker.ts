@@ -12,7 +12,9 @@
 // `spyhop.session` builds
 // the cards the same way, posts nothing, and
 // answers with the session of the one card it asks for (src/session-detail.ts), or none when
-// Orca no longer lists its agent. The session reader's totals of each scanned session file are
+// Orca no longer lists its agent; asked with `trace`, with the session's Trace from the history
+// store too, once the catch-up has brought its files up to date (`readSession`), null when it
+// cannot be read. The session reader's totals of each scanned session file are
 // kept in the plugin's storage (capability `storage:own`), and nothing else is there: they are loaded
 // when the worker starts, which the first request waits for, and written at the end of a request
 // when a scan changed, at most once every 30 seconds, so a file scanned before is not scanned
@@ -133,7 +135,15 @@ export default function activate(orca: OrcaWorkerApi): void {
   const opening = openStore(home).then(
     (store) => {
       showToday(store);
-      const catchUp = createCatchUp({ run, runBytes, store, home, log, hosts: async () => historyHosts(await listsNow()) });
+      const catchUp = createCatchUp({
+        run,
+        runBytes,
+        store,
+        home,
+        log,
+        hosts: async () => historyHosts(await listsNow()),
+        aliasOf: async (hostId) => remoteHosts(await listsNow(), [hostId]).get(hostId)?.alias ?? null,
+      });
       const stopCatchUps = scheduleCatchUps(catchUp, log, () => showToday(store));
       return { store, catchUp, stopCatchUps };
     },
@@ -325,13 +335,29 @@ export default function activate(orca: OrcaWorkerApi): void {
     };
   });
 
-  orca.panels.handle('spyhop.session', async ({ request, card: id }): Promise<SessionAnswer> => {
-    const { agents, cards, views, names } = await build(null);
+  // The Trace of the session of `card`, its files brought up to date in the history store first
+  // (`readSession`); null when the store cannot be opened or read, the card links to no session,
+  // or its host cannot be read now.
+  async function traceOf(card: BuiltCard) {
+    const history = await opening;
+    if (!history || card.file === null || card.harness === null) return null;
+    const id = await history.catchUp.readSession(card.hostId, card.harness, card.file);
+    if (id === null) return null;
+    try {
+      return history.store.trace(id);
+    } catch (error) {
+      log(`spyhop: cannot read the history store: ${(error as Error).message}`);
+      return null;
+    }
+  }
+
+  orca.panels.handle('spyhop.session', async ({ request, card: id, trace }): Promise<SessionAnswer> => {
+    const { cards, views, names } = await build(null);
     const card = cards.find((built) => built.id === id);
     if (!card) return { request, session: null };
-    const { hostId } = agents.find((agent) => agent.id === id)!;
-    const host = hostId === LOCAL ? null : (names.get(hostId) ?? hostId);
-    return { request, session: sessionDetail(card, { home, host, view: views.get(id)!, now: Date.now() }) };
+    const host = card.hostId === LOCAL ? null : (names.get(card.hostId) ?? card.hostId);
+    const session = sessionDetail(card, { home, host, view: views.get(id)!, now: Date.now() });
+    return { request, session: trace ? { ...session, trace: await traceOf(card) } : session };
   });
 
   orca.panels.handle('spyhop.range', async ({ request, tab, range }): Promise<RangeAnswer> => {

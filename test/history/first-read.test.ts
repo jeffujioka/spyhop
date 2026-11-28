@@ -84,7 +84,7 @@ test('Last 30 days first', async () => {
   const remote = ompFile(remoteHome, 'cli', 2_000, now - 5 * DAY_MS);
   standIns({ homes: { 'starfish-bs': remoteHome }, orca: STARFISH_LISTS });
   store = await openStore(home);
-  const catchUp = createCatchUp({ run, runBytes, store, home, log: () => {}, hosts: async () => historyHosts(await listHosts(run)) });
+  const catchUp = createCatchUp({ run, runBytes, store, home, log: () => {}, hosts: async () => historyHosts(await listHosts(run)), aliasOf: async () => null });
 
   await catchUp.run();
 

@@ -83,7 +83,7 @@ test('a compressed answer is no larger than a raw one could be', async () => {
   standIns({ homes: { 'starfish-bs': remoteHome }, orca: STARFISH_LISTS });
   const logs: string[] = [];
   const store = await openStore(home);
-  const catchUp = createCatchUp({ run, runBytes, store, home, log: (message) => logs.push(message), hosts: async () => historyHosts(await listHosts(run)) });
+  const catchUp = createCatchUp({ run, runBytes, store, home, log: (message) => logs.push(message), hosts: async () => historyHosts(await listHosts(run)), aliasOf: async () => null });
 
   try {
     await catchUp.run();

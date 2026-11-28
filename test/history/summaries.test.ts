@@ -29,7 +29,7 @@ async function catchUpOf() {
   setEnv('TZ', 'UTC');
   const home = useTempHome();
   store = await openStore(home);
-  const catchUp = createCatchUp({ run, runBytes, store, home, log: () => {}, hosts: async () => [] });
+  const catchUp = createCatchUp({ run, runBytes, store, home, log: () => {}, hosts: async () => [], aliasOf: async () => null });
   return { home, store, catchUp };
 }
 

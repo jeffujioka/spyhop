@@ -85,7 +85,7 @@ async function catchUpOf(remoteHome: string, { exec = run, bytes = runBytes, fai
   const home = useTempHome();
   const calls = standIns({ homes: { 'starfish-bs': remoteHome }, orca: STARFISH_LISTS, failing: failing.map((word) => `ssh starfish-bs ${word}`) });
   store = await openStore(home);
-  const catchUp = createCatchUp({ run: exec, runBytes: bytes, store, home, log: () => {}, hosts: async () => historyHosts(await listHosts(run)) });
+  const catchUp = createCatchUp({ run: exec, runBytes: bytes, store, home, log: () => {}, hosts: async () => historyHosts(await listHosts(run)), aliasOf: async () => null });
   return { home, calls, catchUp };
 }
 
