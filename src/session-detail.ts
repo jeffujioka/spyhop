@@ -37,6 +37,8 @@ export function sessionDetail(card: BuiltCard, { home, host, view }: { home: str
   // the cost the session's own model calls and side calls logged, after each of them
   const own = series ? cumulativeCost(spendsOf([series])) : NA;
   const cacheRead = sumOf([series, ...subSeries].map((kept) => (kept ? kept.points.reduce((sum, point) => sum + point.read, 0) : NA)));
+  // the Copilot part of the cost, the sub-agents' while it counts them; Claude Code prices no call
+  const copilot = claude ? 0 : sumOf([series, ...subSeries].map((kept) => (kept ? (kept.copilotUsd ?? 0) : NA)));
   return {
     card: view,
     linked: card.linked,
@@ -51,6 +53,7 @@ export function sessionDetail(card: BuiltCard, { home, host, view }: { home: str
       durationMs,
       startMs: stats.firstMessageMs,
     },
+    costFrom: cost === NA || copilot === NA ? { copilot: NA, logged: NA } : { copilot, logged: cost - copilot },
     context: series && {
       window: stats.contextMax,
       latest: stats.contextTokens,

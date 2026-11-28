@@ -113,7 +113,9 @@ export type SubAgentView = { name: string; kind: string; model: string; task: st
 // to none (`tools` too when the session made no tool call), `cost.sub` the sub-agents' cost over
 // time, `cost.noCall` what the harness logged of the session's own cost without a model call
 // (null when nothing); `subAgents`: the session's sub-agents, in the order they started, null
-// without any;
+// without any; `costFrom`: where the figures' cost comes from, the cost of the Copilot calls
+// priced from the Copilot price table and the rest as the harness logged it, the sub-agents'
+// included as the cost counts them (both n/a when the cost or the split is not known);
 // `models`: the cost of the session and its sub-agents by model, each with what used it where the
 // harness says (Claude Code does not): the main agent, how many sub-agents, and the session's side
 // calls;
@@ -123,6 +125,7 @@ export type SessionView = {
   linked: boolean;
   path: string;
   figures: { cost: Num; subShare: Num; tokens: Num; cacheShare: Num; calls: Num; failedTools: Num; durationMs: Num; startMs: Num };
+  costFrom: { copilot: Num; logged: Num };
   context: {
     window: Num;
     latest: Num;

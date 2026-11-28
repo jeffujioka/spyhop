@@ -67,6 +67,7 @@ function session(of: CardView): SessionView {
     linked: true,
     path: of.folder,
     figures: { cost: of.cost, subShare: 'n/a', tokens: 'n/a', cacheShare: 'n/a', calls: 'n/a', failedTools: 'n/a', durationMs: 'n/a', startMs: 'n/a' },
+    costFrom: { copilot: 0, logged: of.cost },
     context: null,
     tokens: null,
     cost: null,

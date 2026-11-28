@@ -8,7 +8,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { NOW, opencodeSession, type OpencodeCall, workspace } from '../helpers/agent-cards.ts';
-import { claudeSession, claudeSubAgent, FIX, folderOf, ompSession, sessionOf, type OmpCall } from '../helpers/live.ts';
+import { claudeSession, claudeSubAgent, FIX, folderOf, ompSession, ompSubAgent, sessionOf, type OmpCall } from '../helpers/live.ts';
 import { figure, parts, text, textOutsideFigures } from '../helpers/markup.ts';
 import { withCopilotPrices } from '../helpers/prices.ts';
 
@@ -82,6 +82,43 @@ test('a Copilot call without usage costs nothing', async () => {
 
   assert.equal(figure(html, 'cost'), '$0.25');
   assert.equal(figure(html, 'calls'), '1');
+});
+
+// The spec's call through `anthropic` that logged 0.40 USD, a minute before NOW.
+const anthropicCall: OmpCall = { at: NOW - MINUTE, provider: 'anthropic', model: 'claude-opus-5.5', uncached: 1_000, output: 100, cost: 0.4 };
+
+test('Cost card of a session with a Copilot call', async () => {
+  withCopilotPrices(OPUS_PRICES);
+
+  const { html } = await screenOf([copilotCall, anthropicCall]);
+
+  const [costCard] = parts(html, 'class', 'cost-card');
+  assert.equal(figure(costCard, 'total'), '$0.65');
+  assert.match(text(costCard), /\$0\.25 from tokens at GitHub prices/);
+  assert.match(text(costCard), /\$0\.40 as omp logged it/);
+  const [figures] = parts(html, 'class', 'figures');
+  assert.equal(figure(figures, 'cost'), '$0.65');
+  assert.doesNotMatch(text(figures), /GitHub|logged/);
+});
+
+// A guard of the sub-agents, no scenario of the spec: a sub-agent's Copilot call is in the part
+// from GitHub prices once the card's cost counts the sub-agents; a session with no logged cost
+// leaves the logged part out.
+test('a sub-agent Copilot call is in the part from GitHub prices', async () => {
+  withCopilotPrices(OPUS_PRICES);
+
+  const { html } = await sessionOf([FIX], {
+    prepare: (home) => {
+      const path = folderOf(home, FIX);
+      ompSession(home, path, { title: 'Fix the login bug', calls: [{ ...anthropicCall, cost: 0 }] });
+      ompSubAgent(home, path, 'Impl1', { init: { at: NOW - 3 * MINUTE, kind: 'implementer' }, calls: [copilotCall] });
+    },
+  });
+
+  const [costCard] = parts(html, 'class', 'cost-card');
+  assert.equal(figure(costCard, 'total'), '$0.25');
+  assert.match(text(costCard), /\$0\.25 from tokens at GitHub prices/);
+  assert.doesNotMatch(text(costCard), /logged/);
 });
 
 // The session answer and the session screen of a working opencode agent of the workspace

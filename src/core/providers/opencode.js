@@ -191,6 +191,8 @@ function detail(session) {
   const models = {};
   const minutes = [];
   let calls = 0;
+  // the cost of the Copilot calls, priced from the Copilot price table
+  let copilotUsd = 0;
   for (const row of assistants) {
     if (!isCall(row)) continue;
     const prompt = promptTokens(row);
@@ -204,6 +206,7 @@ function detail(session) {
       context: prompt > 0 ? prompt : null,
     };
     addCall(series, call);
+    if (row.providerId === COPILOT && isNumber(call.cost)) copilotUsd += call.cost;
     // A call counts in the minute it was made, by `created`, with its own cost: a current
     // session's minutes sum the costs of its calls, not the total opencode keeps for it (D18).
     addMinute(minutes, row.created, { ...call, tokens: tokenCount(messageTotal(row)) });
@@ -231,7 +234,7 @@ function detail(session) {
   // or after it
   const marks = assistants.filter((row) => row.summary === 1 && row.error == null).map((row) => ({ t: row.created, before: null, after: null }));
   const range = span(session);
-  return detailOf({ recent, series, marks, cold, tools: byTool, models, minutes, firstEntry: range?.first, lastEntry: range?.last });
+  return { ...detailOf({ recent, series, marks, cold, tools: byTool, models, minutes, firstEntry: range?.first, lastEntry: range?.last }), copilotUsd };
 }
 
 // `input` is `{ messages, compactions, tools, loggedCost, sources }`: `messages`, the session's

@@ -8,7 +8,8 @@
 // Pure: an answer in, a markup string out (src/panel.ts draws it).
 
 import { formatAge, formatCost, formatCostPerHour, formatCount, formatDate, formatDay, formatDuration, formatPercent, formatSeconds, formatTokens, orNa } from '../core/format.js';
-import type { CardView, SessionView, SubAgentView } from '../protocol.ts';
+import { NA } from '../core/providers/index.js';
+import type { CardView, Num, SessionView, SubAgentView } from '../protocol.ts';
 import { agentBars, contextChart, costChart, tokensChart } from './charts.ts';
 import { readingNote } from './fleet.ts';
 import { esc, num } from './html.ts';
@@ -54,15 +55,18 @@ function figures({ cost, subShare, tokens, cacheShare, calls, failedTools, durat
   return `<div class="figures">${items.map(([caption, value, line]) => `<div class="figure"><div class="muted">${caption}</div>${value}<div class="muted">${line}</div></div>`).join('')}</div>`;
 }
 
-// The cost card: the cost chart, and the total with where it comes from, the one place of the
-// panel that says so, and the cost per hour; under them, when the harness logged part of the
-// session's cost without a model call, how much, which the chart does not draw. The stylesheet
-// puts them under the chart's title.
-function costCard(cost: NonNullable<SessionView['cost']>) {
+// The cost card: the cost chart, and the total and the cost per hour; under them, where the total
+// comes from, the one place of the panel that says so: the part from tokens at GitHub prices and
+// the part as the harness logged it, each left out when it is 0 (under half a cent) or not known;
+// then, when the harness logged part of the session's cost without a model call, how much, which
+// the chart does not draw. The stylesheet puts them under the chart's title.
+function costCard(cost: NonNullable<SessionView['cost']>, { copilot, logged }: SessionView['costFrom']) {
+  const part = (name: string, usd: Num, words: string) => (usd === NA || usd < 0.005 ? '' : `<div class="muted">${num(name, formatCost(usd))} ${words}</div>`);
   const noCall = cost.noCall === null ? '' : `<div class="muted">${num('noCall', formatCost(cost.noCall))} logged without a model call</div>`;
   return (
     `<div class="cost-card">${costChart(cost)}<div class="row headline">${num('total', formatCost(cost.total))}` +
-    `<span class="muted grow">as ${esc(cost.harness)} logged it</span>${num('perHour', formatCostPerHour(cost.perHour))}</div>${noCall}</div>`
+    `<span class="grow"></span>${num('perHour', formatCostPerHour(cost.perHour))}</div>` +
+    `${part('copilot', copilot, 'from tokens at GitHub prices')}${part('logged', logged, `as ${esc(cost.harness)} logged it`)}${noCall}</div>`
   );
 }
 
@@ -148,7 +152,7 @@ export function sessionScreen(view: SessionView | null, ui: SessionUi): string {
   if (!view) return `<main data-screen="session">${tabBar('live', null)}${header(card, card?.folder ?? '')}<p data-part="loading" class="muted">Reading the session…</p></main>`;
   return (
     `<main data-screen="session">${tabBar('live', null)}${header(view.card, view.path)}${figures(view.figures, view.card.reading)}` +
-    `${view.context ? contextChart(view.context) : ''}${view.tokens ? tokensChart(view.tokens) : ''}${view.cost ? costCard(view.cost) : ''}` +
+    `${view.context ? contextChart(view.context) : ''}${view.tokens ? tokensChart(view.tokens) : ''}${view.cost ? costCard(view.cost, view.costFrom) : ''}` +
     `${view.subAgents ? subAgents(view.subAgents, ui) : ''}${view.tools ? tools(view.tools) : ''}${models(view.models)}${session(view.session)}</main>`
   );
 }

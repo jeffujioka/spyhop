@@ -44,6 +44,8 @@ function emptyState(opts) {
     lastEntry: undefined,
     totalTokens: tally(),
     costUsd: tally(),
+    // the part of `costUsd` of the Copilot calls, priced from the Copilot price table
+    copilotUsd: tally(),
     premiumRequests: tally(),
     input: tally(),
     cacheRead: tally(),
@@ -113,10 +115,13 @@ function costOf({ provider, model, usage }) {
   return callCost(provider, model, tokens, usage?.cost?.total);
 }
 
-// Adds the cost `spent` of a call of `logged` (see `costOf`) to the session's cost.
+// Adds the cost `spent` of a call of `logged` (see `costOf`) to the session's cost, and a Copilot
+// call's to its Copilot part.
 function addSpent(s, logged, spent) {
   add(s.costUsd, spent);
-  if (spent === null && logged.provider === COPILOT) s.unpriced = true;
+  if (logged.provider !== COPILOT) return;
+  if (spent === null) s.unpriced = true;
+  else add(s.copilotUsd, spent);
 }
 
 // Adds `call`, a model call or a side call (`side`) of `logged` that spent tokens and ended at
@@ -424,7 +429,8 @@ export const ompProvider = {
       ...(total ? TOTALS.map((figure) => figure(total)) : []),
       ...(total ? [autocompactions(total, whole), wholeSession(total, whole)] : []),
       ...LATEST.map((figure) => figure(tail, now)),
-      { detail: total && whole ? detailOf(total) : null },
+      // the series, with the part of the cost of the Copilot calls
+      { detail: total && whole ? { ...detailOf(total), copilotUsd: total.copilotUsd.sum ?? 0 } : null },
     );
   },
 };
