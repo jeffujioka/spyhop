@@ -22,7 +22,7 @@ import { tempHome } from '../helpers/files.ts';
 import { caughtUp, rangeOf, storeOf } from '../helpers/history.ts';
 import { mountOn, ompSession, spent } from '../helpers/live.ts';
 import { figure, listOf, parts, text } from '../helpers/markup.ts';
-import { STARFISH_LISTS } from '../helpers/orca-answers.ts';
+import { JEFF_SERVER_ENVIRONMENTS, JEFF_TARGET, LOCAL_HOST, hostListOf, STARFISH_LISTS } from '../helpers/orca-answers.ts';
 import { withCopilotPrices } from '../helpers/prices.ts';
 import { readOnlyLine } from '../helpers/read-only.ts';
 import { standIns } from '../helpers/stand-ins.ts';
@@ -123,6 +123,37 @@ test('One repo on two Orca hosts', async () => {
     ],
   );
   assert.deepEqual(listOf(html, 'repo'), [`${ORIGIN} $3.00`]);
+});
+
+// The SSH target `jeff` and the paired server `jeff-server` deployed over it, as this Mac's Orca
+// lists them: both reached as the ssh alias `jeff`, so one home.
+const JEFF_OVER_SSH = {
+  'host list --json': hostListOf(LOCAL_HOST, { kind: 'ssh', name: 'jeff', id: JEFF_TARGET, selector: `--host ssh:${JEFF_TARGET}`, connected: true }),
+  'environment list --json': JEFF_SERVER_ENVIRONMENTS,
+};
+
+test('a paired server deployed over a listed SSH host is read once', async () => {
+  const remoteHome = tempHome();
+  let home = '';
+  const { html } = await rangeOf([], {
+    tab: 'spend',
+    range: 'day',
+    homes: { jeff: remoteHome },
+    orca: JEFF_OVER_SSH,
+    prepare: (at) => {
+      home = at;
+      ompSession(remoteHome, join(remoteHome, 'api'), { title: 'api', calls: [spent(1)] });
+    },
+  });
+
+  const db = storeOf(home);
+  const hosts = db.prepare("SELECT DISTINCT host FROM files WHERE host != 'local'").all();
+  db.close();
+  assert.deepEqual(
+    hosts.map(({ host }) => host),
+    [`ssh:${JEFF_TARGET}`],
+  );
+  assert.equal(figure(html, 'cost'), '$1.00');
 });
 
 test('Appended bytes only', async () => {

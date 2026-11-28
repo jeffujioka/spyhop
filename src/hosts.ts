@@ -61,10 +61,17 @@ export function remoteHosts({ hosts, environments }: HostLists, hostIds: string[
 // its name and its alias, as `remoteHosts` gives them.
 export type HistoryHost = { id: string; name: string; alias: string };
 
-// Every SSH host `lists` names (`ssh:<Orca id>`) and every paired Orca server (`runtime:<env id>`).
+// Every SSH host `lists` names (`ssh:<Orca id>`) and every paired Orca server (`runtime:<env id>`),
+// one per alias: a paired server deployed over a listed SSH target shares its home, which is
+// read once, as the SSH host's.
 export function historyHosts(lists: HostLists): HistoryHost[] {
   const sshIds = lists.hosts.filter((host) => host.kind === 'ssh').map((host) => `ssh:${host.id}`);
-  return [...remoteHosts(lists, sshIds)].map(([id, { name, alias }]) => ({ id, name, alias }));
+  const byAlias = new Map<string, HistoryHost>();
+  // the SSH hosts first, each in the lists' order
+  for (const [id, { name, alias }] of [...remoteHosts(lists, sshIds)].sort(([a], [b]) => Number(b.startsWith('ssh:')) - Number(a.startsWith('ssh:')))) {
+    if (!byAlias.has(alias)) byAlias.set(alias, { id, name, alias });
+  }
+  return [...byAlias.values()];
 }
 
 // An Orca host's place, from what `uname -s` and, on another host, `printenv HOME` answered
