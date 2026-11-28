@@ -47,9 +47,8 @@ const HOUR = 60 * 60 * 1000;
 // restore }`: when it ended, its model, thinking level and cache lifetime, the figures it added
 // to its line and what to put back to take it back out); `compacted`, the threads a compaction
 // was noted in since their last call; `returned`, the return a prompt made, which the next call
-// of its thread counts (`{ gap, thread }`); `unplaced`, the compaction figures noted before any
-// call, which the next call's line takes; `autoAt`, the tokens at which the harness compacts on
-// its own, null when unknown (set by the caller that knows it).
+// of its thread counts (`{ gap, thread }`); `unplaced`, by thread, the compaction figures noted
+// before any call of it, which its next call's line takes.
 export const newInsights = () => ({
   open: new Map(),
   lanes: { thinking: newLane(), tools: newLane(), busy: newLane(), developer: newLane() },
@@ -66,8 +65,7 @@ export const newInsights = () => ({
   last: {},
   compacted: {},
   returned: null,
-  unplaced: [],
-  autoAt: null,
+  unplaced: {},
 });
 
 // Widens the time `ins` noted to `start` and `end`.
@@ -122,7 +120,7 @@ function cacheEffects(ins, call, before, thread) {
     effects.push([`returns${band}`, 1]);
     if (call.cold === true) effects.push([`returnsCold${band}`, 1]);
   }
-  for (const name of ins.unplaced) effects.push([name, 1]);
+  for (const name of ins.unplaced[thread] ?? []) effects.push([name, 1]);
   return effects;
 }
 
@@ -159,18 +157,19 @@ export function noteCall(ins, call, sign = 1) {
     const before = ins.last[thread] ?? null;
     const effects = cacheEffects(ins, call, before, thread);
     for (const [name, amount] of effects) figures[name] += amount;
-    const restore = { last: before && { ...before, restore: null }, compacted: ins.compacted[thread] === true, returned: ins.returned, unplaced: ins.unplaced };
+    const restore = { last: before && { ...before, restore: null }, compacted: ins.compacted[thread] === true, returned: ins.returned, unplaced: ins.unplaced[thread] };
     ins.last[thread] = { end: call.end, model: call.model, thinking: call.thinking ?? null, lifetimeMs: call.lifetimeMs ?? null, effects, restore };
     delete ins.compacted[thread];
     if (ins.returned?.thread === thread) ins.returned = null;
-    ins.unplaced = [];
+    delete ins.unplaced[thread];
     noteThinking(ins, call.start, call.end);
   } else {
     // only the newest call of its thread can be taken back
     const newest = ins.last[thread];
-    if (!newest) return;
+    if (!newest?.restore) return;
     for (const [name, amount] of newest.effects) figures[name] -= amount;
-    ({ returned: ins.returned, unplaced: ins.unplaced } = newest.restore);
+    ins.returned = newest.restore.returned;
+    if (newest.restore.unplaced) ins.unplaced[thread] = newest.restore.unplaced;
     if (newest.restore.compacted) ins.compacted[thread] = true;
     if (newest.restore.last) ins.last[thread] = newest.restore.last;
     else delete ins.last[thread];
@@ -179,19 +178,20 @@ export function noteCall(ins, call, sign = 1) {
 
 // A compaction at `t` (epoch ms) of the session `thread` ('' where a fold reads one), from `before`
 // tokens of context (null when unknown): of the kind `kind`, `idle`, `full` or `manual`, as the
-// harness logs it, or, with none (null), as inferred: `full` when `before` reaches `ins.autoAt`,
+// harness logs it, or, with none (null), as inferred: `full` when `before` reaches `autoAt` (the
+// tokens at which the harness compacts on its own, null when unknown),
 // else `idle` when the call before ended 5 minutes or more earlier, else `manual`; an inferred
 // one is also counted in `compactionsInferred`. The next call of the thread has it as a miss
 // cause. It counts in the line of the day of `t` and the model of the call before, else of the
 // next call.
-export function noteCompaction(ins, { t, kind, before, thread = '' }) {
+export function noteCompaction(ins, { t, kind, before, autoAt = null, thread = '' }) {
   const prior = ins.last[thread];
-  const reached = Number.isFinite(before) && Number.isFinite(ins.autoAt) && before >= ins.autoAt;
+  const reached = Number.isFinite(before) && Number.isFinite(autoAt) && before >= autoAt;
   const own = kind ?? (reached ? 'full' : prior && t - prior.end >= FIVE_MINUTES ? 'idle' : 'manual');
   const names = [`compactions${cap(own)}`, ...(kind === null ? ['compactionsInferred'] : [])];
   ins.compacted[thread] = true;
   if (!prior) {
-    ins.unplaced.push(...names);
+    (ins.unplaced[thread] ??= []).push(...names);
     return;
   }
   const { figures } = lineOf(ins, t, prior.model);

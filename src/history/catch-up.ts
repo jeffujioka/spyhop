@@ -120,6 +120,9 @@ export const FIRST_DAYS = 30;
 export const OPENCODE_OPEN_DAYS = 10;
 const PAGE_ROWS = 5000;
 
+// How many sessions one query of the rows before a span reads, so that its text stays short.
+const SEED_SESSIONS = 200;
+
 // How many root sessions one query of a rebuild of their rows reads, so that its text stays short.
 export const PAGE_ROOTS = 500;
 
@@ -176,7 +179,7 @@ const ompKeyOf = (path: string, main: string) => (path === main ? null : path.sl
 // Each harness the catch-up reads: its name in the store, its sessions folder under a home, how
 // many folders deep its files lie, its sub-agents' included, and its fold with daily lines.
 // Claude Code keeps a sub-agent's transcript in `<folder>/<session>/subagents/`.
-const HARNESSES = [
+const HARNESSES: { harness: string; dirOf: (home: string) => string; depth: number; fold: (state: unknown, entries: unknown[], autoAt?: AutoAt) => any }[] = [
   {
     harness: 'omp',
     dirOf: ompSessionsDir,
@@ -187,7 +190,7 @@ const HARNESSES = [
     harness: 'claude',
     dirOf: claudeProjectsDir,
     depth: 4,
-    fold: (state: unknown, entries: unknown[], _autoAt?: AutoAt) => claudeProvider.fold(state, entries, { insights: true }),
+    fold: (state: unknown, entries: unknown[]) => claudeProvider.fold(state, entries, { insights: true }),
   },
 ];
 
@@ -316,9 +319,9 @@ export function createCatchUp({
     return { agent: { ...figuresOf(ins), costNa: 1, key: meta?.toolUseId ?? name, name: meta?.name ?? name, parent: null, running: null } satisfies AgentRow };
   }
 
-  // The omp host of a place's `autoAt`, read once for the place: the windows of omp's model
+  // The omp host of a place's `autoAt`, read once for the place in each run (`runOnce`, `readSession`): the windows of omp's model
   // catalogue and the `compaction` block of its config, each unknown (null) when it cannot be read.
-  const autoAts = new WeakMap<Place, Promise<AutoAt>>();
+  let autoAts = new WeakMap<Place, Promise<AutoAt>>();
   function autoAtOf(place: Place) {
     let found = autoAts.get(place);
     if (!found) {
@@ -443,28 +446,51 @@ export function createCatchUp({
     // by root session and the folder of the row's own session
     const groups = new Map<string, { session: string; directory: string | null; insights: object }>();
     const roots = new Set<string>();
+    // the lines taken from the groups after each page, so that a seed's can be dropped from a group's
+    const taken: { group: { session: string; directory: string | null }; line: ReturnType<typeof takeLines>[number] }[] = [];
+    // the own sessions the span has met, which a seed told what stands before the span
+    const seeded = new Set<string>();
+    const groupOf = (call: { sessionId: unknown; directory?: string | null }) => {
+      const key = `${call.sessionId}\0${call.directory}`;
+      let group = groups.get(key);
+      if (!group) groups.set(key, (group = { session: String(call.sessionId), directory: call.directory ?? null, insights: newInsights() }));
+      return group;
+    };
     let from = fromMs;
     let after: string | null = null;
     for (;;) {
       const rows = await select(place.read, database, historyRowsQuery(sessions, from, after, PAGE_ROWS));
       if (!rows) throw new Error(`cannot read the model calls of ${database}`);
       const before = rows.filter((call) => call.created < untilMs);
+      // a span that starts after the session did needs its previous call, as a read from the start has it:
+      // the rows from the session's last call before the span are noted and their figures dropped
+      const fresh = before.filter((call) => !seeded.has(call.ownId));
+      for (const call of fresh) seeded.add(call.ownId);
+      if (fromMs > 0 && fresh.length > 0) {
+        const rootOf = new Map(fresh.map((call) => [String(call.ownId), String(call.sessionId)]));
+        const ids = [...rootOf.keys()];
+        for (let i = 0; i < ids.length; i += SEED_SESSIONS) {
+          const chunk = ids.slice(i, i + SEED_SESSIONS);
+          const previous = await select(place.read, database, historyRowsQuery(sessions, 0, null, -1, [...new Set(chunk.map((id) => rootOf.get(id)!))], { before: fromMs, ids: chunk }));
+          if (!previous) throw new Error(`cannot read the model calls of ${database}`);
+          for (const call of previous) opencodeInsights([call], groupOf(call).insights);
+        }
+        for (const group of groups.values()) takeLines(group.insights);
+      }
       for (const call of before) {
-        const key = `${call.sessionId}\0${call.directory}`;
-        let group = groups.get(key);
-        if (!group) groups.set(key, (group = { session: String(call.sessionId), directory: call.directory ?? null, insights: newInsights() }));
+        const group = groupOf(call);
         roots.add(group.session);
         opencodeInsights([call], group.insights);
       }
+      for (const group of groups.values()) for (const line of takeLines(group.insights)) taken.push({ group, line });
       share.read += before.length;
       if (rows.length < PAGE_ROWS || before.length < rows.length) break;
       ({ created: from, id: after } = rows.at(-1));
     }
     const lines: SessionLine[] = [];
-    for (const { session, directory, insights } of groups.values()) {
+    for (const { group: { session, directory }, line } of taken) {
       if (!repos.has(directory)) repos.set(directory, await repoOf(place.exec, directory));
-      const repo = repos.get(directory)!;
-      for (const line of takeLines(insights)) lines.push({ ...line, session: `${place.host}\0opencode\0${session}`, repo });
+      lines.push({ ...line, session: `${place.host}\0opencode\0${session}`, repo: repos.get(directory)! });
     }
     return { lines, roots };
   }
@@ -649,6 +675,7 @@ export function createCatchUp({
   }
 
   async function runOnce() {
+    autoAts = new WeakMap();
     shares = [];
     const recent = midnightBefore(Date.now(), FIRST_DAYS);
     // the first phase on every host at once, every other host's machine asked first: a machine is
@@ -747,6 +774,7 @@ export function createCatchUp({
   }
 
   async function readSession(hostId: string, kind: string, path: string) {
+    autoAts = new WeakMap();
     const place = await placeOfHost(hostId);
     if (!place) return null;
     const harness = harnessOf(kind);

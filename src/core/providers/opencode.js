@@ -17,7 +17,7 @@
 
 import { burnRate, isNumber, tokenCount } from './shared.js';
 import { addCall, addCost, addMinute, detailOf, entryOf, newSeries, pushRecent } from '../series.js';
-import { callCost, COPILOT } from '../copilot-prices.js';
+import { callCost, COPILOT, copilotWriteCost } from '../copilot-prices.js';
 import { modelKey, noteCall, noteCompaction, noteEntry, noteHorizon, notePrompt, noteStatus, noteThinking, noteTool, noteTurnEnd } from '../insights.js';
 import { SUBAGENT_TOOLS } from '../trace.js';
 
@@ -126,8 +126,9 @@ export function opencodeInsights(rows, ins) {
         // logs no cache lifetime nor the cost of a cache write
         const thread = String(row.ownId);
         const cold = ins.last[thread] !== undefined && row.cacheRead === 0;
+        const writeCost = row.providerId === COPILOT ? copilotWriteCost(row.modelId, write, uncached + read + write) : null;
         const thinking = typeof row.variant === 'string' && row.variant ? row.variant : null;
-        noteCall(ins, { end: row.created, model: modelKey(row.providerId, row.modelId), tokens, uncached, read, write, output, cost: costOf(row), copilot: row.providerId === COPILOT, thread, cold, thinking, lifetimeMs: null, writeCost: null });
+        noteCall(ins, { end: row.created, model: modelKey(row.providerId, row.modelId), tokens, uncached, read, write, output, cost: costOf(row), copilot: row.providerId === COPILOT, thread, cold, thinking, lifetimeMs: null, writeCost });
         if (own) noteThinking(ins, row.created, [row.toolStart, row.completed, row.created].find(isNumber));
       }
       // a compaction is a summary that did not end with an error; `manual` is the user's, any other

@@ -217,14 +217,26 @@ const HISTORY_COLUMNS = [
 // root (its `parent_id` followed to a session without one, or whose parent the database lacks),
 // `ownId`, `parentId`, `title` and `directory` the id, the parent's id, the title and the folder
 // of the row's own session, and `own` 1 when that session is the root.
-/** @param {string[] | null} [roots] */
-export function historyRowsQuery(sessions, fromMs, afterId, limit, roots = null) {
+/**
+ * @param {string[] | null} [roots]
+ * @param {{ before: number, ids: string[] } | null} [seed] the rows of the sessions `ids` (their own ids) from
+ *   their last model call before `before` (epoch ms) to `before` instead, from the start when they have none,
+ *   which tell a read that starts at `before` what stands before it
+ */
+export function historyRowsQuery(sessions, fromMs, afterId, limit, roots = null, seed = null) {
   const from = Number(fromMs);
   // the trees of `roots` only, filtered once, where the tree starts
   const inRoots = roots === null ? '' : ` AND id IN (${listOf(roots)})`;
   const after = (id) => (afterId === null ? `m.time_created >= ${from}` : `(m.time_created > ${from} OR (m.time_created = ${from} AND ${id} > ${literal(afterId)}))`);
   // the row of `values` (column -> SQL), NULL in the columns it does not give
   const row = (values) => HISTORY_COLUMNS.map((name) => `${values[name] ?? 'NULL'} AS "${name}"`).join(', ');
+  // a seed's rows: those of its sessions from the last call that sent or wrote a token before it
+  const spent = (of) => ['input', 'output', 'cache.read', 'cache.write'].map((name) => `coalesce(json_extract(${of}, '$.tokens.${name}'), 0)`).join(' + ');
+  const seeded = (table, isCall) =>
+    `m.time_created < ${Number(seed.before)} AND m.session_id IN (${listOf(seed.ids)}) AND m.time_created >= coalesce((SELECT max(k.time_created) FROM ${table} AS k ` +
+    `WHERE k.session_id = m.session_id AND k.time_created < ${Number(seed.before)} AND ${isCall} AND ${spent('k.data')} > 0), 0)`;
+  const currentWhere = (id) => (seed ? seeded('session_message', "k.type IN ('assistant', 'compaction')") : after(id));
+  const legacyWhere = (id) => (seed ? seeded('message', "json_extract(k.data, '$.role') = 'assistant'") : after(id));
   const json = (path, of = 'm.data') => `json_extract(${of}, '$.${path}')`;
   const message = (role) => ({
     id: 'm.id',
@@ -258,8 +270,8 @@ export function historyRowsQuery(sessions, fromMs, afterId, limit, roots = null)
   const currentJoin = 'FROM session_message AS m JOIN tree ON tree.id = m.session_id AND tree.current = 1';
   const current = [
     `SELECT ${row(call('model.id', 'model.providerID', 'NULL', `(SELECT min(${currentTool}) FROM json_each(m.data, '$.content') AS c WHERE ${json('type', 'c.value')} = 'tool')`, "(m.type = 'compaction')", json('model.variant'), json('reason'), json('error.type')))} ` +
-      `${currentJoin} WHERE m.type IN ('assistant', 'compaction') AND ${after('m.id')}`,
-    `SELECT ${row(message('user'))} ${currentJoin} WHERE m.type = 'user' AND ${after('m.id')}`,
+      `${currentJoin} WHERE m.type IN ('assistant', 'compaction') AND ${currentWhere('m.id')}`,
+    `SELECT ${row(message('user'))} ${currentJoin} WHERE m.type = 'user' AND ${currentWhere('m.id')}`,
     `SELECT ${row({
       ...message('tool'),
       id: "m.id || '/' || c.key",
@@ -268,15 +280,15 @@ export function historyRowsQuery(sessions, fromMs, afterId, limit, roots = null)
       end: json('time.completed', 'c.value'),
       status: json('state.status', 'c.value'),
       child: json('state.metadata.sessionID', 'c.value'),
-    })} ` + `${currentJoin}, json_each(m.data, '$.content') AS c WHERE m.type = 'assistant' AND ${json('type', 'c.value')} = 'tool' AND ${after("m.id || '/' || c.key")}`,
+    })} ` + `${currentJoin}, json_each(m.data, '$.content') AS c WHERE m.type = 'assistant' AND ${json('type', 'c.value')} = 'tool' AND ${currentWhere("m.id || '/' || c.key")}`,
   ];
   // why a legacy summary was written: the `auto` flag of the compaction part of the user message it answers
   const legacyReason = `CASE WHEN ${json('summary')} = 1 THEN (SELECT CASE WHEN json_extract(c.data, '$.auto') = 1 THEN 'auto' ELSE 'manual' END FROM part AS c WHERE c.message_id = ${json('parentID')} AND json_extract(c.data, '$.type') = 'compaction' LIMIT 1) END`;
   const legacyJoin = 'FROM message AS m JOIN tree ON tree.id = m.session_id AND tree.current = 0';
   const legacy = [
     `SELECT ${row(call('modelID', 'providerID', json('tokens.total'), `(SELECT min(${json('state.time.start', 'p.data')}) FROM part AS p WHERE p.message_id = m.id AND ${json('type', 'p.data')} = 'tool')`, `(${json('summary')} = 1)`, json('variant'), legacyReason, json('error.name')))} ` +
-      `${legacyJoin} WHERE ${json('role')} = 'assistant' AND ${after('m.id')}`,
-    `SELECT ${row(message('user'))} ${legacyJoin} WHERE ${json('role')} = 'user' AND ${after('m.id')}`,
+      `${legacyJoin} WHERE ${json('role')} = 'assistant' AND ${legacyWhere('m.id')}`,
+    `SELECT ${row(message('user'))} ${legacyJoin} WHERE ${json('role')} = 'user' AND ${legacyWhere('m.id')}`,
     `SELECT ${row({
       ...message('tool'),
       id: 'p.id',
@@ -285,7 +297,7 @@ export function historyRowsQuery(sessions, fromMs, afterId, limit, roots = null)
       end: json('state.time.end', 'p.data'),
       status: json('state.status', 'p.data'),
       child: json('state.metadata.sessionID', 'p.data'),
-    })} ` + `${legacyJoin} JOIN part AS p ON p.message_id = m.id WHERE ${json('type', 'p.data')} = 'tool' AND ${after('p.id')}`,
+    })} ` + `${legacyJoin} JOIN part AS p ON p.message_id = m.id WHERE ${json('type', 'p.data')} = 'tool' AND ${legacyWhere('p.id')}`,
   ];
   const parts = { [BOTH]: [...current, ...legacy], [CURRENT]: current, [LEGACY]: legacy }[sessions];
   return (

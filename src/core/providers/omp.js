@@ -268,8 +268,7 @@ function fold(state, entries, opts) {
       if (s.insights) {
         // omp does not mark an automatic compaction: its kind is inferred, against the tokens at
         // which it compacts a call's model
-        s.insights.autoAt = opts?.autoAt?.(s.insights.last['']?.model) ?? null;
-        noteCompaction(s.insights, { t: at, kind: null, before });
+        noteCompaction(s.insights, { t: at, kind: null, before, autoAt: opts?.autoAt?.(s.insights.last['']?.model) ?? null });
       }
     } else if (e.type === 'thinking_level_change' && typeof e.thinkingLevel === 'string') {
       // the latest change stands
