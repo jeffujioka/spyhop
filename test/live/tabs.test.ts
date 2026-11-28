@@ -8,6 +8,7 @@ import assert from 'node:assert/strict';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { registerHooks } from 'node:module';
 import { dirname, join } from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import { mock, test } from 'node:test';
 import { CATCH_UP_MS, RANGE_REFRESH_MS } from '../../src/core/refresh.js';
 import { STORE_FILE } from '../../src/history/store.ts';
@@ -138,4 +139,19 @@ test('a runtime without node:sqlite leaves Live drawn', async () => {
   } finally {
     hooks.deregister();
   }
+});
+
+test('a range the store cannot read is n/a', async () => {
+  const opened = await openLive([], { prepare: (home) => apiSession(home, [spent(1)]) });
+  const home = process.env.HOME!;
+  await caughtUp(home);
+  // the store loses the view the range is read from
+  const db = new DatabaseSync(join(home, STORE_FILE));
+  db.exec('DROP VIEW daily_lines');
+  db.close();
+
+  await opened.openTab('spend');
+
+  for (const name of ['cost', 'tokens', 'calls']) assert.equal(figure(opened.html(), name), 'n/a', name);
+  assert.equal(opened.worker.logs.filter((line) => line.includes('cannot read the history')).length, 1, JSON.stringify(opened.worker.logs));
 });

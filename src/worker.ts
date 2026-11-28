@@ -24,7 +24,8 @@
 // `spyhop.range` answers a range tab from the history store (src/history/views.ts): at once while
 // a catch-up runs, else after a catch-up when the last one started RANGE_CATCH_UP_MS ago or more.
 // A history store that cannot be opened is logged once; no catch-up runs then, and each range
-// tab's figures are n/a, while the fleet and the sessions are answered as ever.
+// tab's figures are n/a, while the fleet and the sessions are answered as ever. A range the store
+// cannot read is logged and answered n/a.
 // `spyhop.focus` focuses a card's pane
 // in this computer's Orca window: an agent on this computer or an SSH workspace by Orca's
 // `terminal.focus`, one on a paired Orca server by `orca terminal switch` to the server's
@@ -55,7 +56,7 @@ const KEPT_KEY = 'session-totals';
 const keptKey = (part: number) => (part === 0 ? KEPT_KEY : `${KEPT_KEY}.${part}`);
 const KEPT_WRITE_MS = 30 * 1000;
 
-// The Spend tab's view when the history store cannot be opened.
+// The Spend tab's view when the history store cannot be opened or read.
 const SPEND_NA: SpendView = { cost: 'n/a', tokens: 'n/a', calls: 'n/a', chart: null };
 
 // A range ask runs a catch-up when the last one started this long ago or more: less than the
@@ -308,7 +309,14 @@ export default function activate(orca: OrcaWorkerApi): void {
     if (!history) return { request, tab, range, spend: tab === 'spend' ? SPEND_NA : null };
     const { store, catchUp } = history;
     if (!catchUp.running() && Date.now() - (catchUp.startedMs() ?? -Infinity) >= RANGE_CATCH_UP_MS) await caughtUp(catchUp, log);
-    return { request, tab, range, spend: tab === 'spend' ? spendView(store, range, Date.now()) : null };
+    if (tab !== 'spend') return { request, tab, range, spend: null };
+    // a read that fails, such as a store held past its busy timeout, is n/a until one succeeds
+    try {
+      return { request, tab, range, spend: spendView(store, range, Date.now()) };
+    } catch (error) {
+      log(`spyhop: cannot read the history store: ${(error as Error).message}`);
+      return { request, tab, range, spend: SPEND_NA };
+    }
   });
 
   orca.panels.handle('spyhop.focus', async (pane: Pane) => {
