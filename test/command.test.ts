@@ -1,10 +1,14 @@
 // The palette command that shows the panel, and its key. Orca has no plugin API that shows a
 // plugin's own panel, so the command asks the `orca` CLI to (`orca plugin open`), with the key
 // Orca installed the plugin under. A test has no Orca app to show it in, so it stands in for the
-// CLI only (test/helpers/stand-ins.ts); the worker and the manifest are the real ones.
-import { readFileSync } from 'node:fs';
+// CLI only (test/helpers/stand-ins.ts); the worker and the manifest are the real ones, under a
+// temporary home, so that its catch-ups never read or write the real one's.
+import { existsSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { afterEach, assert, mockHost, mountWorker, test, type TestWorker } from 'orca/testing';
+import { STORE_FILE } from '../src/history/store.ts';
 import * as workerModule from '../src/worker.ts';
+import { useTempHome } from './helpers/env.ts';
 import { answer, standIns } from './helpers/stand-ins.ts';
 
 let worker: TestWorker | undefined;
@@ -17,6 +21,7 @@ const manifest = JSON.parse(readFileSync(new URL('../orca-plugin.json', import.m
 
 test('Palette command and key', async () => {
   const [command] = manifest.contributes.commands;
+  const home = useTempHome();
   assert.deepEqual(command, { id: 'spyhop.show', title: 'Spyhop: Show session stats' });
   assert.deepEqual(manifest.contributes.keybindings, [{ command: 'spyhop.show', key: 'Mod+Alt+Shift+S' }]);
 
@@ -53,4 +58,8 @@ test('Palette command and key', async () => {
 
   assert.deepEqual(cli.orca(), ['plugin list --json', 'plugin open local.spyhop --panel spyhop --json']);
   assert.deepEqual(worker.refusals, []);
+  // the worker's history store is the test's home's, once its catch-up has ended
+  await worker.deactivate();
+  worker = undefined;
+  assert.ok(existsSync(join(home, STORE_FILE)));
 });
