@@ -10,12 +10,13 @@ import { appendFileSync, statSync, utimesSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, mock, test } from 'node:test';
 import { setImmediate } from 'node:timers/promises';
+import { dayOf } from '../../src/core/days.js';
 import { RANGE_REFRESH_MS, REFRESH_INTERVAL_MS } from '../../src/core/refresh.js';
-import { run, runBytes } from '../../src/exec.ts';
+import { run, type Run, runBytes } from '../../src/exec.ts';
 import { createCatchUp } from '../../src/history/catch-up.ts';
 import { openStore, type Store } from '../../src/history/store.ts';
 import { historyHosts, listHosts } from '../../src/hosts.ts';
-import { NOW, ompSessionOf } from '../helpers/agent-cards.ts';
+import { NOW, ompSessionOf, opencodeSession } from '../helpers/agent-cards.ts';
 import { setEnv, useTempHome } from '../helpers/env.ts';
 import { tempHome } from '../helpers/files.ts';
 import { caughtUp, storeOf } from '../helpers/history.ts';
@@ -72,6 +73,35 @@ test('Progress line', async () => {
   await until(() => opened.settled('spyhop.range') > answered);
   await setImmediate();
   assert.deepEqual(parts(opened.html(), 'data-part', 'progress'), []);
+});
+
+// A guard of the opencode read, no scenario of the spec: the count of the calls to read, which
+// only the progress line needs, runs only until the database is read through, and a count that
+// fails leaves the calls read.
+test('a count of opencode calls that fails still reads them', async () => {
+  setEnv('TZ', 'UTC');
+  const home = useTempHome();
+  // a call of 0.20 USD created 3 days ago, in a database whose other calls are of other days
+  const last = Date.now() - 3 * DAY_MS;
+  opencodeSession(home, join(home, 'web'), { provider: 'anthropic', model: 'claude-opus-5.5', calls: [{ uncached: 100, read: 0, write: 0, output: 50 }], cost: 0.2, callCost: 0.2, last });
+  // each count asked, which sqlite3 fails
+  const counts: string[] = [];
+  const failingCount: Run = (command, args, options) => {
+    if (command !== 'sqlite3' || !args.at(-1)!.startsWith('SELECT count(*)')) return run(command, args, options);
+    counts.push(args.at(-1)!);
+    return Promise.resolve({ code: 1, stdout: '', stderr: 'Error: interrupted' });
+  };
+  store = await openStore(home);
+  const catchUp = createCatchUp({ run: failingCount, runBytes, store, home, log: () => {}, hosts: async () => [] });
+
+  await catchUp.run();
+  await catchUp.run();
+
+  const db = storeOf(home);
+  const { cost } = db.prepare("SELECT SUM(cost) AS cost FROM lines JOIN files ON files.id = lines.file WHERE harness = 'opencode' AND day = ?").get(dayOf(last))!;
+  db.close();
+  assert.equal(Math.round(Number(cost) * 100) / 100, 0.2);
+  assert.equal(counts.length, 1);
 });
 
 test('Last 30 days first', async () => {

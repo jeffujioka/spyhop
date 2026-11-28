@@ -27,7 +27,9 @@
 // harness it is still reading that has never been read through (the meta `read:<host>:<harness>`
 // unset, set once a run has read it through), with the share of its bytes read: of the bytes left
 // to read of its listed files (each file's size less the position its last read ended at), those
-// of the files read; of opencode's, the rows read of those the run reads.
+// of the files read, 99% at most until it ends; of opencode's, the rows read of those the run
+// reads, counted only while the database was never read through, and unknown, so never named,
+// when that count fails.
 //
 // A file's lines count in its host's lines (`local` for this computer, else the Orca hostId), in
 // its session, `<host>\0<harness>\0<main session file>` (a sub-agent's transcript in its main
@@ -315,10 +317,12 @@ export function createCatchUp({
     const first = row?.version !== HISTORY_VERSION;
     const today = new Date();
     const open = new Date(today.getFullYear(), today.getMonth(), today.getDate() - OPENCODE_OPEN_DAYS).getTime();
-    // the calls of both phases
-    const counted = await select(read, database, `SELECT count(*) AS n FROM (${historyRowsQuery(sessions, first ? 0 : open, null, -1)})`);
-    if (!counted) throw new Error(`cannot count the model calls of ${database}`);
-    shareOf(place, 'opencode').toRead += Number(counted[0]?.n ?? 0);
+    // the calls of both phases, for `progress` only: counted until the database is read through,
+    // a count that fails leaving its share unknown, never shown
+    if (store.meta(readThrough(host, 'opencode')) === null) {
+      const counted = await select(read, database, `SELECT count(*) AS n FROM (${historyRowsQuery(sessions, first ? 0 : open, null, -1)})`);
+      if (counted) shareOf(place, 'opencode').toRead += Number(counted[0]?.n ?? 0);
+    }
     // each folder's repo as first asked
     const repos = first ? new Map<string | null, string>() : (store.state(row!.id) as OpencodeKept).repos;
     const lines = await opencodeLines(place, database, sessions, first ? recentMs : open, Infinity, repos);
@@ -450,7 +454,8 @@ export function createCatchUp({
       const [reading] = shares
         .filter((share) => share.read < share.toRead && store.meta(readThrough(share.host, share.harness)) === null)
         .sort((a, b) => a.rank - b.rank);
-      return reading ? { host: reading.name, harness: HARNESS_NAMES[reading.harness] ?? reading.harness, share: reading.read / reading.toRead } : null;
+      // 99% at most while it reads, the rounded percent never 100% before it ends
+      return reading ? { host: reading.name, harness: HARNESS_NAMES[reading.harness] ?? reading.harness, share: Math.min(reading.read / reading.toRead, 0.99) } : null;
     },
   };
 }
