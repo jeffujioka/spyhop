@@ -13,12 +13,13 @@ import { execFileSync } from 'node:child_process';
 import { join } from 'node:path';
 import { mock, test } from 'node:test';
 import { RANGE_REFRESH_MS } from '../../src/core/refresh.js';
-import { opencodeSession } from '../helpers/agent-cards.ts';
+import { opencodeSession, workspace } from '../helpers/agent-cards.ts';
 import { tempHome } from '../helpers/files.ts';
 import { caughtUp } from '../helpers/history.ts';
-import { claudeSession, FIX, folderOf, ompSession, type OmpCall, open, openLive, openOnFleet, until } from '../helpers/live.ts';
+import { claudeSession, FIX, folderOf, ompSession, ompSubAgent, type OmpCall, open, openLive, openOnFleet, until } from '../helpers/live.ts';
 import { attr, figure, listOf, parts, text } from '../helpers/markup.ts';
-import { DEVBOX_HOST, environmentListOf, hostListOf, LOCAL_HOST } from '../helpers/orca-answers.ts';
+import { DEVBOX, DEVBOX_HOST, DEVBOX_LISTS, environmentListOf, hostListOf, LOCAL_HOST } from '../helpers/orca-answers.ts';
+import type { HostWorkspace } from '../helpers/orca-host.ts';
 import { withCopilotPrices } from '../helpers/prices.ts';
 import { readOnlyLine, ZSTD_PIPE } from '../helpers/read-only.ts';
 
@@ -27,6 +28,9 @@ const CLOCK = Date.parse('2026-11-28T15:00:00.000Z');
 
 // Epoch ms of `hhmm` UTC on `day` (YYYY-MM-DD).
 const on = (day: string, hhmm: string) => Date.parse(`${day}T${hhmm}:00.000Z`);
+
+// Epoch ms of `hh:mm:ss` UTC on 25 November, the day of the Trace test.
+const at = (hms: string) => Date.parse(`2026-11-25T${hms}.000Z`);
 
 test('costs end to end', async () => {
   withCopilotPrices({ 'claude-opus-5.5': { input: 500, cachedInput: 50, cacheWrite: 625, output: 2500, tiers: [] } });
@@ -145,5 +149,80 @@ test('every Orca host end to end', async () => {
   mock.timers.tick(RANGE_REFRESH_MS);
 
   await until(() => figure(opened.html(), 'cost') === '$3.90');
+  assert.deepEqual(opened.calls.ssh().filter((args) => !readOnlyLine(args.at(-1)!)), []);
+});
+
+test("a session's Trace end to end", async () => {
+  assert.doesNotThrow(() => execFileSync('zstd', ['-V'], { stdio: 'ignore' }), 'this Mac has no zstd');
+  const devboxHome = tempHome();
+  const infra: HostWorkspace = { project: 'infra', name: 'main', agents: ['working'], hostId: `ssh:${DEVBOX}`, sessionId: 's1' };
+  let home = '';
+  const opened = await openLive([infra], {
+    now: CLOCK,
+    homes: { devbox: devboxHome },
+    orca: DEVBOX_LISTS,
+    prepare: (made) => {
+      home = made;
+      // devbox's omp session `Deploy it` with the sub-agent `Impl1`, which started `Rev1`
+      const folder = workspace(made, 'infra-main');
+      const main = ompSession(devboxHome, folder, {
+        title: 'Deploy it',
+        calls: [
+          { prompted: at('10:00:00'), started: at('10:00:00'), at: at('10:00:05'), output: 10, cost: 1, stop: 'toolUse', tools: [{ name: 'read', started: at('10:00:05'), answered: at('10:00:20') }] },
+          { started: at('10:00:20'), at: at('10:00:30'), output: 10, stop: 'stop' },
+        ],
+        results: [{ at: at('10:09:00'), jobs: [{ jobId: 'Impl1', status: 'completed' }] }],
+      });
+      const impl = ompSubAgent(devboxHome, folder, 'Impl1', {
+        calls: [{ at: at('10:08:00'), output: 10, cost: 0.5 }],
+        init: { at: at('10:01:00'), kind: 'task' },
+        parent: main,
+        results: [{ at: at('10:07:00'), jobs: [{ jobId: 'Rev1', status: 'failed' }] }],
+      });
+      ompSubAgent(devboxHome, folder, 'Impl1/Rev1', { calls: [{ at: at('10:06:00'), output: 10, cost: 0.25 }], init: { at: at('10:02:00'), kind: 'reviewer' }, parent: impl });
+      // this computer: a past Claude Code session of 0.50 USD
+      claudeSession(made, join(made, 'web'), {
+        model: 'claude-opus-5-5',
+        title: 'Past Claude job',
+        calls: [{ prompted: at('09:00:00'), at: at('09:00:10'), output: 1_000, stop: 'end_turn' }],
+        costStates: [{ at: at('09:00:10') + 1, models: { 'claude-opus-5-5': 0.5 } }],
+      });
+    },
+  });
+  await until(() => opened.html().includes('data-part="counts"'));
+  await caughtUp(home);
+  const loaded = () => parts(opened.html(), 'data-part', 'loading').length === 0;
+
+  // the shown session's Trace: four lanes and both sub-agent rows
+  opened.live.press(attr(parts(opened.html(), 'data-part', 'card')[0], 'data-press')!);
+  await until(loaded);
+  opened.live.press('view:trace');
+  await until(() => parts(opened.html(), 'data-lane').length === 4);
+  const rows = parts(opened.html(), 'data-agent').map((row) => ({ text: text(parts(row, 'class', 'row label')[0]), depth: Number(attr(row, 'data-depth')) }));
+  assert.deepEqual(rows, [
+    { text: 'Impl1 · completed · $0.50', depth: 1 },
+    { text: 'Rev1 · failed · $0.25', depth: 2 },
+  ]);
+
+  // the Spend tab lists both sessions
+  opened.live.press('back');
+  await opened.openTab('spend', 'month');
+  const costly = parts(parts(opened.html(), 'data-list', 'costliest')[0] ?? '', 'data-part', 'costly');
+  const titleOf = (row: string) => text(parts(row, 'class', 'title grow')[0]);
+  assert.deepEqual(costly.map(titleOf).sort(), ['Deploy it', 'Past Claude job']);
+
+  // the past one: its summary and Trace, and back to the Spend tab
+  const past = costly.find((row) => titleOf(row) === 'Past Claude job')!;
+  opened.live.press(attr(past, 'data-press')!);
+  await until(() => attr(opened.html(), 'data-screen') === 'past' && loaded());
+  assert.equal(text(parts(opened.html(), 'class', 'title grow')[0]), 'Past Claude job');
+  assert.equal(figure(opened.html(), 'harness'), 'Claude Code');
+  assert.equal(figure(opened.html(), 'cost'), '$0.50');
+  assert.equal(parts(opened.html(), 'data-lane').length, 4);
+  assert.equal(parts(opened.html(), 'data-part', 'switch').length, 0);
+  opened.live.press('back');
+  await until(() => attr(opened.html(), 'data-screen') === 'range' && loaded());
+  assert.equal(attr(opened.html(), 'data-tab'), 'spend');
+  assert.equal(attr(parts(opened.html(), 'data-press', 'range:month')[0], 'aria-pressed'), 'true');
   assert.deepEqual(opened.calls.ssh().filter((args) => !readOnlyLine(args.at(-1)!)), []);
 });
