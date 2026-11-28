@@ -3,11 +3,12 @@
 // programs are the real ones, under a temporary home; the runner records each call
 // (test/core/helpers/recording-run.ts).
 import { execFileSync } from 'node:child_process';
-import { appendFileSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { appendFileSync, chmodSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { setImmediate } from 'node:timers/promises';
 import { afterEach, describe, mock, test } from 'node:test';
 import { CATCH_UP_MS } from '../../src/core/refresh.js';
+import { ompSessionsDir } from '../../src/core/providers/omp-sources.js';
 import { createCatchUp } from '../../src/history/catch-up.ts';
 import { openStore, type Store } from '../../src/history/store.ts';
 import { scheduleCatchUps } from '../../src/worker.ts';
@@ -151,5 +152,23 @@ describe('catch-up', () => {
       { session, repo: other, cost: 0.3 },
       { session, repo: origin, cost: 1 },
     ]);
+  });
+
+  test('a sessions folder that cannot be listed is logged and ends no run', async () => {
+    const { home, logs, store, catchUp } = catchUpOf();
+    ompSession(home, join(home, 'api'), { title: 'api', calls: [spent(0.4)] });
+    const dir = ompSessionsDir(home);
+    // a folder under the sessions folder that `find` cannot go into
+    const locked = join(dir, 'locked');
+    mkdirSync(locked);
+    chmodSync(locked, 0);
+    try {
+      await catchUp.run();
+    } finally {
+      chmodSync(locked, 0o700);
+    }
+
+    expect(logs.filter((line) => line.startsWith(`spyhop: catch-up cannot list ${dir}: `))).toHaveLength(1);
+    expect(store.meta('catch-ups')).toBe(null);
   });
 });

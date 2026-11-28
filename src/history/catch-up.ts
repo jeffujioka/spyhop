@@ -1,9 +1,11 @@
 // The catch-up: reads this computer's omp session files into the history store
 // (src/history/store.ts), each from where its last read ended, so that the store keeps their
 // daily lines for good. One run lists every `.jsonl` file under omp's sessions folder, down to
-// the sub-agents of sub-agents, with one `find`; a file whose size and modified time are those
-// of its last read is not read, any other is advanced by `scanFile` (src/core/refresh.js) from
-// the position and the fold state the store keeps for it, with omp's fold keeping daily lines.
+// the sub-agents of sub-agents, with one `find`; a listing that fails, but for a sessions folder
+// that does not exist, is logged and reads nothing, and the run does not count as ended. A file
+// whose size and modified time are those of its last read is not read, any other is advanced by
+// `scanFile` (src/core/refresh.js) from the position and the fold state the store keeps for it,
+// with omp's fold keeping daily lines.
 // Its new lines are saved with that state in one transaction; a file read again from its start
 // replaces the lines it gave before. Its programs run one at a time, so a run never holds more
 // than one program slot.
@@ -68,8 +70,14 @@ export function createCatchUp({ run, store, home, log }: { run: Run; store: Stor
   }
 
   async function runOnce() {
-    // `path` named: the JS signature's inferred type asks for it
-    const listed = await listFolder(run, { dir, os: type(), depth: 2 + SUBAGENT_DEPTH, path: undefined });
+    let listed;
+    try {
+      // `path` named: the JS signature's inferred type asks for it
+      listed = await listFolder(run, { dir, os: type(), depth: 2 + SUBAGENT_DEPTH, path: undefined, strict: true });
+    } catch (error) {
+      log(`spyhop: catch-up cannot list ${dir}: ${(error as Error).message}`);
+      return;
+    }
     for (const file of listed) {
       if (file.path.endsWith('/changes.jsonl')) continue;
       try {
