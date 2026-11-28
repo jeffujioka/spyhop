@@ -57,19 +57,21 @@ export function remoteHosts({ hosts, environments }: HostLists, hostIds: string[
   return remote;
 }
 
-// An Orca host whose harness sessions the catch-up reads (src/history/catch-up.ts): its hostId,
-// its name and its alias, as `remoteHosts` gives them.
+// An Orca host whose harness sessions the catch-up reads (src/history/catch-up.ts): the key its
+// rows are kept by in the history store, `ssh:<alias>`, its name and its alias, as `remoteHosts`
+// gives them.
 export type HistoryHost = { id: string; name: string; alias: string };
 
-// Every SSH host `lists` names (`ssh:<Orca id>`) and every paired Orca server (`runtime:<env id>`),
-// one per alias: a paired server deployed over a listed SSH target shares its home, which is
-// read once, as the SSH host's.
+// Every SSH host `lists` names and every paired Orca server, one per alias: a paired server
+// deployed over a listed SSH target shares its home, which is read once, as the SSH host's. Each
+// is keyed by its alias, not by Orca's id of it, which changes when the target is removed and
+// added again in Orca: its home is then still the one kept, never read again as another host's.
 export function historyHosts(lists: HostLists): HistoryHost[] {
   const sshIds = lists.hosts.filter((host) => host.kind === 'ssh').map((host) => `ssh:${host.id}`);
   const byAlias = new Map<string, HistoryHost>();
   // the SSH hosts first, each in the lists' order
-  for (const [id, { name, alias }] of [...remoteHosts(lists, sshIds)].sort(([a], [b]) => Number(b.startsWith('ssh:')) - Number(a.startsWith('ssh:')))) {
-    if (!byAlias.has(alias)) byAlias.set(alias, { id, name, alias });
+  for (const [, { name, alias }] of [...remoteHosts(lists, sshIds)].sort(([a], [b]) => Number(b.startsWith('ssh:')) - Number(a.startsWith('ssh:')))) {
+    if (!byAlias.has(alias)) byAlias.set(alias, { id: `ssh:${alias}`, name, alias });
   }
   return [...byAlias.values()];
 }

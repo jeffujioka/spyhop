@@ -349,8 +349,10 @@ next one. Claude Code's calls and costs are filed under one name per model, with
 `anthropic.` prefix, the `[1m]` context size or the date its names can carry. A file's repo is
 set when it is first read: the git origin of the folder
 it records first (omp: its `session` entry), else that folder, else `n/a`; a sub-agent's
-transcript counts in its own folder's repo and in its main session. Another program that holds
-the store, such as `sqlite3`, is waited for up to 5 seconds.
+transcript counts in its own folder's repo and in its main session. Another Orca host's lines are
+kept by the ssh alias it is read over, not by Orca's id of it, so a target removed and added again
+in Orca is counted once. Another program that holds the store, such as `sqlite3`, is waited for up
+to 5 seconds.
 A store that cannot be opened, or a Node in Orca that cannot load `node:sqlite`, is written to
 the worker's log once; the range tabs then read n/a, and Live is drawn as ever.
 

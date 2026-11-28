@@ -22,7 +22,7 @@ import { tempHome } from '../helpers/files.ts';
 import { caughtUp, rangeOf, storeOf } from '../helpers/history.ts';
 import { mountOn, ompSession, spent } from '../helpers/live.ts';
 import { figure, listOf, parts, text } from '../helpers/markup.ts';
-import { JEFF_SERVER_ENVIRONMENTS, JEFF_TARGET, LOCAL_HOST, hostListOf, STARFISH_LISTS } from '../helpers/orca-answers.ts';
+import { DEVBOX, DEVBOX_HOST, environmentListOf, JEFF_LISTS, JEFF_SERVER_ENVIRONMENTS, JEFF_TARGET, LOCAL_HOST, hostListOf, STARFISH_LISTS } from '../helpers/orca-answers.ts';
 import { withCopilotPrices } from '../helpers/prices.ts';
 import { readOnlyLine, ZSTD_PIPE } from '../helpers/read-only.ts';
 import { standIns } from '../helpers/stand-ins.ts';
@@ -152,9 +152,67 @@ test('a paired server deployed over a listed SSH host is read once', async () =>
   db.close();
   assert.deepEqual(
     hosts.map(({ host }) => host),
-    [`ssh:${JEFF_TARGET}`],
+    ['ssh:jeff'],
   );
   assert.equal(figure(html, 'cost'), '$1.00');
+});
+
+test('a paired server whose deployment target is not listed is kept by its alias', async () => {
+  const remoteHome = tempHome();
+  let home = '';
+  const { html } = await rangeOf([], {
+    tab: 'spend',
+    range: 'day',
+    homes: { jeff: remoteHome },
+    orca: JEFF_LISTS,
+    prepare: (at) => {
+      home = at;
+      ompSession(remoteHome, join(remoteHome, 'api'), { title: 'api', calls: [spent(1)] });
+    },
+  });
+
+  const db = storeOf(home);
+  const hosts = db.prepare("SELECT DISTINCT host FROM files WHERE host != 'local'").all();
+  db.close();
+  assert.deepEqual(
+    hosts.map(({ host }) => host),
+    ['ssh:jeff'],
+  );
+  assert.equal(figure(html, 'cost'), '$1.00');
+});
+
+// The two lists when the SSH target `devbox` has the Orca id `id`.
+const devboxAs = (id: string) => ({
+  'host list --json': hostListOf(LOCAL_HOST, { ...DEVBOX_HOST, id, selector: `--host ssh:${id}` }),
+  'environment list --json': environmentListOf(),
+});
+
+test('a target re-added in Orca is read once', async () => {
+  const remoteHome = tempHome();
+  const { home, mounted } = await mountOn([], {
+    homes: { devbox: remoteHome },
+    orca: devboxAs(DEVBOX),
+    prepare: () => ompSession(remoteHome, join(remoteHome, 'api'), { title: 'api', calls: [spent(1)] }),
+  });
+  await caughtUp(home);
+  // devbox removed and added again: Orca lists the same alias under a new id
+  const readd = standIns({ homes: { devbox: remoteHome }, orca: devboxAs('ssh-1795031810694-n3w1d') });
+
+  // the range asked once a range refresh has passed: a catch-up runs before it answers
+  mock.timers.tick(RANGE_REFRESH_MS);
+  const answer = (await mounted.request('spyhop.range', { request: 1, tab: 'spend', range: 'day' })) as RangeAnswer;
+  await caughtUp(home, 2);
+
+  assert.ok(readd.ssh().some(([alias]) => alias === 'devbox'));
+  assert.deepEqual(readd.ssh().filter((args) => args.at(-1)!.includes("'dd'")), []);
+  const db = storeOf(home);
+  const hosts = db.prepare("SELECT DISTINCT host FROM files WHERE host != 'local'").all();
+  db.close();
+  assert.deepEqual(
+    hosts.map(({ host }) => host),
+    ['ssh:devbox'],
+  );
+  assert.equal(figure(spendTab(answer), 'cost'), '$1.00');
 });
 
 test('Appended bytes only', async () => {

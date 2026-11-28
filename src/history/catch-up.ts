@@ -31,7 +31,7 @@
 // reads, counted only while the database was never read through, and unknown, so never named,
 // when that count fails.
 //
-// A file's lines count in its host's lines (`local` for this computer, else the Orca hostId), in
+// A file's lines count in its host's lines (`local` for this computer, else `ssh:<its alias>`), in
 // its session, `<host>\0<harness>\0<main session file>` (a sub-agent's transcript in its main
 // session's), and in its repo: set when the file is read from its start, the git origin, on its
 // host, of the folder the file itself records first (omp: its `session` entry), else that
