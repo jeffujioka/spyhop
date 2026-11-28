@@ -11,6 +11,9 @@ export const LINE_FIGURES = ['calls', 'tokens', 'uncached', 'read', 'write', 'ou
 // The open buckets: `day\nmodel` -> `{ day, model, figures }`.
 export const newInsights = () => ({ open: new Map() });
 
+// The model a daily line names: `<provider>/<model>` when the harness logs the provider.
+export const modelKey = (provider, model) => (typeof provider === 'string' && provider ? `${provider}/${model}` : model);
+
 // The bucket of the day of `t` (epoch ms) and of `model`, opened when it is not.
 function lineOf(ins, t, model) {
   const day = dayOf(t);

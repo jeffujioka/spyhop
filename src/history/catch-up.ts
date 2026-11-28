@@ -1,14 +1,15 @@
-// The catch-up: reads the omp and Claude Code session files of this computer and of every Orca
-// host `hosts` lists (each SSH host and paired Orca server, over `ssh <alias>`) into the history
-// store (src/history/store.ts), each from where its last read ended, so that the store keeps their
-// daily lines for good. A run reads this computer and each other host at once, a host's programs
-// one at a time. Another host's system and home folder are asked first (`uname -s`, `printenv
-// HOME`); its harness folders lie under that home. A host whose `ssh` exits 255, as when it
-// cannot be reached, or whose place cannot be asked, is not read: its read stops there, it is
-// named in `notRead` until a later run reads it, and the lines kept of it stay. Then `zstd -V`
-// is asked once: on a host where it exits 0, the listings (`find`) and the reads of a file's
-// bytes (`dd`, `tail`) run within ZSTD_SCRIPT, their output decompressed here and their exit
-// code their own; on any other, they run raw. `uname`, `printenv` and `git` always run raw.
+// The catch-up: reads the omp and Claude Code session files and the opencode database (see below)
+// of this computer and of every Orca host `hosts` lists (each SSH host and paired Orca server,
+// over `ssh <alias>`) into the history store (src/history/store.ts), each from where its last
+// read ended, so that the store keeps their daily lines for good. A run reads this computer and
+// each other host at once, a host's programs one at a time. Another host's system and home folder
+// are asked first (`uname -s`, `printenv HOME`); its harness folders lie under that home. A host
+// whose `ssh` exits 255, as when it cannot be reached, or whose place cannot be asked, is not
+// read: its read stops there, it is named in `notRead` until a later run reads it, and the lines
+// kept of it stay. Then `zstd -V` is asked once: on a host where it exits 0, the listings
+// (`find`), the reads of a file's bytes (`dd`, `tail`) and opencode's queries (`sqlite3`) run
+// within ZSTD_SCRIPT, their output decompressed here and their exit code their own; on any
+// other, they run raw. `uname`, `printenv` and `git` always run raw.
 //
 // On each host, one run lists every `.jsonl` file under each harness's sessions folder, down to
 // the sub-agents (of sub-agents, for omp), with one `find` each; a listing that fails, but for a
@@ -24,12 +25,24 @@
 // session's), and in its repo: set when the file is read from its start, the git origin, on its
 // host, of the folder the file itself records first (omp: its `session` entry), else that
 // folder, else `n/a`.
+//
+// On each host, the run then reads opencode's database (`databaseOf`, src/core/providers/
+// opencode-sources.js), a `files` row of its own, with `sqlite3 -readonly`; a host without one,
+// or without sqlite3, has none to read. Its first read pages every model call, by the time it
+// was created, PAGE_ROWS at a time; each later run replaces the database's lines of the day
+// OPENCODE_OPEN_DAYS before today and after, from the calls created since that day's start, since
+// opencode updates a call in place: an older day stays as it was read. A call counts on the day
+// it was created, in its root session (its `parent_id` followed up), `<host>\0opencode\0<root
+// session id>`, and in the repo of its own session's folder, the git origin as above.
 import { type } from 'node:os';
 import { zstdDecompressSync } from 'node:zlib';
+import { dayOf } from '../core/days.js';
 import { readOrigin } from '../core/git.js';
-import { takeLines } from '../core/insights.js';
+import { newInsights, takeLines } from '../core/insights.js';
 import { claudeProvider } from '../core/providers/claude.js';
 import { claudeProjectsDir } from '../core/providers/claude-sources.js';
+import { opencodeInsights } from '../core/providers/opencode.js';
+import { databaseOf, historyRowsQuery, SCHEMA_QUERY, select, sessionsIn } from '../core/providers/opencode-sources.js';
 import { ompProvider } from '../core/providers/omp.js';
 import { ompSessionsDir } from '../core/providers/omp-sources.js';
 import { absoluteFolder, listFolder, mainSessionOf, SUBAGENT_DEPTH } from '../core/providers/session-files.js';
@@ -37,10 +50,15 @@ import { scanFile } from '../core/refresh.js';
 import type { Run, RunBytes } from '../exec.ts';
 import { LOCAL } from '../fleet.ts';
 import { type HistoryHost, placeOf } from '../hosts.ts';
-import { HISTORY_VERSION, type Store } from './store.ts';
+import { HISTORY_VERSION, type SessionLine, type Store } from './store.ts';
 
 // The meta key of the number of runs that have ended.
 const CATCH_UPS = 'catch-ups';
+
+// How many days of opencode's calls each catch-up reads again, today's not counted, and how
+// many of its rows one query reads.
+export const OPENCODE_OPEN_DAYS = 10;
+const PAGE_ROWS = 5000;
 
 // The script, run as `sh -c <script> sh <program> <args…>`, that prints the program's output
 // compressed by `zstd` and exits with the program's exit code: the code goes out of the pipe on
@@ -131,6 +149,50 @@ export function createCatchUp({
     );
   }
 
+  // Reads the opencode database of the host of `place` (see the header): its lines of the days
+  // it reads again replaced with those read now, once they are all read and the host was reached.
+  async function readOpencode(place: Place) {
+    const { host, read } = place;
+    const database = databaseOf(place.home);
+    const tables = await select(read, database, SCHEMA_QUERY);
+    const sessions = tables && sessionsIn(tables);
+    if (!sessions) return;
+    const row = store.file(host, 'opencode', database);
+    const first = row?.version !== HISTORY_VERSION;
+    const today = new Date();
+    const open = new Date(today.getFullYear(), today.getMonth(), today.getDate() - OPENCODE_OPEN_DAYS).getTime();
+    // by root session and the folder of the row's own session
+    const groups = new Map<string, { session: string; directory: string | null; insights: object }>();
+    let from = first ? 0 : open;
+    let after: string | null = null;
+    for (;;) {
+      const rows = await select(read, database, historyRowsQuery(sessions, from, after, PAGE_ROWS));
+      if (!rows) throw new Error(`cannot read the model calls of ${database}`);
+      for (const call of rows) {
+        const key = `${call.sessionId}\0${call.directory}`;
+        let group = groups.get(key);
+        if (!group) groups.set(key, (group = { session: String(call.sessionId), directory: call.directory ?? null, insights: newInsights() }));
+        opencodeInsights([call], group.insights);
+      }
+      if (rows.length < PAGE_ROWS) break;
+      ({ created: from, id: after } = rows.at(-1));
+    }
+    const repos = new Map<string | null, string>();
+    const lines: SessionLine[] = [];
+    for (const { session, directory, insights } of groups.values()) {
+      if (!repos.has(directory)) repos.set(directory, await repoOf(place.exec, directory));
+      const repo = repos.get(directory)!;
+      for (const line of takeLines(insights)) lines.push({ ...line, session: `${host}\0opencode\0${session}`, repo });
+    }
+    if (!place.reached()) throw new Error(`lost ${host} while reading ${database}`);
+    // the row is marked read whole (HISTORY_VERSION) only once its lines are saved
+    const file = (version: number) => ({ host, harness: 'opencode', path: database, pos: 0, size: 0, mtimeMs: 0, version, state: null });
+    const none = { session: '', repo: '', lines: [], restarted: false };
+    const id = row?.id ?? store.saveRead(file(0), none);
+    store.replaceDays(id, first ? '' : dayOf(open), { lines });
+    if (first) store.saveRead(file(HISTORY_VERSION), none);
+  }
+
   // Reads the session files of the host of `place`, one program at a time, until `ssh` fails to
   // reach it; whether every listing succeeded.
   async function readHost(place: Place) {
@@ -157,6 +219,12 @@ export function createCatchUp({
           log(`spyhop: catch-up cannot read ${file.path}: ${(error as Error).message}`);
         }
       }
+    }
+    try {
+      await readOpencode(place);
+    } catch (error) {
+      if (!place.reached()) return ended;
+      log(`spyhop: catch-up cannot read opencode's database: ${(error as Error).message}`);
     }
     return ended;
   }

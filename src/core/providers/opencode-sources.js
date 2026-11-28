@@ -19,7 +19,7 @@ import { absoluteFolder } from './session-files.js';
 
 // opencode's database under the host's home folder. opencode follows `XDG_DATA_HOME`; the
 // plugin reads the default place only, and an agent whose opencode keeps it elsewhere reads n/a.
-const databaseOf = (home) => `${home}/.local/share/opencode/opencode.db`;
+export const databaseOf = (home) => `${home}/.local/share/opencode/opencode.db`;
 
 // How long a host's model catalogue is kept before it is read again: opencode refreshes the file
 // itself now and then, and a new window can wait an hour.
@@ -41,11 +41,11 @@ const CURRENT = '(SELECT id, parent_id, directory, time_updated, time_archived, 
 const LEGACY = '(SELECT id, parent_id, directory, time_updated, time_archived, 0 AS current, NULL AS cost FROM session)';
 
 // Which of the two session tables a database has.
-const SCHEMA_QUERY = "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('session_v2', 'session')";
+export const SCHEMA_QUERY = "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('session_v2', 'session')";
 
 // The sessions (BOTH, CURRENT or LEGACY) of a database whose session tables are the `rows` of
 // SCHEMA_QUERY; null when it has neither.
-function sessionsIn(rows) {
+export function sessionsIn(rows) {
   const names = new Set(rows.map((row) => row?.name));
   if (names.has('session_v2')) return names.has('session') ? BOTH : CURRENT;
   return names.has('session') ? LEGACY : null;
@@ -159,6 +159,39 @@ function currentMessagesQuery(ids) {
   );
 }
 
+// The rows the history store keeps of the model calls of `sessions` (see sessionsIn), created
+// from `fromMs` on (epoch ms), after the row `afterId` of that time when given, `limit` of them,
+// by `time_created` and `id`: the current tables' `assistant` and `compaction` rows and the
+// legacy tables' assistant messages, a compaction's summary (`summary` 1) included; a legacy
+// session the current tables hold is read from them. Only the fields of the figures are read,
+// never a message's text: `{ id, created, sessionId, directory, modelId, providerId, cost, total,
+// input, output, reasoning, cacheRead, cacheWrite }`, `sessionId` the session's root (its
+// `parent_id` followed to a session without one, or whose parent the database lacks) and
+// `directory` the folder of the row's own session.
+export function historyRowsQuery(sessions, fromMs, afterId, limit) {
+  const from = Number(fromMs);
+  const after = afterId === null ? `m.time_created >= ${from}` : `(m.time_created > ${from} OR (m.time_created = ${from} AND m.id > ${literal(afterId)}))`;
+  const fields = (model, provider, total) =>
+    `m.id AS id, m.time_created AS created, tree.root AS sessionId, tree.directory AS directory, json_extract(m.data, '$.${model}') AS modelId, ` +
+    `json_extract(m.data, '$.${provider}') AS providerId, json_extract(m.data, '$.cost') AS cost, ${total} AS total, ` +
+    "json_extract(m.data, '$.tokens.input') AS input, json_extract(m.data, '$.tokens.output') AS output, " +
+    "json_extract(m.data, '$.tokens.reasoning') AS reasoning, json_extract(m.data, '$.tokens.cache.read') AS cacheRead, " +
+    "json_extract(m.data, '$.tokens.cache.write') AS cacheWrite";
+  const current =
+    `SELECT ${fields('model.id', 'model.providerID', 'NULL')} FROM session_message AS m JOIN tree ON tree.id = m.session_id AND tree.current = 1 ` +
+    `WHERE m.type IN ('assistant', 'compaction') AND ${after}`;
+  const legacy =
+    `SELECT ${fields('modelID', 'providerID', "json_extract(m.data, '$.tokens.total')")} FROM message AS m JOIN tree ON tree.id = m.session_id AND tree.current = 0 ` +
+    `WHERE json_extract(m.data, '$.role') = 'assistant' AND ${after}`;
+  const parts = { [BOTH]: [current, legacy], [CURRENT]: [current], [LEGACY]: [legacy] }[sessions];
+  return (
+    `WITH RECURSIVE s AS ${sessions}, tree(id, root, directory, current) AS (` +
+    'SELECT id, id, directory, current FROM s WHERE parent_id IS NULL OR parent_id NOT IN (SELECT id FROM s) ' +
+    'UNION SELECT s.id, tree.root, s.directory, s.current FROM s JOIN tree ON s.parent_id = tree.id) ' +
+    `${parts.join(' UNION ALL ')} ORDER BY created, id LIMIT ${Number(limit)}`
+  );
+}
+
 // The compactions of each of the legacy sessions `ids` opencode started by itself (`auto` on the
 // `compaction` part of the user message that asked for it) whose summary message came back
 // finished and without an error: a row `{ sessionId, n }` of each session that has any.
@@ -196,7 +229,7 @@ function currentToolsQuery(ids) {
 
 // Rows of a query as an array: `sqlite3 -json` prints nothing for no rows. Null when the
 // program failed (no sqlite3, no database, a table the version lacks).
-async function select(run, database, query) {
+export async function select(run, database, query) {
   const { code, stdout } = await run('sqlite3', ['-readonly', '-json', database, query]);
   if (code !== 0) return null;
   if (stdout.trim() === '') return [];

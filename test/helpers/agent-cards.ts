@@ -85,12 +85,28 @@ export type OpencodeCalls = { provider: string; model: string; contexts: number[
 // to it and output.
 export type OpencodeCall = { uncached: number; read: number; write: number; output: number };
 
-// The session `ses_window` of the folder `folder` in opencode's database under `home` (made from
-// current.sql), in the current tables: `calls` of `model` of the provider `provider`, one a
-// minute, the last a minute ago, at 0.10 USD each, and opencode's own total of `cost` USD;
-// returns the database's path.
-export function opencodeSession(home: string, folder: string, { provider, model, calls, cost }: { provider: string; model: string; calls: OpencodeCall[]; cost: number }) {
-  const at = (i: number) => NOW - 60_000 * (calls.length - i);
+// The session `id` (`ses_window` when not given) of the folder `folder` in opencode's database
+// under `home` (made from current.sql), in the current tables: `calls` of `model` of the provider
+// `provider`, one a minute, the last created at `last` (a minute ago when not given), at
+// `callCost` USD each (0.10 when not given), and opencode's own total of `cost` USD; returns the
+// database's path. With `update`, the database is not made again: the session and its calls are
+// written over those of the same ids in the one already there, as opencode updates a call in
+// place.
+export function opencodeSession(
+  home: string,
+  folder: string,
+  {
+    provider,
+    model,
+    calls,
+    cost,
+    id = 'ses_window',
+    callCost = 0.1,
+    last = NOW - 60_000,
+    update = false,
+  }: { provider: string; model: string; calls: OpencodeCall[]; cost: number; id?: string; callCost?: number; last?: number; update?: boolean },
+) {
+  const at = (i: number) => last - 60_000 * (calls.length - 1 - i);
   const rows = calls.map(({ uncached, read, write, output }, i) => {
     const data = {
       time: { created: at(i), completed: at(i) + 1000 },
@@ -98,13 +114,13 @@ export function opencodeSession(home: string, folder: string, { provider, model,
       model: { id: model, providerID: provider, variant: 'high' },
       content: [],
       finish: 'stop',
-      cost: 0.1,
+      cost: callCost,
       tokens: { input: uncached, output, reasoning: 0, cache: { read, write } },
     };
-    return `INSERT INTO session_message VALUES ('w${i}', 'ses_window', 'assistant', ${i + 1}, ${at(i)}, ${at(i) + 1000}, ${sqlText(JSON.stringify(data))});`;
+    return `INSERT OR REPLACE INTO session_message VALUES ('w${i}', ${sqlText(id)}, 'assistant', ${i + 1}, ${at(i)}, ${at(i) + 1000}, ${sqlText(JSON.stringify(data))});`;
   });
-  const session = `INSERT INTO session_v2 VALUES ('ses_window', 'prj', NULL, 's', ${sqlText(folder)}, 't', '2.0.0', ${cost}, NULL, NULL, ${at(0)}, ${at(calls.length - 1) + 1000}, NULL);`;
-  const database = opencodeDatabase(home, 'current');
+  const session = `INSERT OR REPLACE INTO session_v2 VALUES (${sqlText(id)}, 'prj', NULL, 's', ${sqlText(folder)}, 't', '2.0.0', ${cost}, NULL, NULL, ${at(0)}, ${at(calls.length - 1) + 1000}, NULL);`;
+  const database = update ? join(home, '.local/share/opencode/opencode.db') : opencodeDatabase(home, 'current');
   execFileSync('sqlite3', [database, [session, ...rows].join('\n')]);
   return database;
 }

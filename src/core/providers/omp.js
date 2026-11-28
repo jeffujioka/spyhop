@@ -29,7 +29,7 @@
 import { add, parseEntries, tally } from './jsonl.js';
 import { burnRate, cacheRate, isNumber, tokenCount, wholeSession } from './shared.js';
 import { addCall, addCost, addMinute, detailOf, entryOf, newSeries, pushRecent, toolAnswered, toolCalled } from '../series.js';
-import { newInsights, noteCall } from '../insights.js';
+import { modelKey, newInsights, noteCall } from '../insights.js';
 import { callCost, COPILOT, copilotWriteCost } from '../copilot-prices.js';
 
 // A fresh accumulator. Sums are `tally`s: undefined until an entry carries the value.
@@ -133,7 +133,7 @@ function addSpend(s, logged, time, call, side) {
   const { provider, model } = logged;
   // a call that logs no model is in no model and no daily line: none is filed under a made-up one
   if (typeof model !== 'string') return;
-  const key = typeof provider === 'string' && provider ? `${provider}/${model}` : model;
+  const key = modelKey(provider, model);
   const byModel = entryOf(s.models, key, () => ({ cost: 0, tokens: 0, main: false, side: false }));
   byModel.cost = addCost(byModel.cost, call.cost);
   byModel.tokens += tokens;

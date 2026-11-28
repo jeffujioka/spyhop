@@ -282,7 +282,12 @@ is not read, and a file shorter than that read, or no longer the file that was r
 from its start and its counts replace those it gave before. A file that cannot be read is written
 to the worker's log and tried again at the next catch-up; a catch-up that cannot list a sessions
 folder is written to the log too, reads nothing of that harness and is tried again at the next
-one.
+one. It then reads opencode's database (`~/.local/share/opencode/opencode.db`, with `sqlite3
+-readonly`): the first time every model call in it, 5,000 rows a query, and at each later
+catch-up again the calls created in the last 10 days, whose counts replace those read before, as
+opencode can update a call in place. A day older than that keeps the counts it was read with. A
+call counts on the day it was created, in its root session (its sub-agents' calls included), and
+in the repo of its own session's folder.
 
 ## What spyhop stores
 

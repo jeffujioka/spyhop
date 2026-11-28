@@ -4,7 +4,8 @@
 //
 // - `files`: one row per session file of an Orca host and harness, with the position the read
 //   reached, the size and mtime it saw, the HISTORY_VERSION that wrote its state, and that
-//   state as JSON (`encodeState` of src/core/refresh.js);
+//   state as JSON (`encodeState` of src/core/refresh.js); an opencode database is one row, whose
+//   lines a catch-up replaces from a day on (`replaceDays`);
 // - `lines`: the figures (LINE_FIGURES) of a file's model calls by session, day, repo and model;
 // - `meta`: string values by key;
 // - the view `daily_lines`: the lines summed by day, Orca host, repo, harness and model.
@@ -29,6 +30,9 @@ export type DailyLine = { day: string; host: string; repo: string; harness: stri
 // A daily line of one read (`takeLines` of src/core/insights.js).
 type LineDelta = { day: string; model: string; figures: Record<string, number> };
 
+// A daily line of one read, with the session and the repo it counts in.
+export type SessionLine = LineDelta & { session: string; repo: string };
+
 export type Store = {
   // The row of the file `path` of `harness` on the Orca host `host`, but its state; null when
   // none was saved.
@@ -38,6 +42,9 @@ export type Store = {
   // Saves a read of a file of session `session` in `repo`, in one transaction: its lines added to
   // the file's (which a `restarted` read replaces) and its row. Returns the file's id.
   saveRead(file: Omit<FileRow, 'id'>, read: { session: string; repo: string; lines: LineDelta[]; restarted: boolean }): number;
+  // Replaces the lines of the file of id `file` of the day `fromDay` (YYYY-MM-DD) and later with
+  // `read.lines`, in one transaction; '' replaces them all.
+  replaceDays(file: number, fromDay: string, read: { lines: SessionLine[] }): void;
   // The daily lines of the days `from` to `to` (YYYY-MM-DD, both included).
   dailyLines(from: string, to: string): DailyLine[];
   meta(key: string): string | null;
@@ -99,6 +106,7 @@ export async function openStore(home: string): Promise<Store> {
       pos = excluded.pos, size = excluded.size, mtime_ms = excluded.mtime_ms, version = excluded.version, state = excluded.state
     RETURNING id`);
   const deleteLines = db.prepare('DELETE FROM lines WHERE file = ?');
+  const deleteDays = db.prepare('DELETE FROM lines WHERE file = ? AND day >= ?');
   const upsertLine = db.prepare(`
     INSERT INTO lines (file, session, day, repo, model, ${COLUMNS.join(', ')}) VALUES (?, ?, ?, ?, ?, ${COLUMNS.map(() => '?').join(', ')})
     ON CONFLICT (file, session, day, repo, model) DO UPDATE SET ${COLUMNS.map((column) => `${column} = ${column} + excluded.${column}`).join(', ')}`);
@@ -132,6 +140,17 @@ export async function openStore(home: string): Promise<Store> {
         for (const { day, model, figures } of lines) upsertLine.run(id, session, day, repo, model, ...LINE_FIGURES.map((name) => figures[name]));
         db.exec('COMMIT');
         return Number(id);
+      } catch (error) {
+        db.exec('ROLLBACK');
+        throw error;
+      }
+    },
+    replaceDays(file, fromDay, { lines }) {
+      db.exec('BEGIN');
+      try {
+        deleteDays.run(file, fromDay);
+        for (const { session, day, repo, model, figures } of lines) upsertLine.run(file, session, day, repo, model, ...LINE_FIGURES.map((name) => figures[name]));
+        db.exec('COMMIT');
       } catch (error) {
         db.exec('ROLLBACK');
         throw error;

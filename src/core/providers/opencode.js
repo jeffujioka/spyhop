@@ -18,6 +18,7 @@
 import { burnRate, isNumber, tokenCount } from './shared.js';
 import { addCall, addCost, addMinute, detailOf, entryOf, newSeries, pushRecent } from '../series.js';
 import { callCost, COPILOT } from '../copilot-prices.js';
+import { modelKey, noteCall } from '../insights.js';
 
 function parseSession({ messages, compactions, tools, loggedCost, sources }) {
   const rows = Array.isArray(messages) ? messages : [];
@@ -86,6 +87,18 @@ function costOf(row) {
 function callsCost(session) {
   if (session.assistants.some((row) => row.providerId === COPILOT && costOf(row) === null)) return undefined;
   return sumAssistants(session, costOf);
+}
+
+// Adds the model calls (see isCall) of `rows`, `historyRowsQuery`'s rows of opencode-sources.js,
+// to the daily lines of `ins` (src/core/insights.js), each on the day it was created, under its
+// model with its provider, at the cost of costOf. A row that logs no model is in no daily line.
+export function opencodeInsights(rows, ins) {
+  for (const row of rows) {
+    if (!isCall(row) || typeof row.modelId !== 'string' || !isNumber(row.created)) continue;
+    const [uncached, read, write, output] = [row.input, row.cacheRead, row.cacheWrite, row.output].map(tokenCount);
+    const tokens = messageTotal(row) ?? uncached + read + write + output + tokenCount(row.reasoning);
+    noteCall(ins, { end: row.created, model: modelKey(row.providerId, row.modelId), tokens, uncached, read, write, output, cost: costOf(row), copilot: row.providerId === COPILOT });
+  }
 }
 
 // Cost the database logged (herdr-session-stats decision D5): a current session's is the total
