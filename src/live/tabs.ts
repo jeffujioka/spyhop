@@ -2,7 +2,9 @@
 // shown one selected; on a range tab, the range control under it, the shown range pressed.
 // Pure: no DOM.
 
-import type { Range, RangeTab } from '../protocol.ts';
+import type { Range, RangeAnswer, RangeTab } from '../protocol.ts';
+import { cacheTab } from './cache.ts';
+import { spendTab } from './spend.ts';
 
 const TABS = [
   ['live', 'Live'],
@@ -24,3 +26,7 @@ export function tabBar(tab: 'live' | RangeTab, range: Range | null): string {
   const ranges = range === null ? '' : `<div data-part="range" class="row">${RANGES.map(([name, label]) => `<button data-press="range:${name}" aria-pressed="${name === range}">${label}</button>`).join('')}</div>`;
   return `<nav data-part="tabs" class="row" role="tablist">${tabs}</nav>${ranges}`;
 }
+
+// The body of the range tab `answer` is of, under its tab bar: the Spend or the Cache tab; the
+// Health tab has none yet.
+export const tabBody = (answer: RangeAnswer): string => (answer.tab === 'spend' ? spendTab(answer) : answer.tab === 'cache' ? cacheTab(answer) : '');

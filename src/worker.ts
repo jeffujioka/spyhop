@@ -50,14 +50,15 @@ import { type BuiltCard, createAgentCards, type OrcaAgent, sameButStates } from 
 import { cardView } from './card-view.ts';
 import { CATCH_UP_MS, decodeScans, encodeScans, keptPartsOf, RANGE_REFRESH_MS, REFRESH_INTERVAL_MS } from './core/refresh.js';
 import { formatCost } from './core/format.js';
+import { AWAY_BANDS, MISS_CAUSES } from './core/insights.js';
 import { createTtlCache } from './core/ttl-cache.js';
 import { run, runBytes } from './exec.ts';
 import { attentionRows, burnCard, type FleetAgent, groupCards, LOCAL, stateCounts } from './fleet.ts';
 import { orca as cli, historyHosts, type HostLists, listHosts, readServerAgents, type RemoteHost, remoteHosts, type ServerAgent } from './hosts.ts';
-import type { CardView, FleetAnswer, HostGroup, Num, PastAnswer, Pane, RangeAnswer, SessionAnswer, SpendView } from './protocol.ts';
+import type { CacheView, CardView, FleetAnswer, HostGroup, Num, PastAnswer, Pane, RangeAnswer, SessionAnswer, SpendView } from './protocol.ts';
 import { type CatchUp, createCatchUp } from './history/catch-up.ts';
 import { openStore, type Store } from './history/store.ts';
-import { type Places, spendView } from './history/views.ts';
+import { cacheView, type Places, spendView } from './history/views.ts';
 import { sessionDetail } from './session-detail.ts';
 
 // How long Orca's lists of hosts and paired servers are kept: a server is paired seldom, its
@@ -72,6 +73,16 @@ const KEPT_WRITE_MS = 30 * 1000;
 
 // The Spend tab's view when the history store cannot be opened or read.
 const SPEND_NA: SpendView = { cost: 'n/a', tokens: 'n/a', calls: 'n/a', chart: null, byRepo: [], byModel: [], byHarness: [], costliest: [], sideCost: 'n/a', sources: null };
+
+// The Cache tab's view when the history store cannot be opened or read.
+const CACHE_NA: CacheView = {
+  hitRate: 'n/a',
+  chart: null,
+  causes: MISS_CAUSES.map((cause: string) => ({ cause, cold: 'n/a', tokens: 'n/a', cost: null })),
+  costLeftOut: [],
+  away: AWAY_BANDS.map((band: string) => ({ band, returns: 'n/a', cold: 'n/a' })),
+  compactions: { idle: 'n/a', full: 'n/a', manual: 'n/a', inferred: 'n/a' },
+};
 
 // How many characters of a machine's id name its Orca host when no card gave the host's name.
 const HOST_ID_CHARS = 8;
@@ -415,17 +426,20 @@ export default function activate(orca: OrcaWorkerApi): void {
 
   orca.panels.handle('spyhop.range', async ({ request, tab, range }): Promise<RangeAnswer> => {
     const history = await opening;
-    if (!history) return { request, tab, range, spend: tab === 'spend' ? SPEND_NA : null, notRead: [], progress: null };
+    // the tab's view, n/a where the store cannot be opened or read, null for a tab with none
+    const none = { spend: tab === 'spend' ? SPEND_NA : null, cache: tab === 'cache' ? CACHE_NA : null };
+    if (!history) return { request, tab, range, ...none, notRead: [], progress: null };
     const { store, catchUp } = history;
     if (!catchUp.running() && Date.now() - (catchUp.startedMs() ?? -Infinity) >= RANGE_CATCH_UP_MS) await caughtUp(catchUp, log, () => showToday(store));
     const read = { notRead: catchUp.notRead(), progress: catchUp.progress() };
-    if (tab !== 'spend') return { request, tab, range, spend: null, ...read };
     // a read that fails, such as a store held past its busy timeout, is n/a until one succeeds
     try {
-      return { request, tab, range, spend: spendView(store, range, Date.now(), await placesOf(catchUp)), ...read };
+      if (tab === 'spend') return { request, tab, range, ...none, spend: spendView(store, range, Date.now(), await placesOf(catchUp)), ...read };
+      if (tab === 'cache') return { request, tab, range, ...none, cache: cacheView(store, range, Date.now()), ...read };
+      return { request, tab, range, ...none, ...read };
     } catch (error) {
       log(`spyhop: cannot read the history store: ${(error as Error).message}`);
-      return { request, tab, range, spend: SPEND_NA, ...read };
+      return { request, tab, range, ...none, ...read };
     }
   });
 

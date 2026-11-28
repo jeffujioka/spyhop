@@ -35,8 +35,7 @@ import type { OrcaFrameApi } from 'orca/frame';
 import type { CardView, PastAnswer, Range, RangeAnswer, RangeTab, SessionView } from '../protocol.ts';
 import { type FleetView, fleetScreen } from './fleet.ts';
 import { pastScreen, sessionScreen } from './session.ts';
-import { spendTab } from './spend.ts';
-import { tabBar } from './tabs.ts';
+import { tabBar, tabBody } from './tabs.ts';
 
 // What the controller uses of Orca's Frame API (the global `orca` of an HTML panel).
 export type Frame = {
@@ -69,7 +68,7 @@ const FLEET: Screen = { name: 'fleet' };
 
 // The range tab `screen`: its tab bar, then its answer, or a loading line until one is in.
 function rangeScreen({ tab, range, answer }: Extract<Screen, { name: 'range' }>) {
-  const body = answer ? spendTab(answer) : '<p data-part="loading" class="muted">Reading the history</p>';
+  const body = answer ? tabBody(answer) : '<p data-part="loading" class="muted">Reading the history</p>';
   return `<main data-screen="range" data-tab="${tab}">${tabBar(tab, range)}${body}</main>`;
 }
 

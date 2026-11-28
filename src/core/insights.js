@@ -20,7 +20,7 @@ import { addSpan, newLane, pruneGaps } from './trace.js';
 // were told apart by inference (see noteCompaction).
 export const MISS_CAUSES = ['expired', 'model', 'thinking', 'compaction', 'other'];
 export const AWAY_BANDS = ['under5', 'to60', 'over60'];
-const cap = (word) => word[0].toUpperCase() + word.slice(1);
+export const cap = (word) => word[0].toUpperCase() + word.slice(1);
 export const LINE_FIGURES = [
   'calls', 'tokens', 'uncached', 'read', 'write', 'output', 'cost', 'costNa', 'sideCost', 'sideTokens', 'copilotCost',
   ...MISS_CAUSES.flatMap((cause) => ['cold', 'coldTokens', 'coldCost', 'coldUnpriced'].map((figure) => `${figure}${cap(cause)}`)),

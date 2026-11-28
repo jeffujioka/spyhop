@@ -208,15 +208,32 @@ export type SpendView = {
   sources: { copilot: Num; logged: Num } | null;
 };
 
+// The Cache tab of a range (src/history/views.ts): its cache hit rate, read over what the model
+// calls read from the prompt cache, wrote to it and sent not cached (n/a without a call), as a share
+// of 1, and by day or month, null for Day; for each miss cause (`expired`, `model`, `thinking`,
+// `compaction`, `other`) its cold starts, the tokens they wrote to the cache again and their cost,
+// null when no cold start of it has one (its harness logs none); `costLeftOut`: the harnesses
+// whose cold starts the cost leaves out; for each time away (`under5`, `to60`, `over60`) its
+// returns and how many found the cache cold; and the compactions by kind, `inferred` of them told
+// apart by inference. Every figure n/a, no chart, when the store cannot be opened or read.
+export type CacheView = {
+  hitRate: Num;
+  chart: RangePoint[] | null;
+  causes: { cause: string; cold: Num; tokens: Num; cost: Num | null }[];
+  costLeftOut: string[];
+  away: { band: string; returns: Num; cold: Num }[];
+  compactions: { idle: Num; full: Num; manual: Num; inferred: Num };
+};
+
 // What the running catch-up is reading (src/history/catch-up.ts): the Orca host's name, the
 // harness's and the share of its bytes read, from 0 to 1.
 export type ReadProgress = { host: string; harness: string; share: number };
 
 // The range tab `tab` over `range`, as the history store holds it: the Spend tab's view when it is
-// the Spend tab, else null; `notRead`: the names of the Orca hosts the last catch-up could not
+// the Spend tab, the Cache tab's when it is the Cache tab, else null; `notRead`: the names of the Orca hosts the last catch-up could not
 // read, whose figures are those read before; `progress`: what the running catch-up is reading of
 // a host and harness never read through, else null; `request`: the panel's number of the request.
-export type RangeAnswer = { request: number; tab: RangeTab; range: Range; spend: SpendView | null; notRead: string[]; progress: ReadProgress | null };
+export type RangeAnswer = { request: number; tab: RangeTab; range: Range; spend: SpendView | null; cache: CacheView | null; notRead: string[]; progress: ReadProgress | null };
 
 // A past session, one with no Live card: what the history store keeps of it, its summary and its
 // Trace (null when it has none), or null when the store keeps none. `request`: the panel's number

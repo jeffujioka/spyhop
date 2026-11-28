@@ -2,7 +2,8 @@
 // a range (`rangeDays`, src/core/days.js).
 import { HARNESS_NAMES } from '../agent-cards.ts';
 import { rangeDays } from '../core/days.js';
-import type { CostlySession, Num, Range, SpendRow, SpendView } from '../protocol.ts';
+import { AWAY_BANDS, cap, MISS_CAUSES } from '../core/insights.js';
+import type { CacheView, CostlySession, Num, Range, SpendRow, SpendView } from '../protocol.ts';
 import type { DailyLine, Store } from './store.ts';
 
 // How many of the costliest sessions the Spend tab lists.
@@ -36,6 +37,16 @@ function costliest(store: Store, from: string, to: string, { shown, hostName }: 
     .map(({ id, title, repo, harness, host, cost }) => ({ id, title, repo, harness: HARNESS_NAMES[harness] ?? harness, host: hostName(host), cost, card: shown.get(id) ?? null }));
 }
 
+// The days of `range` as of `now`, as the store keeps them: its `points` (days, or months for a
+// Year), `by` (null for Day), `first` and `last`, the first and last day, and the daily `lines` of them.
+function linesOf(store: Store, range: Range, now: number) {
+  const { from, to, by, points } = rangeDays(range, now);
+  // a Year's from and to are months, which span their first to their last day; `to` is always
+  // there, though its inferred type allows none
+  const [first, last] = by === 'month' ? [`${from}-01`, `${to}-31`] : [from, to!];
+  return { by, points: points as string[], first, last, lines: store.dailyLines(first, last) };
+}
+
 // The Spend tab of `range` as of the epoch ms `now`: the cost, tokens and model calls of every
 // daily line of its days, the cost n/a when a model call logged none, and its cost by each day or
 // month of the range, none for Day; its cost by repo, model and harness (named as a card names it),
@@ -43,11 +54,7 @@ function costliest(store: Store, from: string, to: string, { shown, hostName }: 
 // without `places`),
 // the side calls' cost, and the Copilot calls' share of the cost.
 export function spendView(store: Store, range: Range, now: number, places: Places | null): SpendView {
-  const { from, to, by, points } = rangeDays(range, now);
-  // a Year's from and to are months, which span their first to their last day; `to` is always
-  // there, though its inferred type allows none
-  const [first, last] = by === 'month' ? [`${from}-01`, `${to}-31`] : [from, to!];
-  const lines = store.dailyLines(first, last);
+  const { by, points, first, last, lines } = linesOf(store, range, now);
   const costs = new Map<string, Num>(points.map((key: string) => [key, 0]));
   let tokens = 0;
   let calls = 0;
@@ -74,5 +81,44 @@ export function spendView(store: Store, range: Range, now: number, places: Place
     costliest: places ? costliest(store, first, last, places) : [],
     sideCost,
     sources: cost === 'n/a' ? { copilot: 'n/a', logged: 'n/a' } : { copilot, logged: cost - copilot },
+  };
+}
+
+// The names of the harnesses of the daily lines `lines` that `unlogged` holds for, each once, in
+// the order of HARNESS_NAMES: those a figure leaves out, which log none of it.
+export function leftOutOf(lines: DailyLine[], unlogged: (line: DailyLine) => boolean): string[] {
+  const left = new Set(lines.filter(unlogged).map(({ harness }) => HARNESS_NAMES[harness] ?? harness));
+  const order = [...new Set(Object.values(HARNESS_NAMES))];
+  return [...order.filter((name) => left.has(name)), ...[...left].filter((name) => !order.includes(name))];
+}
+
+// The sum of the figures `names` of a daily line.
+const sumOf = ({ figures }: DailyLine, names: string[]) => names.reduce((sum, name) => sum + figures[name], 0);
+
+// The hit rate of the figures of `lines`: what the model calls read from the cache over what they
+// read, wrote and sent not cached; n/a without any.
+function hitRateOf(lines: DailyLine[]): Num {
+  const [read, other] = lines.reduce(([r, o], { figures }) => [r + figures.read, o + figures.write + figures.uncached], [0, 0]);
+  return read + other === 0 ? 'n/a' : read / (read + other);
+}
+
+// The Cache tab of `range` as of the epoch ms `now`: see CacheView.
+export function cacheView(store: Store, range: Range, now: number): CacheView {
+  const { by, points, lines } = linesOf(store, range, now);
+  const causes = MISS_CAUSES.map((cause: string) => {
+    const [cold, tokens, cost, unpriced] = ['cold', 'coldTokens', 'coldCost', 'coldUnpriced'].map((name) => lines.reduce((sum, line) => sum + line.figures[`${name}${cap(cause)}`], 0));
+    return { cause, cold, tokens, cost: cold === unpriced ? null : cost };
+  });
+  const unpricedNames = MISS_CAUSES.map((cause: string) => `coldUnpriced${cap(cause)}`);
+  const days = new Map<string, DailyLine[]>(points.map((key) => [key, []]));
+  for (const line of lines) days.get(by === 'month' ? line.day.slice(0, 7) : line.day)?.push(line);
+  const total = (name: string) => lines.reduce((sum, line) => sum + line.figures[name], 0);
+  return {
+    hitRate: hitRateOf(lines),
+    chart: by === null ? null : points.map((key) => ({ key, v: hitRateOf(days.get(key)!) })),
+    causes,
+    costLeftOut: leftOutOf(lines, (line) => sumOf(line, unpricedNames) > 0),
+    away: AWAY_BANDS.map((band: string) => ({ band, returns: total(`returns${cap(band)}`), cold: total(`returnsCold${cap(band)}`) })),
+    compactions: { idle: total('compactionsIdle'), full: total('compactionsFull'), manual: total('compactionsManual'), inferred: total('compactionsInferred') },
   };
 }

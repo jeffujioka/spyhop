@@ -155,3 +155,20 @@ test('a range the store cannot read is n/a', async () => {
   for (const name of ['cost', 'tokens', 'calls']) assert.equal(figure(opened.html(), name), 'n/a', name);
   assert.equal(opened.worker.logs.filter((line) => line.includes('cannot read the history')).length, 1, JSON.stringify(opened.worker.logs));
 });
+
+test('One range for the range tabs', async () => {
+  const opened = await openLive([], { prepare: (home) => apiSession(home, [spent(1)]) });
+  await caughtUp(process.env.HOME!);
+  await opened.openTab('spend', 'day');
+  opened.live.press('range:month');
+  await opened.openTab('cache');
+
+  assert.equal(attr(opened.html(), 'data-tab'), 'cache');
+  const [month] = parts(opened.html(), 'data-press', 'range:month');
+  assert.equal(attr(month, 'aria-pressed'), 'true');
+  assert.deepEqual(parts(opened.html(), 'data-part', 'figure').length > 0, true);
+
+  opened.live.press('tab:live');
+  await until(() => attr(opened.html(), 'data-screen') === 'fleet');
+  assert.deepEqual(parts(opened.html(), 'data-part', 'range'), []);
+});

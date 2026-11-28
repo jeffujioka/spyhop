@@ -6,10 +6,10 @@
 // then its costliest sessions, each a row that opens its session's screen.
 // Pure: an answer in, a markup string out.
 
-import { formatCost, formatCount, formatPercent, orNa } from '../core/format.js';
+import { formatCost, formatCount, orNa } from '../core/format.js';
 import type { CostlySession, RangeAnswer, SpendRow, SpendView } from '../protocol.ts';
 import { rangeChart, usdLabel } from './charts.ts';
-import { costPart, esc, NAMED_ROWS, num, pressable, titled, topRows } from './html.ts';
+import { costPart, esc, NAMED_ROWS, num, pressable, readNotes, titled, topRows } from './html.ts';
 
 // Where the cost comes from, only when part of it is from GitHub prices: that part, then the rest
 // as the harnesses logged it.
@@ -44,10 +44,6 @@ function costliestList(sessions: CostlySession[]) {
 // The Spend tab of `answer`; '' when it holds no Spend tab.
 export function spendTab({ range, spend, notRead, progress }: RangeAnswer): string {
   if (!spend) return '';
-  const reading = progress
-    ? `<p data-part="progress" class="muted">Reading history: ${esc(progress.host)}, ${esc(progress.harness)}, ${formatPercent(progress.share)}</p>`
-    : '';
-  const unread = notRead.length > 0 ? `<p data-part="not-read" class="muted">Not read this time: ${esc(notRead.join(', '))}. Their figures are those read before.</p>` : '';
   const { cost, tokens, calls, chart, byRepo, byModel, byHarness, costliest, sideCost, sources } = spend;
   const figures =
     `<div class="figures">` +
@@ -64,5 +60,5 @@ export function spendTab({ range, spend, notRead, progress }: RangeAnswer): stri
     list('model', 'By model', 'What each model cost, with its provider where the harness logs one', byModel) +
     list('harness', 'By harness', 'What each harness cost', byHarness) +
     costliestList(costliest);
-  return `${reading}${unread}${figures}${over}${lists}`;
+  return `${readNotes({ notRead, progress })}${figures}${over}${lists}`;
 }

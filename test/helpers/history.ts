@@ -5,8 +5,7 @@ import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { STORE_FILE } from '../../src/history/store.ts';
-import { spendTab } from '../../src/live/spend.ts';
-import { tabBar } from '../../src/live/tabs.ts';
+import { tabBar, tabBody } from '../../src/live/tabs.ts';
 import type { Range, RangeAnswer, RangeTab } from '../../src/protocol.ts';
 import { type Mounting, mountOn, until } from './live.ts';
 import type { HostWorkspace } from './orca-host.ts';
@@ -33,10 +32,10 @@ export const caughtUp = (home: string, runs = 1) => until(() => catchUps(home) >
 
 // The worker's answer for the range tab `tab` over `range`, once its first catch-up has read the
 // session files `prepare` wrote under the home (test/helpers/live.ts mounts it, with the mock
-// clock at `now`), the tab bar and the Spend tab drawn from it, and the stand-ins' calls.
+// clock at `now`), the tab bar and the tab drawn from it, and the stand-ins' calls.
 export async function rangeOf(workspaces: HostWorkspace[], { tab, range, ...mounting }: Mounting & { tab: RangeTab; range: Range }) {
   const { home, mounted, calls } = await mountOn(workspaces, mounting);
   await caughtUp(home);
   const answer = (await mounted.request('spyhop.range', { request: 1, tab, range })) as RangeAnswer;
-  return { answer, html: tabBar(tab, range) + spendTab(answer), calls };
+  return { answer, html: tabBar(tab, range) + tabBody(answer), calls };
 }

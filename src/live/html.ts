@@ -3,9 +3,9 @@
 // the markup of a figure, which every screen writes alike, of a range tab's titled figure, of a
 // part of a cost that says where it comes from, and the rows a list names.
 
-import { formatCost } from '../core/format.js';
+import { formatCost, formatPercent } from '../core/format.js';
 import { NA } from '../core/providers/index.js';
-import type { Num } from '../protocol.ts';
+import type { Num, RangeAnswer } from '../protocol.ts';
 
 // The rows a list names, the first of its order; the rest are summed as `others`.
 export const NAMED_ROWS = 6;
@@ -52,4 +52,15 @@ export function titled(title: string, meaning: string, body: string): string {
 // opens the session screen of a card, `past` that of a past session.
 export function pressable(kind: 'open' | 'past', id: string): string {
   return `role="button" tabindex="0" data-press="${esc(`${kind}:${encodeURIComponent(id)}`)}"`;
+}
+
+// What the range tabs say of the history's reading, above their figures: what the running catch-up
+// is reading, of a host and harness never read through, and the Orca hosts the last catch-up could
+// not read, when there are any.
+export function readNotes({ notRead, progress }: Pick<RangeAnswer, 'notRead' | 'progress'>): string {
+  const reading = progress
+    ? `<p data-part="progress" class="muted">Reading history: ${esc(progress.host)}, ${esc(progress.harness)}, ${formatPercent(progress.share)}</p>`
+    : '';
+  const unread = notRead.length > 0 ? `<p data-part="not-read" class="muted">Not read this time: ${esc(notRead.join(', '))}. Their figures are those read before.</p>` : '';
+  return reading + unread;
 }
