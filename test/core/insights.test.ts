@@ -1,6 +1,6 @@
 import { beforeEach, describe, test } from 'node:test';
 import { midnightBefore, rangeDays } from '../../src/core/days.js';
-import { LINE_FIGURES, takeLines } from '../../src/core/insights.js';
+import { LINE_FIGURES, newInsights, noteCall, noteCompaction, takeLines } from '../../src/core/insights.js';
 import { ompProvider } from '../../src/core/providers/omp.js';
 import { setEnv } from '../helpers/env.ts';
 import { ompMessage } from './helpers/entries.ts';
@@ -124,5 +124,17 @@ describe('insights: day buckets of model calls', () => {
     const now = Date.parse('2026-11-28T14:00:00.000Z');
 
     expect(midnightBefore(now, 10)).toBe(Date.parse('2026-11-17T23:00:00.000Z'));
+  });
+});
+
+describe('insights: compactions', () => {
+  test('a compaction with no readable time makes no line, but is the cause of the next cold start', () => {
+    const ins = newInsights();
+    noteCall(ins, { end: Date.parse('2026-11-28T10:00:00Z'), model: 'p/m', tokens: 1, uncached: 0, read: 1, write: 0, output: 0, cost: null });
+    noteCompaction(ins, { t: Number.NaN, kind: null, before: 10 });
+    noteCall(ins, { end: Date.parse('2026-11-28T10:01:00Z'), model: 'p/m', tokens: 1, uncached: 0, read: 0, write: 1, output: 0, cost: null, cold: true });
+
+    const [line] = takeLines(ins);
+    expect([takeLines(ins).length, line.day, line.figures.coldCompaction, line.figures.compactionsManual]).toEqual([0, '2026-11-28', 1, 0]);
   });
 });

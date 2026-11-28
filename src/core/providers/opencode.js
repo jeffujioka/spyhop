@@ -125,10 +125,11 @@ export function opencodeInsights(rows, ins) {
         // a cold start: a call after the first of its session that read nothing from the cache; opencode
         // logs no cache lifetime nor the cost of a cache write
         const thread = String(row.ownId);
-        const cold = ins.last[thread] !== undefined && row.cacheRead === 0;
+        const summary = row.summary === 1;
+        const cold = !summary && ins.last[thread] !== undefined && row.cacheRead === 0;
         const writeCost = row.providerId === COPILOT ? copilotWriteCost(row.modelId, write, uncached + read + write) : null;
         const thinking = typeof row.variant === 'string' && row.variant ? row.variant : null;
-        noteCall(ins, { end: row.created, model: modelKey(row.providerId, row.modelId), tokens, uncached, read, write, output, cost: costOf(row), copilot: row.providerId === COPILOT, thread, cold, thinking, lifetimeMs: null, writeCost });
+        noteCall(ins, { end: row.created, model: modelKey(row.providerId, row.modelId), tokens, uncached, read, write, output, cost: costOf(row), copilot: row.providerId === COPILOT, thread, cold, thinking, lifetimeMs: null, writeCost, summary });
         if (own) noteThinking(ins, row.created, [row.toolStart, row.completed, row.created].find(isNumber));
       }
       // a compaction is a summary that did not end with an error; `manual` is the user's, any other

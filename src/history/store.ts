@@ -25,7 +25,7 @@
 // No text of a prompt, a reply, a task or a tool call is kept: names, counts, times and money only.
 import { mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { LINE_FIGURES } from '../core/insights.js';
+import { LINE_FIGURES, MONEY_FIGURES } from '../core/insights.js';
 import { decodeState, encodeState } from '../core/refresh.js';
 import { traceOf } from '../core/trace.js';
 import { LOCAL } from '../fleet.ts';
@@ -150,7 +150,7 @@ export async function openStore(home: string): Promise<Store> {
     `);
     const has = new Set(db.prepare('SELECT name FROM pragma_table_info(?)').all('lines').map((column) => column.name));
     for (const name of LINE_FIGURES) {
-      if (!has.has(name)) db.exec(`ALTER TABLE lines ADD COLUMN "${name}" ${name === 'cost' || /^coldCost(?!Na)/.test(name) ? 'REAL' : 'INTEGER'} NOT NULL DEFAULT 0`);
+      if (!has.has(name)) db.exec(`ALTER TABLE lines ADD COLUMN "${name}" ${MONEY_FIGURES.includes(name) ? 'REAL' : 'INTEGER'} NOT NULL DEFAULT 0`);
     }
     db.exec(`
       DROP VIEW IF EXISTS daily_lines;

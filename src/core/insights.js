@@ -22,6 +22,8 @@ import { addSpan, newLane, pruneGaps } from './trace.js';
 export const MISS_CAUSES = ['expired', 'model', 'thinking', 'compaction', 'other'];
 export const AWAY_BANDS = ['under5', 'to60', 'over60'];
 export const cap = (word) => word[0].toUpperCase() + word.slice(1);
+// The figures that are money, USD, which a store keeps as reals.
+export const MONEY_FIGURES = ['cost', ...MISS_CAUSES.map((cause) => `coldCost${cap(cause)}`)];
 export const LINE_FIGURES = [
   'calls', 'tokens', 'uncached', 'read', 'write', 'output', 'cost', 'costNa', 'sideCost', 'sideTokens', 'copilotCost',
   ...MISS_CAUSES.flatMap((cause) => ['cold', 'coldTokens', 'coldCost', 'coldUnpriced', 'coldCostNa'].map((figure) => `${figure}${cap(cause)}`)),
@@ -97,7 +99,10 @@ function lineOf(ins, t, model) {
 }
 
 // The miss cause of the cold start `call` after `before` (the newest call of its thread, null when
-// none): the first that holds. A harness that logs no cache lifetime has no call that expired.
+// none): the first that holds. A harness that logs no cache lifetime has no call that expired; a
+// call that logs none after one that did keeps that one's (a cache read renews the cache). The time
+// away runs from the end of the call before to the start of this one, else (a call whose start the
+// harness logs not) to its end, so a slow call without a start may read as expired.
 function missCause(ins, call, before, thread) {
   if (before && before.lifetimeMs !== null && (call.start ?? call.end) - before.end > before.lifetimeMs) return 'expired';
   if (before && before.model !== call.model) return 'model';
@@ -152,14 +157,16 @@ export function noteCall(ins, call, sign = 1) {
     if (call.side) figures.sideCost += sign * call.cost;
     if (call.copilot) figures.copilotCost += sign * call.cost;
   }
-  if (call.side) return;
+  // a side call and a compaction's summary call (`summary`, written by the compaction agent with its
+  // own model) are no cold start and not the call before the next one
+  if (call.side || call.summary) return;
   const thread = call.thread ?? '';
   if (sign > 0) {
     const before = ins.last[thread] ?? null;
     const effects = cacheEffects(ins, call, before, thread);
     for (const [name, amount] of effects) figures[name] += amount;
     const restore = { last: before && { ...before, restore: null }, compacted: ins.compacted[thread] === true, returned: ins.returned, unplaced: ins.unplaced[thread] };
-    ins.last[thread] = { end: call.end, model: call.model, thinking: call.thinking ?? null, lifetimeMs: call.lifetimeMs ?? null, effects, restore };
+    ins.last[thread] = { end: call.end, model: call.model, thinking: call.thinking ?? null, lifetimeMs: call.lifetimeMs ?? before?.lifetimeMs ?? null, effects, restore };
     delete ins.compacted[thread];
     if (ins.returned?.thread === thread) ins.returned = null;
     delete ins.unplaced[thread];
@@ -187,10 +194,12 @@ export function noteCall(ins, call, sign = 1) {
 // next call.
 export function noteCompaction(ins, { t, kind, before, autoAt = null, thread = '' }) {
   const prior = ins.last[thread];
+  ins.compacted[thread] = true;
+  // a compaction with no readable time is none to count
+  if (!Number.isFinite(t)) return;
   const reached = Number.isFinite(before) && Number.isFinite(autoAt) && before >= autoAt;
   const own = kind ?? (reached ? 'full' : prior && t - prior.end >= FIVE_MINUTES ? 'idle' : 'manual');
   const names = [`compactions${cap(own)}`, ...(kind === null ? ['compactionsInferred'] : [])];
-  ins.compacted[thread] = true;
   if (!prior) {
     (ins.unplaced[thread] ??= []).push(...names);
     return;

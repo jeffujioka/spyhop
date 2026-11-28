@@ -305,11 +305,12 @@ test('the Cache tab end to end', async () => {
     const [chart] = parts(html, 'data-chart', 'range-hitRate');
     assert.ok(chart !== undefined && parts(chart, 'data-key').some((point) => attr(point, 'data-key') === '2026-11-27' && attr(point, 'data-v') !== 'n/a'), html);
     // the five causes, with the cold starts of omp, Claude Code and opencode
-    assert.equal(figure(html, 'cold-expired'), '1 · 1,000 · $0.05');
+    // the omp call after 3 hours is back after the cache expired: the call before it logged none, so the 5 minutes of the one before count
+    assert.equal(figure(html, 'cold-expired'), '2 · 2,000 · $0.10');
     assert.equal(figure(html, 'cold-model'), '2 · 2,000 · $0.05');
     assert.equal(figure(html, 'cold-thinking'), '2 · 2,000 · $0.05');
     assert.equal(figure(html, 'cold-compaction'), '4 · 53,000 · $0.05');
-    assert.equal(figure(html, 'cold-other'), '2 · 2,000 · $0.05');
+    assert.equal(figure(html, 'cold-other'), '1 · 1,000');
     assert.match(text(parts(html, 'data-part', 'left-out')[0]), /Claude Code/);
     // the three time-away bands: the return after 1 minute, after 20 minutes and after 3 hours
     assert.equal(figure(html, 'away-under5'), '1 return · 1 cold');
@@ -322,7 +323,7 @@ test('the Cache tab end to end', async () => {
     const hints = parts(html, 'data-part', 'hint');
     assert.deepEqual(hints.map((hint) => attr(hint, 'data-cause')).sort(), ['compaction', 'expired', 'model', 'thinking']);
     const expired = hints.find((hint) => attr(hint, 'data-cause') === 'expired')!;
-    assert.equal(text(expired), '1 cold start after the cache expired: avoiding them would have saved up to $0.05 estimate');
+    assert.equal(text(expired), '2 cold starts after the cache expired: avoiding them would have saved up to $0.10 estimate');
     assert.equal(parts(expired, 'data-estimate').length, 1);
   };
   drawn();

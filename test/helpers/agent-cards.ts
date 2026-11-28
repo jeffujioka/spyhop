@@ -91,8 +91,10 @@ export type OpencodeCalls = { provider: string; model: string; contexts: number[
 export type OpencodeCall = { uncached: number; read: number; write: number; output: number; took?: number; prompted?: number; tools?: OpencodeTool[]; finish?: string | null; at?: number; variant?: string; model?: string };
 
 // A compaction of an opencode session: the time it was written and its `reason` (`manual` or
-// `auto`, as this Mac's database holds them).
-export type OpencodeCompaction = { at: number; reason: string };
+// `auto`, as this Mac's database holds them); `summary`: the call that wrote its summary, with its
+// own `model` of the session's provider and the tokens it sent, wrote and output, none when not
+// given (this Mac's databases hold both).
+export type OpencodeCompaction = { at: number; reason: string; summary?: { model: string; uncached: number; write: number; output: number } };
 
 // A `tool` item of an opencode call, of the tool `name`, with the times of its `time` as this
 // Mac's database holds them (`created`, `ran`, `completed`), each left out when not given; its
@@ -149,8 +151,9 @@ export function opencodeSession(
       `INSERT OR REPLACE INTO session_message VALUES ('${id}/w${i}', ${sqlText(id)}, 'assistant', ${2 * i + 2}, ${at(i)}, ${at(i) + took}, ${sqlText(JSON.stringify(data))});`,
     ];
   });
-  const summaries = compactions.map(({ at: written, reason }, i) => {
-    const data = { status: 'completed', reason, summary: '[text]', time: { created: written, completed: written } };
+  const summaries = compactions.map(({ at: written, reason, summary }, i) => {
+    const call = summary && { model: { id: summary.model, providerID: provider }, cost: callCost, tokens: { input: summary.uncached, output: summary.output, reasoning: 0, cache: { read: 0, write: summary.write } } };
+    const data = { status: 'completed', reason, summary: '[text]', ...call, time: { created: written, completed: written } };
     return `INSERT OR REPLACE INTO session_message VALUES ('${id}/c${i}', ${sqlText(id)}, 'compaction', ${1000 + i}, ${written}, ${written}, ${sqlText(JSON.stringify(data))});`;
   });
   const session = `INSERT OR REPLACE INTO session_v2 VALUES (${sqlText(id)}, 'prj', ${parent === undefined ? 'NULL' : sqlText(parent)}, 's', ${sqlText(folder)}, ${sqlText(title)}, '2.0.0', ${cost}, NULL, NULL, ${at(0)}, ${at(calls.length - 1) + 1000}, NULL);`;

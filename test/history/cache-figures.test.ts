@@ -344,3 +344,71 @@ describe('another Orca host', () => {
     expect(calls.ssh().filter((args) => args[0] !== 'starfish-bs' || !readOnlyLine(args.at(-1)!))).toEqual([]);
   });
 });
+
+describe('the call before a cold start', () => {
+  const summary = { model: 'claude-haiku-5.5', uncached: 10, write: 500, output: 5 };
+  const causes = ['coldModel', 'coldCompaction', 'coldOther', 'compactionsManual'];
+
+  test("a compaction's summary call is no cold start and not the call before the next one", async () => {
+    const sums = await figuresOf(
+      (home) =>
+        opencodeSession(home, join(home, 'web'), {
+          provider: 'anthropic',
+          model: 'claude-opus-5.5',
+          cost: 0.2,
+          calls: [
+            { ...WRITE, at: at('10:00') },
+            { ...WRITE, at: at('10:31') },
+          ],
+          compactions: [{ at: at('10:30'), reason: 'manual', summary }],
+        }),
+      'web',
+    );
+
+    expect(nonZero(sums, ...causes, 'calls')).toEqual({ coldCompaction: 1, compactionsManual: 1, calls: 3 });
+  });
+
+  test('a span that starts between the summary and the next call gives what one span does', async () => {
+    const sums = await figuresOf(
+      (home) =>
+        opencodeSession(home, join(home, 'web'), {
+          provider: 'anthropic',
+          model: 'claude-opus-5.5',
+          cost: 0.2,
+          calls: [
+            { ...WRITE, at: ago(40) },
+            { ...WRITE, at: ago(20) },
+          ],
+          compactions: [{ at: ago(35), reason: 'manual', summary }],
+        }),
+      'web',
+    );
+
+    expect(nonZero(sums, ...causes, 'calls')).toEqual({ coldCompaction: 1, compactionsManual: 1, calls: 3 });
+  });
+
+  test('201 sessions are seeded in chunks, a sub-agent as its own thread', async () => {
+    const sums = await figuresOf((home) => {
+      const folder = join(home, 'web');
+      const options = { provider: 'anthropic', model: 'claude-opus-5.5', cost: 0.2, calls: [{ ...WRITE, at: ago(40) }, { ...WRITE, at: ago(20) }] };
+      for (let i = 0; i < 201; i++) opencodeSession(home, folder, { ...options, id: `ses_${i}`, update: i > 0 });
+      opencodeSession(home, folder, { ...options, id: 'ses_sub', parent: 'ses_0', update: true });
+    }, 'web');
+
+    expect(nonZero(sums, 'coldOther')).toEqual({ coldOther: 202 });
+  });
+
+  test('a cache read on a call that wrote nothing keeps the lifetime of the cache', async () => {
+    const sums = await figuresOf((home) =>
+      claudeSession(home, join(home, 'cc'), {
+        calls: [
+          { at: at('10:00'), uncached: 10, write: 1000, cache: '5m', output: 5 },
+          { at: at('10:01'), uncached: 10, read: 1000, output: 5 },
+          { at: at('10:21'), uncached: 10, write: 1000, output: 5 },
+        ],
+      }),
+    );
+
+    expect(nonZero(sums, 'coldExpired', 'coldOther')).toEqual({ coldExpired: 1 });
+  });
+});

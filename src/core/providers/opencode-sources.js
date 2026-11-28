@@ -230,13 +230,14 @@ export function historyRowsQuery(sessions, fromMs, afterId, limit, roots = null,
   const after = (id) => (afterId === null ? `m.time_created >= ${from}` : `(m.time_created > ${from} OR (m.time_created = ${from} AND ${id} > ${literal(afterId)}))`);
   // the row of `values` (column -> SQL), NULL in the columns it does not give
   const row = (values) => HISTORY_COLUMNS.map((name) => `${values[name] ?? 'NULL'} AS "${name}"`).join(', ');
-  // a seed's rows: those of its sessions from the last call that sent or wrote a token before it
+  // a seed's rows: those of its sessions from the last call that sent or wrote a token before it, a
+  // compaction's summary call not counted (it is no call before the next one, see noteCall)
   const spent = (of) => ['input', 'output', 'cache.read', 'cache.write'].map((name) => `coalesce(json_extract(${of}, '$.tokens.${name}'), 0)`).join(' + ');
   const seeded = (table, isCall) =>
     `m.time_created < ${Number(seed.before)} AND m.session_id IN (${listOf(seed.ids)}) AND m.time_created >= coalesce((SELECT max(k.time_created) FROM ${table} AS k ` +
     `WHERE k.session_id = m.session_id AND k.time_created < ${Number(seed.before)} AND ${isCall} AND ${spent('k.data')} > 0), 0)`;
-  const currentWhere = (id) => (seed ? seeded('session_message', "k.type IN ('assistant', 'compaction')") : after(id));
-  const legacyWhere = (id) => (seed ? seeded('message', "json_extract(k.data, '$.role') = 'assistant'") : after(id));
+  const currentWhere = (id) => (seed ? seeded('session_message', "k.type = 'assistant'") : after(id));
+  const legacyWhere = (id) => (seed ? seeded('message', "json_extract(k.data, '$.role') = 'assistant' AND coalesce(json_extract(k.data, '$.summary'), 0) != 1") : after(id));
   const json = (path, of = 'm.data') => `json_extract(${of}, '$.${path}')`;
   const message = (role) => ({
     id: 'm.id',
