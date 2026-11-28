@@ -36,8 +36,9 @@ export const STORE_FILE = '.local/state/spyhop/insights.db';
 // The version of the file rows' states: a reader takes a row of another version as unread.
 // Raise it with KEPT_VERSION (src/core/refresh.js) when a fold's state changes shape, and alone
 // when only the insights a fold keeps for the store change (3: the Trace lanes; 4: another Orca
-// host's rows keyed by its machine; 5: the session summaries and sub-agent rows).
-export const HISTORY_VERSION = 5;
+// host's rows keyed by its machine; 5: the session summaries and sub-agent rows; 6: the miss
+// causes, returns and compactions of the Cache tab).
+export const HISTORY_VERSION = 6;
 
 export type FileRow = { id: number; host: string; harness: string; path: string; pos: number; size: number; mtimeMs: number; version: number; state: unknown };
 
@@ -149,7 +150,7 @@ export async function openStore(home: string): Promise<Store> {
     `);
     const has = new Set(db.prepare('SELECT name FROM pragma_table_info(?)').all('lines').map((column) => column.name));
     for (const name of LINE_FIGURES) {
-      if (!has.has(name)) db.exec(`ALTER TABLE lines ADD COLUMN "${name}" ${name === 'cost' ? 'REAL' : 'INTEGER'} NOT NULL DEFAULT 0`);
+      if (!has.has(name)) db.exec(`ALTER TABLE lines ADD COLUMN "${name}" ${name === 'cost' || name.startsWith('coldCost') ? 'REAL' : 'INTEGER'} NOT NULL DEFAULT 0`);
     }
     db.exec(`
       DROP VIEW IF EXISTS daily_lines;

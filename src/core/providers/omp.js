@@ -34,7 +34,7 @@
 import { add, parseEntries, tally } from './jsonl.js';
 import { burnRate, cacheRate, isNumber, tokenCount, wholeSession } from './shared.js';
 import { addCall, addCost, addMinute, detailOf, entryOf, newSeries, pushRecent, toolAnswered, toolCalled } from '../series.js';
-import { modelKey, newInsights, noteCall, noteEntry, noteHorizon, notePrompt, noteStatus, noteToolEnd, noteToolStart, noteTurnEnd } from '../insights.js';
+import { modelKey, newInsights, noteCall, noteCompaction, noteEntry, noteHorizon, notePrompt, noteStatus, noteToolEnd, noteToolStart, noteTurnEnd } from '../insights.js';
 import { SUBAGENT_TOOLS } from '../trace.js';
 import { callCost, COPILOT, copilotWriteCost } from '../copilot-prices.js';
 
@@ -135,8 +135,10 @@ function addSpent(s, logged, spent) {
 
 // Adds `call`, a model call or a side call (`side`) of `logged` that spent tokens and ended at
 // `time`, to the minutes, and, when it logs its model, to the models and the daily lines; a model
-// call that `ran` from `start` to `end` (epoch ms) runs then in the Trace lanes.
-function addSpend(s, logged, time, call, side, ran = { start: undefined, end: time }) {
+// call that `ran` from `start` to `end` (epoch ms) runs then in the Trace lanes; `cache`: whether
+// it was a cold start, the cost of its cache write (null: none logged) and the lifetime of the
+// cache it wrote (null: none logged), for the Cache tab's figures.
+function addSpend(s, logged, time, call, side, ran = { start: undefined, end: time }, cache = {}) {
   const tokens = tokenCount(logged.usage.totalTokens);
   addMinute(s.minutes, time, { ...call, tokens });
   const { provider, model } = logged;
@@ -147,12 +149,14 @@ function addSpend(s, logged, time, call, side, ran = { start: undefined, end: ti
   byModel.cost = addCost(byModel.cost, call.cost);
   byModel.tokens += tokens;
   byModel[side ? 'side' : 'main'] = true;
-  if (s.insights && isNumber(ran.end)) noteCall(s.insights, { ...call, start: ran.start, end: ran.end, model: key, tokens, side, copilot: provider === COPILOT });
+  if (s.insights && isNumber(ran.end)) noteCall(s.insights, { ...call, ...cache, thinking: s.thinkingLevel ?? null, start: ran.start, end: ran.end, model: key, tokens, side, copilot: provider === COPILOT });
 }
 
 // Adds `entries` (in file order, after those already in `state`) to `state`, which it changes
 // and returns; without a `state` it starts a new one, with daily lines when `opts.insights`.
-// Entries that carry no figure are skipped.
+// Entries that carry no figure are skipped. `opts.autoAt(model)`, asked of each fold, not kept, gives
+// the tokens at which omp compacts on its own with `model` (`<provider>/<id>`), undefined or null
+// when unknown: a compaction's kind is inferred from it (noteCompaction).
 function fold(state, entries, opts) {
   const s = state ?? emptyState(opts);
   for (const e of entries) {
@@ -235,17 +239,18 @@ function fold(state, entries, opts) {
           addCall(s.series, call);
           // a cold start: a call after the first that read nothing from the prompt cache, so it
           // wrote the prompt to the cache again
-          if (s.calls > 0 && usage.cacheRead === 0) {
+          const cold = s.calls > 0 && usage.cacheRead === 0;
+          const written =
+            e.message.provider === COPILOT
+              ? copilotWriteCost(e.message.model, call.write, call.uncached + call.read + call.write)
+              : isNumber(usage.cost?.cacheWrite) ? usage.cost.cacheWrite : null;
+          if (cold) {
             s.cold.count += 1;
             s.cold.tokens += call.write;
-            const written =
-              e.message.provider === COPILOT
-                ? copilotWriteCost(e.message.model, call.write, call.uncached + call.read + call.write)
-                : isNumber(usage.cost?.cacheWrite) ? usage.cost.cacheWrite : null;
             s.cold.cost = addCost(s.cold.cost, written);
           }
           s.calls += 1;
-          addSpend(s, e.message, time, call, false, ran);
+          addSpend(s, e.message, time, call, false, ran, { cold, writeCost: written, lifetimeMs: lifetimeOf(usage) });
         }
         for (const part of Array.isArray(e.message.content) ? e.message.content : []) {
           if (part?.type === 'toolCall') toolCalled(s, part.id, part.name);
@@ -258,11 +263,14 @@ function fold(state, entries, opts) {
       }
     } else if (e.type === 'compaction') {
       s.compactions += 1;
-      s.marks.push({
-        t: Date.parse(e.timestamp),
-        before: isNumber(e.tokensBefore) ? e.tokensBefore : null,
-        after: isNumber(e.tokensAfter) ? e.tokensAfter : null,
-      });
+      const before = isNumber(e.tokensBefore) ? e.tokensBefore : null;
+      s.marks.push({ t: Date.parse(e.timestamp), before, after: isNumber(e.tokensAfter) ? e.tokensAfter : null });
+      if (s.insights) {
+        // omp does not mark an automatic compaction: its kind is inferred, against the tokens at
+        // which it compacts a call's model
+        s.insights.autoAt = opts?.autoAt?.(s.insights.last['']?.model) ?? null;
+        noteCompaction(s.insights, { t: at, kind: null, before });
+      }
     } else if (e.type === 'thinking_level_change' && typeof e.thinkingLevel === 'string') {
       // the latest change stands
       s.thinkingLevel = e.thinkingLevel;
@@ -310,18 +318,24 @@ function cacheTurns({ cacheReads, cacheHits }) {
 // (herdr-session-stats docs/omp-session-format.md, decision D8 (d)).
 const CACHE_LIFETIME_MS = { ephemeral5m: 5 * 60 * 1000, ephemeral1h: 60 * 60 * 1000 };
 
+// The longest cache lifetime the `cttl` of `usage` names, null when it names none.
+function lifetimeOf(usage) {
+  const lifetimes = Object.keys(usage?.cttl ?? {})
+    .map((key) => CACHE_LIFETIME_MS[key])
+    .filter(isNumber);
+  return lifetimes.length ? Math.max(...lifetimes) : null;
+}
+
 // Time left on the prompt cache after the last assistant turn, counted from the turn's
 // completion; 0 once it has expired. Only that turn's own cttl counts.
 function cacheExpiry({ assistants }, now) {
   const last = assistants.at(-1);
-  const lifetimes = Object.keys(last?.usage?.cttl ?? {})
-    .map((key) => CACHE_LIFETIME_MS[key])
-    .filter(isNumber);
+  const lifetime = lifetimeOf(last?.usage);
   const completedAt = isNumber(last?.completedAt)
     ? last.completedAt
     : last?.timestamp + last?.duration;
-  if (!lifetimes.length || !isNumber(completedAt) || !isNumber(now)) return {};
-  return { cacheLeftMs: Math.max(0, completedAt + Math.max(...lifetimes) - now) };
+  if (lifetime === null || !isNumber(completedAt) || !isNumber(now)) return {};
+  return { cacheLeftMs: Math.max(0, completedAt + lifetime - now) };
 }
 
 // Compactions recorded in the session (herdr-session-stats docs/omp-session-format.md,
@@ -372,7 +386,7 @@ function hasModelThreshold(modelThresholds, key) {
 // it cannot be known: config unreadable, autocompaction off, or a per-model entry for this
 // model, whose scaling the plugin does not evaluate. Project-level config files
 // are not read, so a setting made only there is not seen.
-function compactionTrigger(window, key, settings) {
+export function compactionTrigger(window, key, settings) {
   if (!settings || settings.enabled === false) return undefined;
   if (settings.modelThresholdsEnabled !== false && hasModelThreshold(settings.modelThresholds, key)) {
     return undefined;

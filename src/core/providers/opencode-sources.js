@@ -183,6 +183,9 @@ const HISTORY_COLUMNS = [
   'toolStart',
   'finish',
   'summary',
+  'variant',
+  'reason',
+  'error',
   'name',
   'start',
   'end',
@@ -200,7 +203,9 @@ const HISTORY_COLUMNS = [
 //     `modelId, providerId, cost, total, input, output, reasoning, cacheRead, cacheWrite`, the time
 //     it `completed`, `toolStart`, the time the first of its tool calls started (null without
 //     one), why it finished (`finish`, opencode's `tool-calls` for a step that calls tools) and
-//     `summary` 1 on a compaction's summary;
+//     `summary` 1 on a compaction's summary, `variant` the reasoning level of its model, `reason`
+//     what asked for a compaction's summary (`manual`, else `auto`; null when not logged) and
+//     `error` the name or type of the error it ended with, null when none;
 //   - a user message (`role` 'user');
 //   - a tool call (`role` 'tool') of the message `created` and `completed`, of the tool `name`, that
 //     ran from `start` to `end` as opencode logs them (the current tables: its `time.ran`, else its
@@ -233,7 +238,7 @@ export function historyRowsQuery(sessions, fromMs, afterId, limit, roots = null)
     own: '(tree.id = tree.root)',
     completed: json('time.completed'),
   });
-  const call = (model, provider, total, toolStart, summary) => ({
+  const call = (model, provider, total, toolStart, summary, variant, reason, error) => ({
     ...message('assistant'),
     modelId: json(model),
     providerId: json(provider),
@@ -245,11 +250,14 @@ export function historyRowsQuery(sessions, fromMs, afterId, limit, roots = null)
     toolStart,
     finish: json('finish'),
     summary,
+    variant,
+    reason,
+    error,
   });
   const currentTool = `coalesce(${json('time.ran', 'c.value')}, ${json('time.created', 'c.value')})`;
   const currentJoin = 'FROM session_message AS m JOIN tree ON tree.id = m.session_id AND tree.current = 1';
   const current = [
-    `SELECT ${row(call('model.id', 'model.providerID', 'NULL', `(SELECT min(${currentTool}) FROM json_each(m.data, '$.content') AS c WHERE ${json('type', 'c.value')} = 'tool')`, "(m.type = 'compaction')"))} ` +
+    `SELECT ${row(call('model.id', 'model.providerID', 'NULL', `(SELECT min(${currentTool}) FROM json_each(m.data, '$.content') AS c WHERE ${json('type', 'c.value')} = 'tool')`, "(m.type = 'compaction')", json('model.variant'), json('reason'), json('error.type')))} ` +
       `${currentJoin} WHERE m.type IN ('assistant', 'compaction') AND ${after('m.id')}`,
     `SELECT ${row(message('user'))} ${currentJoin} WHERE m.type = 'user' AND ${after('m.id')}`,
     `SELECT ${row({
@@ -262,9 +270,11 @@ export function historyRowsQuery(sessions, fromMs, afterId, limit, roots = null)
       child: json('state.metadata.sessionID', 'c.value'),
     })} ` + `${currentJoin}, json_each(m.data, '$.content') AS c WHERE m.type = 'assistant' AND ${json('type', 'c.value')} = 'tool' AND ${after("m.id || '/' || c.key")}`,
   ];
+  // why a legacy summary was written: the `auto` flag of the compaction part of the user message it answers
+  const legacyReason = `CASE WHEN ${json('summary')} = 1 THEN (SELECT CASE WHEN json_extract(c.data, '$.auto') = 1 THEN 'auto' ELSE 'manual' END FROM part AS c WHERE c.message_id = ${json('parentID')} AND json_extract(c.data, '$.type') = 'compaction' LIMIT 1) END`;
   const legacyJoin = 'FROM message AS m JOIN tree ON tree.id = m.session_id AND tree.current = 0';
   const legacy = [
-    `SELECT ${row(call('modelID', 'providerID', json('tokens.total'), `(SELECT min(${json('state.time.start', 'p.data')}) FROM part AS p WHERE p.message_id = m.id AND ${json('type', 'p.data')} = 'tool')`, `(${json('summary')} = 1)`))} ` +
+    `SELECT ${row(call('modelID', 'providerID', json('tokens.total'), `(SELECT min(${json('state.time.start', 'p.data')}) FROM part AS p WHERE p.message_id = m.id AND ${json('type', 'p.data')} = 'tool')`, `(${json('summary')} = 1)`, json('variant'), legacyReason, json('error.name')))} ` +
       `${legacyJoin} WHERE ${json('role')} = 'assistant' AND ${after('m.id')}`,
     `SELECT ${row(message('user'))} ${legacyJoin} WHERE ${json('role')} = 'user' AND ${after('m.id')}`,
     `SELECT ${row({

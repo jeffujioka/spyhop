@@ -10,7 +10,28 @@ import { addSpan, newLane, pruneGaps } from './trace.js';
 // The figures of a daily line. `cost` sums the costs, side calls' included; `costNa` counts the
 // calls that have none. `sideCost` and `sideTokens` are the side calls' share of the cost and
 // tokens, which count as no model call; `copilotCost` is the Copilot calls' share of the cost.
-export const LINE_FIGURES = ['calls', 'tokens', 'uncached', 'read', 'write', 'output', 'cost', 'costNa', 'sideCost', 'sideTokens', 'copilotCost'];
+//
+// The Cache tab's figures: for each miss cause (MISS_CAUSES), `cold<Cause>` the cold starts that
+// have it, `coldTokens<Cause>` the tokens they wrote to the cache again, `coldCost<Cause>` the
+// cost of those writes and `coldUnpriced<Cause>` the cold starts whose harness logs no such cost;
+// for each time away (AWAY_BANDS), `returns<Band>` the returns after a turn end and
+// `returnsCold<Band>` those whose next model call was a cold start; and the compactions by kind,
+// `compactionsIdle`, `compactionsFull` and `compactionsManual`, of which `compactionsInferred`
+// were told apart by inference (see noteCompaction).
+export const MISS_CAUSES = ['expired', 'model', 'thinking', 'compaction', 'other'];
+export const AWAY_BANDS = ['under5', 'to60', 'over60'];
+const cap = (word) => word[0].toUpperCase() + word.slice(1);
+export const LINE_FIGURES = [
+  'calls', 'tokens', 'uncached', 'read', 'write', 'output', 'cost', 'costNa', 'sideCost', 'sideTokens', 'copilotCost',
+  ...MISS_CAUSES.flatMap((cause) => ['cold', 'coldTokens', 'coldCost', 'coldUnpriced'].map((figure) => `${figure}${cap(cause)}`)),
+  ...AWAY_BANDS.flatMap((band) => [`returns${cap(band)}`, `returnsCold${cap(band)}`]),
+  'compactionsIdle', 'compactionsFull', 'compactionsManual', 'compactionsInferred',
+];
+
+// A time away of 5 minutes or more is past the first band, one over an hour in the last; a call
+// 5 minutes or more after the one before makes an omp compaction idle.
+const FIVE_MINUTES = 5 * 60 * 1000;
+const HOUR = 60 * 60 * 1000;
 
 // The open buckets: `day\nmodel` -> `{ day, model, figures }`. The Trace lanes: `thinking`, the
 // session's model calls; `tools`, its tool calls; `busy`, both but the tool calls that start or
@@ -21,7 +42,14 @@ export const LINE_FIGURES = ['calls', 'tokens', 'uncached', 'read', 'write', 'ou
 // (epoch ms) and its tool's name. `title`: the newest title the harness logged, null before one;
 // `cost`, `costNa` and `tokens`: the sums of all the calls noted, as the daily lines sum them;
 // `models`: each model a call noted, -> true; `statuses`: the status of each sub-agent, by its key
-// (see noteStatus).
+// (see noteStatus). The Cache tab's: `last`, by thread (the session a call is of; '' where a fold
+// reads one), the newest model call noted (`{ end, model, thinking, lifetimeMs, effects,
+// restore }`: when it ended, its model, thinking level and cache lifetime, the figures it added
+// to its line and what to put back to take it back out); `compacted`, the threads a compaction
+// was noted in since their last call; `returned`, the return a prompt made, which the next call
+// of its thread counts (`{ gap, thread }`); `unplaced`, the compaction figures noted before any
+// call, which the next call's line takes; `autoAt`, the tokens at which the harness compacts on
+// its own, null when unknown (set by the caller that knows it).
 export const newInsights = () => ({
   open: new Map(),
   lanes: { thinking: newLane(), tools: newLane(), busy: newLane(), developer: newLane() },
@@ -35,6 +63,11 @@ export const newInsights = () => ({
   tokens: 0,
   models: {},
   statuses: new Map(),
+  last: {},
+  compacted: {},
+  returned: null,
+  unplaced: [],
+  autoAt: null,
 });
 
 // Widens the time `ins` noted to `start` and `end`.
@@ -64,6 +97,35 @@ function lineOf(ins, t, model) {
   return line;
 }
 
+// The miss cause of the cold start `call` after `before` (the newest call of its thread, null when
+// none): the first that holds. A harness that logs no cache lifetime has no call that expired.
+function missCause(ins, call, before, thread) {
+  if (before && before.lifetimeMs !== null && (call.start ?? call.end) - before.end > before.lifetimeMs) return 'expired';
+  if (before && before.model !== call.model) return 'model';
+  if (before && before.thinking !== null && call.thinking !== null && before.thinking !== call.thinking) return 'thinking';
+  if (ins.compacted[thread]) return 'compaction';
+  return 'other';
+}
+
+// The figures the call `call` of `thread` adds besides its tokens and cost: `[name, amount]`.
+function cacheEffects(ins, call, before, thread) {
+  const effects = [];
+  if (call.cold === true) {
+    const cause = cap(missCause(ins, call, before, thread));
+    effects.push([`cold${cause}`, 1], [`coldTokens${cause}`, call.write]);
+    if (typeof call.writeCost === 'number') effects.push([`coldCost${cause}`, call.writeCost]);
+    else effects.push([`coldUnpriced${cause}`, 1]);
+  }
+  if (ins.returned && ins.returned.thread === thread) {
+    const { gap } = ins.returned;
+    const band = cap(gap < FIVE_MINUTES ? 'under5' : gap <= HOUR ? 'to60' : 'over60');
+    effects.push([`returns${band}`, 1]);
+    if (call.cold === true) effects.push([`returnsCold${band}`, 1]);
+  }
+  for (const name of ins.unplaced) effects.push([name, 1]);
+  return effects;
+}
+
 // Adds the model call `call` (`end` epoch ms, `model`, its token counts and `cost`, null when it
 // has none; `side`: a side call, `copilot`: a call through Copilot) to the bucket of its day and
 // model. A side call adds its tokens and cost, but no model call nor its prompt's tokens. `sign`
@@ -91,7 +153,49 @@ export function noteCall(ins, call, sign = 1) {
     if (call.side) figures.sideCost += sign * call.cost;
     if (call.copilot) figures.copilotCost += sign * call.cost;
   }
-  if (sign > 0 && !call.side) noteThinking(ins, call.start, call.end);
+  if (call.side) return;
+  const thread = call.thread ?? '';
+  if (sign > 0) {
+    const before = ins.last[thread] ?? null;
+    const effects = cacheEffects(ins, call, before, thread);
+    for (const [name, amount] of effects) figures[name] += amount;
+    const restore = { last: before && { ...before, restore: null }, compacted: ins.compacted[thread] === true, returned: ins.returned, unplaced: ins.unplaced };
+    ins.last[thread] = { end: call.end, model: call.model, thinking: call.thinking ?? null, lifetimeMs: call.lifetimeMs ?? null, effects, restore };
+    delete ins.compacted[thread];
+    if (ins.returned?.thread === thread) ins.returned = null;
+    ins.unplaced = [];
+    noteThinking(ins, call.start, call.end);
+  } else {
+    // only the newest call of its thread can be taken back
+    const newest = ins.last[thread];
+    if (!newest) return;
+    for (const [name, amount] of newest.effects) figures[name] -= amount;
+    ({ returned: ins.returned, unplaced: ins.unplaced } = newest.restore);
+    if (newest.restore.compacted) ins.compacted[thread] = true;
+    if (newest.restore.last) ins.last[thread] = newest.restore.last;
+    else delete ins.last[thread];
+  }
+}
+
+// A compaction at `t` (epoch ms) of the session `thread` ('' where a fold reads one), from `before`
+// tokens of context (null when unknown): of the kind `kind`, `idle`, `full` or `manual`, as the
+// harness logs it, or, with none (null), as inferred: `full` when `before` reaches `ins.autoAt`,
+// else `idle` when the call before ended 5 minutes or more earlier, else `manual`; an inferred
+// one is also counted in `compactionsInferred`. The next call of the thread has it as a miss
+// cause. It counts in the line of the day of `t` and the model of the call before, else of the
+// next call.
+export function noteCompaction(ins, { t, kind, before, thread = '' }) {
+  const prior = ins.last[thread];
+  const reached = Number.isFinite(before) && Number.isFinite(ins.autoAt) && before >= ins.autoAt;
+  const own = kind ?? (reached ? 'full' : prior && t - prior.end >= FIVE_MINUTES ? 'idle' : 'manual');
+  const names = [`compactions${cap(own)}`, ...(kind === null ? ['compactionsInferred'] : [])];
+  ins.compacted[thread] = true;
+  if (!prior) {
+    ins.unplaced.push(...names);
+    return;
+  }
+  const { figures } = lineOf(ins, t, prior.model);
+  for (const name of names) figures[name] += 1;
 }
 
 // A model call of the session from `start` to `end` (epoch ms): it runs in the thinking and the
@@ -143,9 +247,14 @@ export function noteTurnEnd(ins, t) {
   seen(ins, t, t);
 }
 
-// The developer's prompt at `t` (epoch ms): the wait since the turn ended, if it did, is over.
-export function notePrompt(ins, t) {
-  if (ins.turnEnd !== null) addSpan(ins.lanes.developer, ins.turnEnd, t);
+// The developer's prompt at `t` (epoch ms), of the session `thread` ('' where a fold reads one):
+// the wait since the turn ended, if it did, is over, and is a return, which the next model call of
+// the thread counts by the time away.
+export function notePrompt(ins, t, thread = '') {
+  if (ins.turnEnd !== null) {
+    addSpan(ins.lanes.developer, ins.turnEnd, t);
+    ins.returned = { gap: t - ins.turnEnd, thread };
+  }
   ins.turnEnd = null;
   seen(ins, t, t);
 }

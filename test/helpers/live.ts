@@ -313,6 +313,8 @@ export function ompCalls(home: string, path: string, { title, contexts, cost = 0
 // developer, `user`, when not given) and reading `prompt` (`[text]` when not given); `started`:
 // the time the call started (omp's `message.timestamp`), none when not given; `stop`: its stop
 // reason, none when not given;
+// `thinking`: the thinking level omp logs (`thinking_level_change`) just before it, none when not
+// given;
 // `tools`: the tool calls it makes; `cttl`: it ended at `at` and wrote to a prompt cache that
 // lasts 5 minutes or an hour (omp's `usage.cttl` of `ephemeral5m` or `ephemeral1h`), so the cache
 // goes cold that long after it.
@@ -336,6 +338,7 @@ export type OmpCall = {
   stop?: 'stop' | 'aborted' | 'toolUse';
   tools?: ToolCall[];
   cttl?: '5m' | '1h';
+  thinking?: string;
 };
 // A tool call of the tool `name`, whose result says it failed when `failed`; `started`: the time
 // it started running (omp's `tool_execution_start` entry, none when not given; Claude Code's
@@ -344,8 +347,9 @@ export type OmpCall = {
 // given (omp only); `status`: the `toolUseResult.status` of its result, none when not given
 // (Claude Code only).
 export type ToolCall = { name: string; failed?: boolean; started?: number; answered?: number; args?: string; output?: string; status?: string };
-// A compaction at `at` (epoch ms) from `before` tokens of context to `after`.
-export type Compaction = { at: number; before: number; after: number };
+// A compaction at `at` (epoch ms) from `before` tokens of context to `after`; `trigger`: the
+// `compactMetadata.trigger` of a Claude Code one, `auto` when not given.
+export type Compaction = { at: number; before: number; after: number; trigger?: string };
 
 // The `count` calls of the tool `name`, of which the first `failed` failed.
 export const toolCalls = (name: string, count: number, failed = 0): ToolCall[] => Array.from({ length: count }, (_, i) => ({ name, failed: i < failed }));
@@ -401,11 +405,12 @@ export function ompEntries(calls: OmpCall[], compactions: Compaction[], model: s
       ],
     };
   };
+  const levels = calls.flatMap(({ at, thinking }) => (thinking === undefined ? [] : [{ at, lines: [{ type: 'thinking_level_change', timestamp: timestamp(at), thinkingLevel: thinking }] }]));
   const prompts = calls.flatMap(({ prompted, promptedBy = 'user', prompt = '[text]' }) =>
     prompted === undefined ? [] : [{ at: prompted, lines: [{ type: 'message', timestamp: timestamp(prompted), message: { role: 'user', content: prompt, attribution: promptedBy } }] }],
   );
   const compaction = ({ at, before, after }: Compaction) => ({ at, lines: [{ type: 'compaction', timestamp: timestamp(at), tokensBefore: before, tokensAfter: after }] });
-  return [...calls.map(message), ...prompts, ...compactions.map(compaction)].sort((a, b) => a.at - b.at).flatMap(({ lines }) => lines);
+  return [...levels, ...calls.map(message), ...prompts, ...compactions.map(compaction)].sort((a, b) => a.at - b.at).flatMap(({ lines }) => lines);
 }
 
 // The background jobs whose results omp delivered at `at` (epoch ms): each job's id (the name of
@@ -523,7 +528,9 @@ export function claudeCalls(home: string, path: string, contexts: number[]) {
 // `prompted`: the time of the developer's prompt it answers, none when not given; `blocks`: the
 // times of its content blocks before the last, at `at`, none when not given; `stop`: the
 // `stop_reason` its blocks log, none when not given.
-export type ClaudeCall = { at: number; read?: number; write?: number; uncached?: number; output?: number; tools?: ToolCall[]; prompted?: number; blocks?: number[]; stop?: string };
+// `effort`: the reasoning level its entry logs, and `cache`: the lifetime of the cache it wrote to
+// (`cache_creation`'s split), none when not given.
+export type ClaudeCall = { effort?: string; cache?: '5m' | '1h'; at: number; read?: number; write?: number; uncached?: number; output?: number; tools?: ToolCall[]; prompted?: number; blocks?: number[]; stop?: string };
 
 // A `cost-state` Claude Code logs at `at`: the cost, USD, it gives each model in its `modelUsage`,
 // and its total their sum; null: it holds no `modelUsage`.
@@ -534,7 +541,7 @@ export type CostState = { at: number; models: Record<string, number> | null };
 // entry. A `cost-state` has no timestamp, as Claude Code writes none.
 export function claudeEntries(path: string, calls: ClaudeCall[], compactions: Compaction[], model: string, costStates: CostState[] = []) {
   const entry = (at: number) => ({ sessionId: 'c1', isSidechain: false, cwd: path, timestamp: new Date(at).toISOString() });
-  const response = ({ at, read = 0, write = 0, uncached = 0, output = 0, tools = [], blocks = [], stop }: ClaudeCall, i: number) => {
+  const response = ({ at, read = 0, write = 0, uncached = 0, output = 0, tools = [], blocks = [], stop, effort, cache }: ClaudeCall, i: number) => {
     const id = (j: number) => `toolu_${i}_${j}`;
     const uses = tools.map(({ name }, j) => ({ type: 'tool_use', id: id(j), name, input: {} }));
     const results = tools.map(({ failed = false, answered = at, status }, j) => ({
@@ -548,13 +555,20 @@ export function claudeEntries(path: string, calls: ClaudeCall[], compactions: Co
       type: 'assistant',
       uuid: `a${i}_${k}`,
       ...entry(time),
+      ...(effort === undefined ? {} : { effort }),
       message: {
         id: `msg_${i}`,
         role: 'assistant',
         model,
         content,
         ...(stop === undefined ? {} : { stop_reason: stop }),
-        usage: { input_tokens: uncached, cache_creation_input_tokens: write, cache_read_input_tokens: read, output_tokens: output },
+        usage: {
+          input_tokens: uncached,
+          cache_creation_input_tokens: write,
+          cache_read_input_tokens: read,
+          output_tokens: output,
+          ...(cache === undefined ? {} : { cache_creation: { ephemeral_5m_input_tokens: cache === '5m' ? write : 0, ephemeral_1h_input_tokens: cache === '1h' ? write : 0 } }),
+        },
       },
     });
     const text = { type: 'text', text: '[text]' };
@@ -563,9 +577,9 @@ export function claudeEntries(path: string, calls: ClaudeCall[], compactions: Co
   const prompts = calls.flatMap(({ prompted }, i) =>
     prompted === undefined ? [] : [{ at: prompted, lines: [{ type: 'user', uuid: `p${i}`, ...entry(prompted), message: { role: 'user', content: '[text]' } }] }],
   );
-  const boundary = ({ at, before, after }: Compaction) => ({
+  const boundary = ({ at, before, after, trigger = 'auto' }: Compaction) => ({
     at,
-    lines: [{ type: 'system', subtype: 'compact_boundary', ...entry(at), compactMetadata: { trigger: 'auto', preTokens: before, postTokens: after } }],
+    lines: [{ type: 'system', subtype: 'compact_boundary', ...entry(at), compactMetadata: { trigger, preTokens: before, postTokens: after } }],
   });
   const logged = ({ at, models }: CostState) => ({
     at,

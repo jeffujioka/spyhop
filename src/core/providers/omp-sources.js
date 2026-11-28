@@ -12,7 +12,8 @@
 
 import { createTtlCache } from '../ttl-cache.js';
 import { parseEntries } from './jsonl.js';
-import { endedSubAgent, ompProvider, sessionStart, turnOf } from './omp.js';
+import { compactionTrigger, endedSubAgent, ompProvider, sessionStart, turnOf } from './omp.js';
+import { isNumber } from './shared.js';
 import {
   SUBAGENT_DEPTH,
   absoluteFolder,
@@ -156,6 +157,25 @@ function catalogueQuery(provider) {
     'WHERE model_cache.provider_id = (SELECT provider_id FROM model_cache ' +
     `WHERE substr(provider_id, 1, ${provider.length + 1}) = '${provider}:' ORDER BY updated_at DESC LIMIT 1)`
   );
+}
+
+// Every model of each provider's newest catalogue row, `{ provider, id, contextWindow }`: the
+// provider is what the row's `provider_id` names before its first `:`.
+export const WINDOWS_QUERY =
+  "SELECT substr(m.provider_id, 1, instr(m.provider_id || ':', ':') - 1) AS provider, json_extract(j.value, '$.id') AS id, json_extract(j.value, '$.contextWindow') AS contextWindow " +
+  'FROM model_cache AS m, json_each(m.models) AS j WHERE m.updated_at = (SELECT max(n.updated_at) FROM model_cache AS n ' +
+  "WHERE substr(n.provider_id, 1, instr(n.provider_id || ':', ':') - 1) = substr(m.provider_id, 1, instr(m.provider_id || ':', ':') - 1))";
+
+// The tokens at which omp compacts on its own, by model: a function of `<provider>/<id>` to the
+// tokens of `compactionTrigger` from the window `windows` (`WINDOWS_QUERY`'s rows, or null) holds
+// for it and the `compaction` block `settings` of omp's config (or null); null where it cannot be
+// known: an unreadable config or catalogue, a model of no window.
+export function autoCompactionAt(windows, settings) {
+  const known = new Map((windows ?? []).filter(({ contextWindow }) => isNumber(contextWindow) && contextWindow > 0).map(({ provider, id, contextWindow }) => [`${provider}/${id}`, contextWindow]));
+  return (key) => {
+    const window = known.get(key);
+    return window === undefined ? null : (compactionTrigger(window, key, settings) ?? null);
+  };
 }
 
 // The folder omp keeps every working folder's session folder in.

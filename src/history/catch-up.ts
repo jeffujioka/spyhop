@@ -99,7 +99,7 @@ import { parseEntries } from '../core/providers/jsonl.js';
 import { opencodeInsights } from '../core/providers/opencode.js';
 import { databaseOf, historyRowsQuery, SCHEMA_QUERY, select, sessionsIn } from '../core/providers/opencode-sources.js';
 import { ompProvider, turnOf } from '../core/providers/omp.js';
-import { ompSessionsDir, runs, titleIn } from '../core/providers/omp-sources.js';
+import { autoCompactionAt, ompSessionsDir, parseCompactionConfig, runs, titleIn, WINDOWS_QUERY } from '../core/providers/omp-sources.js';
 import { absoluteFolder, listFolder, mainSessionOf, SUBAGENT_DEPTH } from '../core/providers/session-files.js';
 import { scanFile } from '../core/refresh.js';
 import { newestFirst } from '../core/session-link.js';
@@ -138,6 +138,9 @@ type Kept = { fold: { cwd: string | null; insights: object }; repo: string; meta
 // The state an opencode database's row keeps: the repo of each folder its calls are of (a
 // session without a folder is under null).
 type OpencodeKept = { repos: Map<string | null, string> };
+
+// The tokens at which omp compacts on its own with a model (`<provider>/<id>`), null when unknown.
+type AutoAt = (model: string | undefined) => number | null;
 
 // The insights of a fold (newInsights of src/core/insights.js), as far as a row reads them.
 type Insights = {
@@ -178,13 +181,13 @@ const HARNESSES = [
     harness: 'omp',
     dirOf: ompSessionsDir,
     depth: 2 + SUBAGENT_DEPTH,
-    fold: (state: unknown, entries: unknown[]) => ompProvider.fold(state, entries, { insights: true }),
+    fold: (state: unknown, entries: unknown[], autoAt?: AutoAt) => ompProvider.fold(state, entries, { insights: true, autoAt }),
   },
   {
     harness: 'claude',
     dirOf: claudeProjectsDir,
     depth: 4,
-    fold: (state: unknown, entries: unknown[]) => claudeProvider.fold(state, entries, { insights: true }),
+    fold: (state: unknown, entries: unknown[], _autoAt?: AutoAt) => claudeProvider.fold(state, entries, { insights: true }),
   },
 ];
 
@@ -313,6 +316,23 @@ export function createCatchUp({
     return { agent: { ...figuresOf(ins), costNa: 1, key: meta?.toolUseId ?? name, name: meta?.name ?? name, parent: null, running: null } satisfies AgentRow };
   }
 
+  // The omp host of a place's `autoAt`, read once for the place: the windows of omp's model
+  // catalogue and the `compaction` block of its config, each unknown (null) when it cannot be read.
+  const autoAts = new WeakMap<Place, Promise<AutoAt>>();
+  function autoAtOf(place: Place) {
+    let found = autoAts.get(place);
+    if (!found) {
+      found = (async () => {
+        const config = await place.exec('cat', [`${place.home}/.omp/agent/config.yml`]).catch(() => null);
+        const settings = config?.code === 0 ? parseCompactionConfig(config.stdout) : null;
+        const windows = await select(place.read, `${place.home}/.omp/agent/models.db`, WINDOWS_QUERY).catch(() => null);
+        return autoCompactionAt(windows, settings) as AutoAt;
+      })();
+      autoAts.set(place, found);
+    }
+    return found;
+  }
+
   // A file's reads, one at a time: host and path -> the end of the last one asked for.
   const fileReads = new Map<string, Promise<void>>();
 
@@ -338,7 +358,8 @@ export function createCatchUp({
     const row = found?.version === HISTORY_VERSION ? found : null;
     if (row && row.size === size && row.mtimeMs === mtimeMs) return;
     const kept = row ? (store.state(row.id) as Kept) : undefined;
-    const read = await scanFile(place.read, fold, kept ? { state: kept.fold, pos: row!.pos } : null, path, size);
+    const autoAt = harness === 'omp' ? await autoAtOf(place) : undefined;
+    const read = await scanFile(place.read, (state: unknown, entries: unknown[]) => fold(state, entries, autoAt), kept ? { state: kept.fold, pos: row!.pos } : null, path, size);
     const restarted = read.restarted || !kept;
     const repo = restarted ? await repoOf(exec, read.scan.state?.cwd ?? null) : kept!.repo;
     const main = mainSessionOf(path, dir);

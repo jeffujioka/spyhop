@@ -26,7 +26,7 @@
 import { add, parseEntries, tally } from './jsonl.js';
 import { burnRate, cacheRate, isNumber, tokenCount, wholeSession } from './shared.js';
 import { addCall, addMinute, detailOf, entryOf, newSeries, pushRecent, retractLastCall, toolAnswered, toolCalled } from '../series.js';
-import { newInsights, noteCall, noteCost, noteEntry, noteHorizon, notePrompt, noteStatus, noteToolEnd, noteToolStart, noteTurnEnd } from '../insights.js';
+import { newInsights, noteCall, noteCompaction, noteCost, noteEntry, noteHorizon, notePrompt, noteStatus, noteToolEnd, noteToolStart, noteTurnEnd } from '../insights.js';
 import { SUBAGENT_TOOLS } from '../trace.js';
 import { absoluteFolder } from './session-files.js';
 
@@ -139,7 +139,7 @@ const lineModel = (name) =>
     .replace(/\[[^\]]*\]$/, '')
     .replace(/-\d{8}$/, '');
 
-// Counts the response `last` (`{ id, call, cold, model, tokens, start }`) in the calls, the
+// Counts the response `last` (`{ id, call, cold, model, tokens, start, thinking, lifetimeMs }`) in the calls, the
 // series, the minutes, the cold starts, the tokens by model and, when it logs its model, the
 // daily lines, at no cost, and the Trace lanes from `start`; `sign` -1 takes it back out, which
 // only the newest one can.
@@ -153,7 +153,11 @@ function count(state, last, sign) {
     state.cold.tokens += sign * last.call.write;
   }
   if (last.model !== null) entryOf(state.models, last.model, () => ({ cost: null, tokens: 0 })).tokens += sign * last.tokens;
-  if (state.insights && last.model !== null) noteCall(state.insights, { ...last.call, start: last.start, end: last.call.t, model: lineModel(last.model), tokens: last.tokens, cost: 0 }, sign);
+  if (state.insights && last.model !== null) noteCall(
+      state.insights,
+      { ...last.call, start: last.start, end: last.call.t, model: lineModel(last.model), tokens: last.tokens, cost: 0, cold: last.cold, thinking: last.thinking, lifetimeMs: last.lifetimeMs, writeCost: null },
+      sign,
+    );
 }
 
 // Notes in the daily lines what the `cost-state` that gives `models` (see `costByModel`) adds to
@@ -229,7 +233,9 @@ function fold(state, entries, opts) {
           // a cold start: a response after the first that read nothing from the prompt cache
           const cold = s.calls > 0 && cacheRead(message) === 0;
           const model = typeof message.model === 'string' ? message.model : null;
-          s.last = { id, call, cold, model, tokens: tokenCount(responseTokens(message)), start };
+          // the reasoning level the entry logs (`effort`) and the lifetime of the cache it wrote
+          const thinking = typeof entry.effort === 'string' ? entry.effort : null;
+          s.last = { id, call, cold, model, tokens: tokenCount(responseTokens(message)), start, thinking, lifetimeMs: lifetimeOf(message.usage) };
           count(s, s.last, 1);
         }
         for (const part of Array.isArray(message.content) ? message.content : []) {
@@ -262,7 +268,10 @@ function fold(state, entries, opts) {
       const { trigger, preTokens, postTokens } = entry.compactMetadata ?? {};
       if (trigger === 'auto') s.compactions += 1;
       else if (trigger !== 'manual') s.unknownTrigger = true;
-      s.marks.push({ t: time, before: isNumber(preTokens) ? preTokens : null, after: isNumber(postTokens) ? postTokens : null });
+      const before = isNumber(preTokens) ? preTokens : null;
+      s.marks.push({ t: time, before, after: isNumber(postTokens) ? postTokens : null });
+      // `auto` is a compaction on a full context; a trigger of another name is told by inference
+      if (s.insights) noteCompaction(s.insights, { t: time, kind: trigger === 'auto' ? 'full' : trigger === 'manual' ? 'manual' : null, before });
     }
     // no later response starts before what it answers, nor the newest one's later blocks before
     // its start, nor a later tool call
@@ -326,17 +335,24 @@ const CACHE_LIFETIME_MS = {
   ephemeral_1h_input_tokens: 60 * 60 * 1000,
 };
 
+// The longest lifetime of the classes the response with `usage` wrote tokens under, null when it
+// wrote none or logged no split.
+function lifetimeOf(usage) {
+  const written = usage?.cache_creation ?? {};
+  const lifetimes = Object.keys(CACHE_LIFETIME_MS)
+    .filter((key) => written[key] > 0)
+    .map((key) => CACHE_LIFETIME_MS[key]);
+  return lifetimes.length ? Math.max(...lifetimes) : null;
+}
+
 // Time left on the prompt cache after the last response, counted from its last block; 0 once
 // it has expired. The class is the one the response wrote tokens under; a response that wrote
 // none, or logged no split, leaves it unknown.
 function cacheExpiry({ assistants }, now) {
   const last = assistants.at(-1);
-  const written = last?.message.usage?.cache_creation ?? {};
-  const lifetimes = Object.keys(CACHE_LIFETIME_MS)
-    .filter((key) => written[key] > 0)
-    .map((key) => CACHE_LIFETIME_MS[key]);
-  if (!lifetimes.length || !isNumber(now)) return {};
-  return { cacheLeftMs: Math.max(0, last.time + Math.max(...lifetimes) - now) };
+  const lifetime = lifetimeOf(last?.message.usage);
+  if (lifetime === null || !isNumber(now)) return {};
+  return { cacheLeftMs: Math.max(0, last.time + lifetime - now) };
 }
 
 // Compactions Claude Code itself started: `compact_boundary` entries whose

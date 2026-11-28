@@ -18,7 +18,7 @@
 import { burnRate, isNumber, tokenCount } from './shared.js';
 import { addCall, addCost, addMinute, detailOf, entryOf, newSeries, pushRecent } from '../series.js';
 import { callCost, COPILOT } from '../copilot-prices.js';
-import { modelKey, noteCall, noteEntry, noteHorizon, notePrompt, noteStatus, noteThinking, noteTool, noteTurnEnd } from '../insights.js';
+import { modelKey, noteCall, noteCompaction, noteEntry, noteHorizon, notePrompt, noteStatus, noteThinking, noteTool, noteTurnEnd } from '../insights.js';
 import { SUBAGENT_TOOLS } from '../trace.js';
 
 function parseSession({ messages, compactions, tools, loggedCost, sources }) {
@@ -112,7 +112,7 @@ export function opencodeInsights(rows, ins) {
       if (typeof row.title === 'string') ins.title = row.title;
     }
     if (row.role === 'user') {
-      if (own && isNumber(row.created)) notePrompt(ins, row.created);
+      if (own && isNumber(row.created)) notePrompt(ins, row.created, String(row.ownId));
     } else if (row.role === 'tool') {
       const [start, end] = [isNumber(row.start) ? row.start : row.created, isNumber(row.end) ? row.end : row.completed];
       const startsSubAgents = SUBAGENT_TOOLS.opencode.includes(row.name);
@@ -122,9 +122,17 @@ export function opencodeInsights(rows, ins) {
       if (isCall(row) && typeof row.modelId === 'string' && isNumber(row.created)) {
         const [uncached, read, write, output] = [row.input, row.cacheRead, row.cacheWrite, row.output].map(tokenCount);
         const tokens = tokenCount(messageTotal(row));
-        noteCall(ins, { end: row.created, model: modelKey(row.providerId, row.modelId), tokens, uncached, read, write, output, cost: costOf(row), copilot: row.providerId === COPILOT });
+        // a cold start: a call after the first of its session that read nothing from the cache; opencode
+        // logs no cache lifetime nor the cost of a cache write
+        const thread = String(row.ownId);
+        const cold = ins.last[thread] !== undefined && row.cacheRead === 0;
+        const thinking = typeof row.variant === 'string' && row.variant ? row.variant : null;
+        noteCall(ins, { end: row.created, model: modelKey(row.providerId, row.modelId), tokens, uncached, read, write, output, cost: costOf(row), copilot: row.providerId === COPILOT, thread, cold, thinking, lifetimeMs: null, writeCost: null });
         if (own) noteThinking(ins, row.created, [row.toolStart, row.completed, row.created].find(isNumber));
       }
+      // a compaction is a summary that did not end with an error; `manual` is the user's, any other
+      // reason is the context filling up
+      if (row.summary === 1 && row.error == null && isNumber(row.created)) noteCompaction(ins, { t: row.created, kind: row.reason === 'manual' ? 'manual' : 'full', before: null, thread: String(row.ownId) });
       const endsTurn = row.finish !== 'tool-calls' && row.summary !== 1;
       if (own && endsTurn && isNumber(row.completed)) noteTurnEnd(ins, row.completed);
     }

@@ -1,6 +1,6 @@
 import { beforeEach, describe, test } from 'node:test';
 import { midnightBefore, rangeDays } from '../../src/core/days.js';
-import { takeLines } from '../../src/core/insights.js';
+import { LINE_FIGURES, takeLines } from '../../src/core/insights.js';
 import { ompProvider } from '../../src/core/providers/omp.js';
 import { setEnv } from '../helpers/env.ts';
 import { ompMessage } from './helpers/entries.ts';
@@ -10,6 +10,9 @@ import { withCopilotPrices } from '../helpers/prices.ts';
 // One omp model call ending at the ISO `timestamp`, of `cost` USD (none logged when null).
 const call = (timestamp: string, cost: number | null = 1, extra: object = {}) =>
   JSON.parse(ompMessage('assistant', timestamp, { input: 10, cacheRead: 20, cacheWrite: 30, output: 40, totalTokens: 100, ...(cost !== null && { cost: { total: cost } }) }, extra));
+
+// The figures of a daily line: each LINE_FIGURES name 0, but those of `some`.
+const figuresOf = (some: Record<string, number>) => ({ ...Object.fromEntries(LINE_FIGURES.map((name) => [name, 0])), ...some });
 
 const fold = (entries: object[]) => ompProvider.fold(undefined, entries, { insights: true });
 
@@ -25,7 +28,7 @@ describe('insights: day buckets of model calls', () => {
       {
         day: '2026-11-28',
         model: 'p/m',
-        figures: { calls: 1, tokens: 100, uncached: 10, read: 20, write: 30, output: 40, cost: 1, costNa: 0, sideCost: 0, sideTokens: 0, copilotCost: 0 },
+        figures: figuresOf({ calls: 1, tokens: 100, uncached: 10, read: 20, write: 30, output: 40, cost: 1 }),
       },
     ]);
   });
@@ -79,7 +82,7 @@ describe('insights: day buckets of model calls', () => {
     const state = fold([call('2026-11-27T12:00:00.000Z', 2), side, copilot]);
     const [line, copilotLine] = takeLines(state.insights);
 
-    expect(line.figures).toEqual({ calls: 1, tokens: 110, uncached: 10, read: 20, write: 30, output: 40, cost: 2.5, costNa: 0, sideCost: 0.5, sideTokens: 10, copilotCost: 0 });
+    expect(line.figures).toEqual(figuresOf({ calls: 1, tokens: 110, uncached: 10, read: 20, write: 30, output: 40, cost: 2.5, sideCost: 0.5, sideTokens: 10 }));
     // 10 x 500 + 20 x 50 + 30 x 625 + 40 x 2,500 credits per million, at 0.01 USD a credit
     expect(copilotLine.figures.cost).toBeCloseTo(0.0012475, 9);
     expect(copilotLine.figures.copilotCost).toBe(copilotLine.figures.cost);
