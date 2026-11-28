@@ -234,13 +234,14 @@ refresh is never drawn.
 
 Apart from the panel, the worker runs a catch-up when it starts and every 15 minutes after,
 whether the panel is open or closed, and between catch-ups reads nothing for them. A catch-up
-lists this computer's omp session files and sub-agent transcripts with one `find`, and reads each
-one into the history store (see What spyhop stores) from where its last read ended, one program at
-a time: a file whose size and modified time are those of its last read is not read, and a file
-shorter than that read, or no longer the file that was read, is read again from its start and its
-counts replace those it gave before. A file that cannot be read is written to the worker's log and
-tried again at the next catch-up; a catch-up that cannot list the sessions folder is written to
-the log too, reads nothing and is tried again at the next one.
+lists this computer's omp and Claude Code session files and sub-agent transcripts with one `find`
+for each, and reads each one into the history store (see What spyhop stores) from where its last
+read ended, one program at a time: a file whose size and modified time are those of its last read
+is not read, and a file shorter than that read, or no longer the file that was read, is read again
+from its start and its counts replace those it gave before. A file that cannot be read is written
+to the worker's log and tried again at the next catch-up; a catch-up that cannot list a sessions
+folder is written to the log too, reads nothing of that harness and is tried again at the next
+one.
 
 ## What spyhop stores
 
@@ -274,12 +275,15 @@ too.
 
 The history store is the SQLite file `~/.local/state/spyhop/insights.db` on this computer, made
 when missing, which the catch-ups fill and nothing deletes, so it keeps what they read after omp
-deletes its files. For each session file it holds the daily lines of its model calls that log
-their model: their count, tokens and cost summed by the day each call ended, the session, the
-repo and the model, and how far the file was read with the session reader's state there. A file's
-repo is set when it is first read: the git origin of the folder its `session` entry records, else
-that folder, else `n/a`; a sub-agent's transcript counts in its own folder's repo and in its main
-session. Another program that holds the store, such as `sqlite3`, is waited for up to 5 seconds.
+or Claude Code deletes its files. For each session file it holds the daily lines of its model
+calls that log their model: their count, tokens and cost summed by the day each call ended, the
+session, the repo and the model, and how far the file was read with the session reader's state
+there. Claude Code logs no cost of a call, so its calls count at no cost, and each `cost-state`
+it logs adds to a model's cost on its day what it gives that model less what the session's
+previous one gave it. A file's repo is set when it is first read: the git origin of the folder
+it records first (omp: its `session` entry), else that folder, else `n/a`; a sub-agent's
+transcript counts in its own folder's repo and in its main session. Another program that holds
+the store, such as `sqlite3`, is waited for up to 5 seconds.
 A store that cannot be opened, or a Node in Orca that cannot load `node:sqlite`, is written to
 the worker's log once; the range tabs then read n/a, and Live is drawn as ever.
 

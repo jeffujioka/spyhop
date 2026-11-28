@@ -29,6 +29,14 @@ export const absoluteFolder = (value) => (typeof value === 'string' && value.sta
 // Whether `file` is as it was when the head `hit` was read from it, by its time and size.
 export const unchangedSince = (hit, file) => hit.mtimeMs === file.mtimeMs && hit.size === file.size;
 
+// The main session file of the file `path` under `sessionsDir`, where omp and Claude Code keep a
+// session as `<sessionsDir>/<folder>/<session>.jsonl` and its sub-agents' transcripts below
+// `<sessionsDir>/<folder>/<session>/`: `path` itself for a session file, else its session's.
+export function mainSessionOf(path, sessionsDir) {
+  const [folder, session, ...below] = path.slice(sessionsDir.length + 1).split('/');
+  return below.length === 0 ? path : `${sessionsDir}/${folder}/${session}.jsonl`;
+}
+
 // What the heads of one hook's session files told, kept between calls. `head`: the arguments of
 // `head` that bound the read (`['-n', '2']`). `tells(text)`: what a text that starts with the
 // head of a file tells, an object with `cwd`, the folder the session records as its own or

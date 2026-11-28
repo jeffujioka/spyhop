@@ -161,15 +161,6 @@ function catalogueQuery(provider) {
 // The folder omp keeps every working folder's session folder in.
 export const ompSessionsDir = (home) => `${home}/.omp/agent/sessions`;
 
-// The main session file of the omp file `path` under `sessionsDir`: `path` itself for a session
-// file, `<sessionsDir>/<folder>/<session>.jsonl`, and that session's file for the transcript of
-// one of its sub-agents, which omp writes below `<sessionsDir>/<folder>/<session>/` (see
-// `subAgentsIn`).
-export function ompSessionOf(path, sessionsDir) {
-  const [folder, session, ...below] = path.slice(sessionsDir.length + 1).split('/');
-  return below.length === 0 ? path : `${sessionsDir}/${folder}/${session}.jsonl`;
-}
-
 // The title of a session, from `text`, which starts with the file's first line: omp writes the
 // `title` entry there and rewrites it in place when the title changes (it always equals the
 // latest `title_change` entry). '' when the line is not a title entry: the session then matches

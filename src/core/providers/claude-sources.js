@@ -21,7 +21,7 @@ export function sessionDirSlug(cwd) {
 }
 
 // The folder Claude Code keeps every working folder's session folder in.
-const sessionsRoot = (home) => `${home}/.claude/projects`;
+export const claudeProjectsDir = (home) => `${home}/.claude/projects`;
 
 // How much of the start of a session file is read for the folder the session started in.
 // Claude Code writes `cwd` on its message entries, not on the entries a file can start with (a
@@ -75,7 +75,7 @@ export function createClaudeSessions({ execOn, readTextOn, kept }) {
     // `except`, or null. Only the files directly in the folder are sessions; the folders beside
     // them hold sub-agent data.
     link({ machine, cwd, home, os, except }) {
-      return findSessionFile(execOn(machine), { dir: `${sessionsRoot(home)}/${sessionDirSlug(cwd)}`, os, except });
+      return findSessionFile(execOn(machine), { dir: `${claudeProjectsDir(home)}/${sessionDirSlug(cwd)}`, os, except });
     },
 
     // The session file each of `sessionIds` names on the host, or null: Claude Code names a
@@ -84,7 +84,7 @@ export function createClaudeSessions({ execOn, readTextOn, kept }) {
     // Only the files directly in a session folder are sessions: the listing does not go into
     // the folders beside them, which hold sub-agent data.
     named({ machine, home, os }, sessionIds) {
-      const root = sessionsRoot(home);
+      const root = claudeProjectsDir(home);
       const where = { dir: root, os, depth: 2, pattern: (id) => `${id}.jsonl` };
       const inSessionFolder = (path) => path.lastIndexOf('/') > root.length;
       return findNamedFiles(execOn(machine), where, sessionIds, (path, id) => path.endsWith(`/${id}.jsonl`) && inSessionFolder(path));

@@ -9,16 +9,21 @@
 // Pure: no Orca API, no file access, no runtime-specific API. `input` is the jsonl text of the
 // session or `{ text, sources, state }` (see `claudeProvider`).
 //
-// Structure as in omp.js: the session totals come from an accumulator, `fold(state, entries)`,
-// that the caller can build in pieces over a file larger than the tail window; each entry of
-// `TOTALS` is a function `(state) => partial stats`. The figures about the end of the file come
-// from the text (the tail), which `parseTail` turns into one `session` value; each entry of
-// `LATEST` is a function `(session, now) => partial stats`. Beside the stats, `detailOf(state)`
-// gives the series of the whole file (src/core/series.js), from the same state.
+// Structure as in omp.js: the session totals come from an accumulator,
+// `fold(state, entries, opts)`, that the caller can build in pieces over a file larger than the
+// tail window; each entry of `TOTALS` is a function `(state) => partial stats`. The figures about
+// the end of the file come from the text (the tail), which `parseTail` turns into one `session`
+// value; each entry of `LATEST` is a function `(session, now) => partial stats`. Beside the
+// stats, `detailOf(state)` gives the series of the whole file (src/core/series.js), from the same
+// state. Asked with `{ insights: true }` when the state starts, `fold` also notes in the state's
+// daily lines (src/core/insights.js) each response that logs its model, at no cost, and what each
+// `cost-state` adds to each model's cost (see `noteCostState`).
 
 import { add, parseEntries, tally } from './jsonl.js';
 import { burnRate, cacheRate, isNumber, tokenCount, wholeSession } from './shared.js';
 import { addCall, addMinute, detailOf, entryOf, newSeries, pushRecent, retractLastCall, toolAnswered, toolCalled } from '../series.js';
+import { newInsights, noteCall, noteCost } from '../insights.js';
+import { absoluteFolder } from './session-files.js';
 
 // A user entry that carries a tool's result continues a turn; any other (not meta) one starts it.
 const isPrompt = ({ message, isMeta }) =>
@@ -39,8 +44,8 @@ function responseTokens(m) {
   return counts.every(isNumber) ? counts.reduce((a, b) => a + b, 0) : undefined;
 }
 
-// A fresh accumulator.
-function emptyState() {
+// A fresh accumulator, with daily lines when `opts.insights`.
+function emptyState(opts) {
   return {
     // timestamps (epoch ms) of the first and the latest user or assistant entry
     firstMessage: undefined,
@@ -90,6 +95,11 @@ function emptyState() {
     models: {},
     minutes: [],
     last: undefined,
+    // the folder of the first entry that records an absolute one (see `absoluteFolder`), null
+    // before one
+    cwd: null,
+    // the daily lines (src/core/insights.js), when asked for when the state starts; else null
+    insights: opts?.insights ? newInsights() : null,
   };
 }
 
@@ -111,8 +121,8 @@ function credit(state, parts, sign) {
 }
 
 // Counts the response `last` (`{ id, call, cold, model, tokens }`) in the calls, the series, the
-// minutes, the cold starts and the tokens by model; `sign` -1 takes it back out, which only the
-// newest one can.
+// minutes, the cold starts, the tokens by model and, when it logs its model, the daily lines, at
+// no cost; `sign` -1 takes it back out, which only the newest one can.
 function count(state, last, sign) {
   if (sign > 0) addCall(state.series, last.call);
   else retractLastCall(state.series, last.call);
@@ -123,14 +133,26 @@ function count(state, last, sign) {
     state.cold.tokens += sign * last.call.write;
   }
   if (last.model !== null) entryOf(state.models, last.model, () => ({ cost: null, tokens: 0 })).tokens += sign * last.tokens;
+  if (state.insights && last.model !== null) noteCall(state.insights, { ...last.call, end: last.call.t, model: last.model, tokens: last.tokens, cost: 0 }, sign);
+}
+
+// Notes in the daily lines what the `cost-state` that gives `models` (see `costByModel`) adds to
+// each model's cost: its cost less that of the session's previous `cost-state` that gives one (0
+// without one). A `cost-state` has no timestamp, so it counts on the day of the entry before it;
+// one before any dated entry notes nothing.
+function noteCostState(s, models) {
+  if (!s.insights || !isNumber(s.lastEntry)) return;
+  const before = s.logged?.models ?? {};
+  for (const [model, usd] of Object.entries(models)) noteCost(s.insights, s.lastEntry, model, usd - (before[model] ?? 0));
 }
 
 // Adds `entries` (in file order, after those already in `state`) to `state`, which it changes
-// and returns; without a `state` it starts a new one.
-function fold(state, entries) {
-  const s = state ?? emptyState();
+// and returns; without a `state` it starts a new one, with daily lines when `opts.insights`.
+function fold(state, entries, opts) {
+  const s = state ?? emptyState(opts);
   for (const entry of entries) {
     const { message } = entry;
+    s.cwd ??= absoluteFolder(entry.cwd);
     const time = Date.parse(entry.timestamp);
     if (isNumber(time)) {
       s.firstEntry ??= time;
@@ -187,7 +209,9 @@ function fold(state, entries) {
         }
       }
     } else if (entry.type === 'cost-state') {
-      s.logged = { usd: entry.totalCostUSD, stale: false, models: costByModel(entry.modelUsage) ?? s.logged?.models };
+      const models = costByModel(entry.modelUsage);
+      if (models) noteCostState(s, models);
+      s.logged = { usd: entry.totalCostUSD, stale: false, models: models ?? s.logged?.models };
     } else if (entry.type === 'system' && entry.subtype === 'compact_boundary') {
       const { trigger, preTokens, postTokens } = entry.compactMetadata ?? {};
       if (trigger === 'auto') s.compactions += 1;

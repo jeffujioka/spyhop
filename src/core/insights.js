@@ -11,30 +11,42 @@ export const LINE_FIGURES = ['calls', 'tokens', 'uncached', 'read', 'write', 'ou
 // The open buckets: `day\nmodel` -> `{ day, model, figures }`.
 export const newInsights = () => ({ open: new Map() });
 
-// Adds the model call `call` (`end` epoch ms, `model`, its token counts and `cost`, null when it
-// has none; `side`: a side call, `copilot`: a call through Copilot) to the bucket of its day and
-// model. A side call adds its tokens and cost, but no model call nor its prompt's tokens.
-export function noteCall(ins, call) {
-  const day = dayOf(call.end);
-  const key = `${day}\n${call.model}`;
+// The bucket of the day of `t` (epoch ms) and of `model`, opened when it is not.
+function lineOf(ins, t, model) {
+  const day = dayOf(t);
+  const key = `${day}\n${model}`;
   let line = ins.open.get(key);
   if (!line) {
-    line = { day, model: call.model, figures: Object.fromEntries(LINE_FIGURES.map((name) => [name, 0])) };
+    line = { day, model, figures: Object.fromEntries(LINE_FIGURES.map((name) => [name, 0])) };
     ins.open.set(key, line);
   }
-  const { figures } = line;
-  figures.tokens += call.tokens;
-  if (call.side) figures.sideTokens += call.tokens;
+  return line;
+}
+
+// Adds the model call `call` (`end` epoch ms, `model`, its token counts and `cost`, null when it
+// has none; `side`: a side call, `copilot`: a call through Copilot) to the bucket of its day and
+// model. A side call adds its tokens and cost, but no model call nor its prompt's tokens. `sign`
+// -1 takes back a call noted before, for a fold whose later entry replaces it.
+export function noteCall(ins, call, sign = 1) {
+  const { figures } = lineOf(ins, call.end, call.model);
+  figures.tokens += sign * call.tokens;
+  if (call.side) figures.sideTokens += sign * call.tokens;
   else {
-    figures.calls += 1;
-    for (const name of ['uncached', 'read', 'write', 'output']) figures[name] += call[name];
+    figures.calls += sign;
+    for (const name of ['uncached', 'read', 'write', 'output']) figures[name] += sign * call[name];
   }
-  if (call.cost === null) figures.costNa += 1;
+  if (call.cost === null) figures.costNa += sign;
   else {
-    figures.cost += call.cost;
-    if (call.side) figures.sideCost += call.cost;
-    if (call.copilot) figures.copilotCost += call.cost;
+    figures.cost += sign * call.cost;
+    if (call.side) figures.sideCost += sign * call.cost;
+    if (call.copilot) figures.copilotCost += sign * call.cost;
   }
+}
+
+// Adds `usd` to the cost of `model` on the day of `t` (epoch ms), as no model call: a cost a
+// harness logs apart from its calls.
+export function noteCost(ins, t, model, usd) {
+  lineOf(ins, t, model).figures.cost += usd;
 }
 
 // The lines noted since the last take, which it empties.

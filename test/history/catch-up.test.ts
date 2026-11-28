@@ -112,7 +112,8 @@ describe('catch-up', () => {
     mock.timers.enable({ apis: ['setTimeout', 'Date'], now: NOW });
     const { home, calls, catchUp } = await catchUpOf();
     ompSession(home, join(home, 'api'), { title: 'api', calls: [spent(0.4)] });
-    const finds = () => calls.filter(({ command }) => command === 'find').length;
+    // the listings of omp's sessions folder: one a run
+    const finds = () => calls.filter(({ command, args }) => command === 'find' && args.includes(ompSessionsDir(home))).length;
     stop = scheduleCatchUps(catchUp, () => {});
     await caughtUp(home);
     const mark = calls.length;
