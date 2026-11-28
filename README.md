@@ -316,12 +316,12 @@ of the last 30 days, then the older ones, each phase's files newest first, so th
 catch-up of a long history shows the recent days soon.
 
 On the Mac it was built on (2026-11-28), with about 1 GB of omp and 34 MB of Claude Code
-session files and a 2 GB opencode database, and Orca hosts of 2.8 GB and 27 MB of omp files,
-the first catch-up took 16.5 minutes with the panel open, this Mac's own files read in the first
-5 of them, and left a history store of 123 MB. Orca listed this Mac again as `localhost` and
-`127.0.0.1`, and each other host under two aliases, and each alias was then read as a host of its
-own; a catch-up now reads each machine once. A later catch-up of the same files took about 15
-seconds.
+session files and a 2 GB opencode database, and two other machines among Orca's hosts with
+3.3 GB of omp and Claude Code files and 27 MB of omp files, a catch-up that read every file
+again from its start took about 16 minutes with the panel open, nearly all of it the 3.3 GB over
+ssh, and left 56 MB of data in
+the history store, one host for each of the three machines. A later catch-up of the same files
+took about 15 seconds.
 
 ## What spyhop stores
 
