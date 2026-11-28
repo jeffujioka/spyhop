@@ -26,26 +26,23 @@ function costBy(lines: DailyLine[], keyOf: (line: DailyLine) => string): SpendRo
 // What the costliest sessions need beyond the store: `shown`, the id of each session a Live card
 // shows -> the card's id, and `hostName`, the name of the Orca host of a store key.
 export type Places = { shown: Map<string, string>; hostName(key: string): string };
-const NO_PLACES: Places = { shown: new Map(), hostName: (key) => key };
 
 // The COSTLIEST sessions with a model call in the days `from` to `to`, by their whole cost,
 // costliest first, a cost n/a last; a session the store keeps no summary of is left out.
 function costliest(store: Store, from: string, to: string, { shown, hostName }: Places): CostlySession[] {
-  const rank = (cost: Num) => (cost === 'n/a' ? -Infinity : cost);
   return store
-    .sessionsOf(from, to)
+    .costliestIn(from, to, COSTLIEST)
     .flatMap((id) => store.summary(id) ?? [])
-    .sort((a, b) => rank(b.cost) - rank(a.cost))
-    .slice(0, COSTLIEST)
     .map(({ id, title, repo, harness, host, cost }) => ({ id, title, repo, harness: HARNESS_NAMES[harness] ?? harness, host: hostName(host), cost, card: shown.get(id) ?? null }));
 }
 
 // The Spend tab of `range` as of the epoch ms `now`: the cost, tokens and model calls of every
 // daily line of its days, the cost n/a when a model call logged none, and its cost by each day or
 // month of the range, none for Day; its cost by repo, model and harness (named as a card names it),
-// its costliest sessions (`places` names their hosts and the Live cards of those a card shows),
+// its costliest sessions (`places` names their hosts and the Live cards of those a card shows; none
+// without `places`),
 // the side calls' cost, and the Copilot calls' share of the cost.
-export function spendView(store: Store, range: Range, now: number, places: Places = NO_PLACES): SpendView {
+export function spendView(store: Store, range: Range, now: number, places: Places | null): SpendView {
   const { from, to, by, points } = rangeDays(range, now);
   // a Year's from and to are months, which span their first to their last day; `to` is always
   // there, though its inferred type allows none
@@ -74,7 +71,7 @@ export function spendView(store: Store, range: Range, now: number, places: Place
     byRepo: costBy(lines, (line) => line.repo),
     byModel: costBy(lines, (line) => line.model),
     byHarness: costBy(lines, (line) => HARNESS_NAMES[line.harness] ?? line.harness),
-    costliest: costliest(store, first, last, places),
+    costliest: places ? costliest(store, first, last, places) : [],
     sideCost,
     sources: cost === 'n/a' ? { copilot: 'n/a', logged: 'n/a' } : { copilot, logged: cost - copilot },
   };

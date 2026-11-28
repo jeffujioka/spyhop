@@ -21,7 +21,8 @@
 // A costliest session of the Spend tab without a Live card opens as a past session
 // (`past:<id>`): its screen is drawn at once and asks the worker for its summary and Trace, on
 // the range tabs' schedule; back, or an answer that holds none, draws the tab and range it was
-// opened from.
+// opened from. A row that carries a card the fleet no longer lists opens that card's screen, which
+// the worker answers with no session, so the panel falls back to the fleet screen.
 // A change of Orca's theme draws nothing: the stylesheet's variables follow it in place. A failed
 // answer keeps what is drawn; a draw that fails is left uncaught, for Orca to log as the frame's
 // error. Each drawing says whether it is of the screen drawn before it, the fleet, the session

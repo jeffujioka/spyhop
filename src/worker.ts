@@ -31,9 +31,10 @@
 // A history store that cannot be opened is logged once; no catch-up runs then, and each range
 // tab's figures are n/a, while the fleet and the sessions are answered as ever. A range the store
 // cannot read is logged and answered n/a.
-// `spyhop.past` answers a past session's summary and Trace from the history store alone. Each build
-// notes the sessions its cards show (`shown`), which the Spend tab's costliest sessions open as
-// their Live card, and the names of the hosts they ran on.
+// `spyhop.past` answers a past session's summary and Trace from the history store alone. A range
+// ask for the Spend tab places the sessions the cards of the last fleet or session build link to
+// (`placesOf`), so that the costliest sessions open their Live card, and names the hosts they ran
+// on; the fleet answer never waits on that.
 // `spyhop.focus` focuses a card's pane
 // in this computer's Orca window: an agent on this computer or an SSH workspace by Orca's
 // `terminal.focus`, one on a paired Orca server by `orca terminal switch` to the server's
@@ -56,7 +57,7 @@ import { orca as cli, historyHosts, type HostLists, listHosts, readServerAgents,
 import type { CardView, FleetAnswer, HostGroup, Num, PastAnswer, Pane, RangeAnswer, SessionAnswer, SpendView } from './protocol.ts';
 import { type CatchUp, createCatchUp } from './history/catch-up.ts';
 import { openStore, type Store } from './history/store.ts';
-import { spendView } from './history/views.ts';
+import { type Places, spendView } from './history/views.ts';
 import { sessionDetail } from './session-detail.ts';
 
 // How long Orca's lists of hosts and paired servers are kept: a server is paired seldom, its
@@ -125,7 +126,7 @@ export default function activate(orca: OrcaWorkerApi): void {
   function showToday(store: Store | null) {
     let cost: Num = 'n/a';
     try {
-      if (store) cost = spendView(store, 'day', Date.now()).cost;
+      if (store) cost = spendView(store, 'day', Date.now(), null).cost;
     } catch (error) {
       log(`spyhop: cannot read the history store: ${(error as Error).message}`);
     }
@@ -225,37 +226,46 @@ export default function activate(orca: OrcaWorkerApi): void {
   // One Orca host's agents, in the order Orca lists them, and their cards.
   type HostBuilt = { agents: (FleetAgent & { pane?: Pane | null })[]; cards: BuiltCard[] };
 
-  // The id of each session a built card shows -> the card's id, as of the last build, and the name
-  // of each other Orca host's store key (`machine:<id>:<home>`) the cards of it gave.
-  let shown = new Map<string, string>();
-  const hostNames = new Map<string, string>();
+  // The cards of the last build that link to a session file, with the name of their Orca host.
+  type Linked = { id: string; hostId: string; harness: string; file: string; host: string };
+  let linked: Linked[] = [];
+  // `placed`: the session id of a linked card's file (`<hostId> <harness> <file>` -> its id, null
+  // when its host cannot be placed), kept, a failed placing too, until the next catch-up starts,
+  // so that a host that cannot be reached is not probed at each ask; `placedAt`: the start of the
+  // catch-up it holds the ids of.
+  let placed = new Map<string, Promise<string | null>>();
+  let placedAt: number | null | undefined;
 
-  // The name of the Orca host of the store key `key`: this computer `local`, another host the name
-  // of a card on it, else the machine's id shortened.
-  function hostName(key: string) {
-    return hostNames.get(key) ?? (key.startsWith('machine:') ? key.split(':')[1].slice(0, HOST_ID_CHARS) : key);
-  }
-
-  // Notes in `shown` and `hostNames` the sessions `cards` link to, and their hosts' names from
-  // `names`; a card whose host cannot be placed now shows no session.
-  async function noteShown(cards: BuiltCard[], names: Map<string, string>) {
-    const history = await opening;
-    if (!history) return;
-    const next = new Map<string, string>();
+  // What the Spend tab's costliest sessions need: the session id of each card of the last build
+  // that shows one -> the card's id, and the name of the Orca host of a store key: this computer
+  // `local`, another host the name of a card on it, else its machine's id shortened. A card whose
+  // host cannot be placed shows no session.
+  async function placesOf(catchUp: CatchUp): Promise<Places> {
+    if (placedAt !== catchUp.startedMs()) {
+      placed = new Map();
+      placedAt = catchUp.startedMs();
+    }
+    const shown = new Map<string, string>();
+    const names = new Map<string, string>();
     await Promise.all(
-      cards.map(async (card) => {
-        if (card.file === null || card.harness === null) return;
-        const id = await history.catchUp.sessionId(card.hostId, card.harness, card.file).catch((error) => {
-          log(`spyhop: cannot place the session of ${card.id}: ${(error as Error).message}`);
-          return null;
-        });
+      linked.map(async (card) => {
+        const key = [card.hostId, card.harness, card.file].join('\0');
+        let asked = placed.get(key);
+        if (!asked) {
+          asked = catchUp.sessionId(card.hostId, card.harness, card.file).catch((error) => {
+            log(`spyhop: cannot place the session of ${card.id}: ${(error as Error).message}`);
+            return null;
+          });
+          placed.set(key, asked);
+        }
+        const id = await asked;
         if (id === null) return;
-        next.set(id, card.id);
-        const key = id.slice(0, id.indexOf('\0'));
-        if (key !== LOCAL) hostNames.set(key, names.get(card.hostId) ?? card.hostId);
+        shown.set(id, card.id);
+        names.set(id.slice(0, id.indexOf('\0')), card.host);
       }),
     );
-    shown = next;
+    const hostName = (key: string) => names.get(key) ?? (key.startsWith('machine:') ? key.split(':')[1].slice(0, HOST_ID_CHARS) : key);
+    return { shown, hostName };
   }
 
   // The cards of every Orca agent, built once per request: the agents in the order Orca lists
@@ -347,7 +357,9 @@ export default function activate(orca: OrcaWorkerApi): void {
       }
     }
     const built = [...others, ...servers].flatMap((host) => host.cards);
-    await noteShown(built, names);
+    // the sessions the cards link to, placed lazily when the Spend tab asks (`placesOf`): placing
+    // one may probe an Orca host over ssh, which no fleet answer waits on
+    linked = built.flatMap((card) => (card.file === null || card.harness === null ? [] : [{ id: card.id, hostId: card.hostId, harness: card.harness, file: card.file, host: names.get(card.hostId) ?? card.hostId }]));
     return {
       // in the order Orca lists them, which is the order of the groups
       agents: [...(await Promise.all(listing)).flat(), ...servers.flatMap(({ agents }) => agents)],
@@ -410,7 +422,7 @@ export default function activate(orca: OrcaWorkerApi): void {
     if (tab !== 'spend') return { request, tab, range, spend: null, ...read };
     // a read that fails, such as a store held past its busy timeout, is n/a until one succeeds
     try {
-      return { request, tab, range, spend: spendView(store, range, Date.now(), { shown, hostName }), ...read };
+      return { request, tab, range, spend: spendView(store, range, Date.now(), await placesOf(catchUp)), ...read };
     } catch (error) {
       log(`spyhop: cannot read the history store: ${(error as Error).message}`);
       return { request, tab, range, spend: SPEND_NA, ...read };
