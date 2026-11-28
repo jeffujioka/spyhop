@@ -10,7 +10,6 @@
 // - the view `daily_lines`: the lines summed by day, Orca host, repo, harness and model.
 import { mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { DatabaseSync } from 'node:sqlite';
 import { LINE_FIGURES } from '../core/insights.js';
 import { decodeState, encodeState } from '../core/refresh.js';
 
@@ -54,7 +53,10 @@ const BUSY_MS = 5000;
 // Opens the store of the home `home`, making its folder and file when missing, and adds each
 // figure column its lines lack, 0 in the lines it holds. A statement waits up to BUSY_MS for
 // another process that holds the store, such as a test run beside the plugin or `sqlite3`.
-export function openStore(home: string): Store {
+// `node:sqlite` is loaded here, so that a Node that cannot load it rejects the open, as a store
+// that cannot be opened does, instead of failing the worker's load.
+export async function openStore(home: string): Promise<Store> {
+  const { DatabaseSync } = await import('node:sqlite');
   const path = join(home, STORE_FILE);
   mkdirSync(dirname(path), { recursive: true });
   const db = new DatabaseSync(path);

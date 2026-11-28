@@ -31,12 +31,12 @@ afterEach(async () => {
 });
 
 // A catch-up over a new temporary home, through the recording runner, in UTC.
-function catchUpOf() {
+async function catchUpOf() {
   setEnv('TZ', 'UTC');
   const home = useTempHome();
   const { exec, calls } = recordingRun();
   const logs: string[] = [];
-  store = openStore(home);
+  store = await openStore(home);
   const catchUp = createCatchUp({ run: exec, store, home, log: (message) => logs.push(message) });
   return { home, calls, logs, store, catchUp };
 }
@@ -57,7 +57,7 @@ const TODAY = '2026-11-25';
 
 describe('catch-up', () => {
   test('Folder without an origin', async () => {
-    const { home, store, catchUp } = catchUpOf();
+    const { home, store, catchUp } = await catchUpOf();
     const scratch = join(home, 'scratch');
     ompSession(home, scratch, { title: 'scratch', calls: [spent(0.4)] });
 
@@ -67,7 +67,7 @@ describe('catch-up', () => {
   });
 
   test('Unchanged file not read', async () => {
-    const { home, calls, catchUp } = catchUpOf();
+    const { home, calls, catchUp } = await catchUpOf();
     const folder = join(home, 'api');
     ompSession(home, folder, { title: 'api', calls: [spent(0.4)] });
     const file = sessionFileOf(home, folder);
@@ -81,7 +81,7 @@ describe('catch-up', () => {
   });
 
   test("an unchanged file's kept state is not decoded", async () => {
-    const { home, logs, catchUp } = catchUpOf();
+    const { home, logs, catchUp } = await catchUpOf();
     ompSession(home, join(home, 'api'), { title: 'api', calls: [spent(0.4)] });
     await catchUp.run();
     // a state no decode can read: a run that decoded it would log the file as not read
@@ -95,7 +95,7 @@ describe('catch-up', () => {
   });
 
   test('Replaced file counted once', async () => {
-    const { home, store, catchUp } = catchUpOf();
+    const { home, store, catchUp } = await catchUpOf();
     const folder = join(home, 'api');
     const day = '2026-11-27';
     ompSession(home, folder, { title: 'api', calls: [spent(1, noonOf(day)), spent(1, noonOf(day) + 1000)] });
@@ -110,7 +110,7 @@ describe('catch-up', () => {
 
   test('Nothing between catch-ups', async () => {
     mock.timers.enable({ apis: ['setTimeout', 'Date'], now: NOW });
-    const { home, calls, catchUp } = catchUpOf();
+    const { home, calls, catchUp } = await catchUpOf();
     ompSession(home, join(home, 'api'), { title: 'api', calls: [spent(0.4)] });
     const finds = () => calls.filter(({ command }) => command === 'find').length;
     stop = scheduleCatchUps(catchUp, () => {});
@@ -128,7 +128,7 @@ describe('catch-up', () => {
   });
 
   test('a line being written is counted once', async () => {
-    const { home, store, catchUp } = catchUpOf();
+    const { home, store, catchUp } = await catchUpOf();
     const folder = join(home, 'api');
     ompSession(home, folder, { title: 'api', calls: [spent(0.1), spent(0.2, NOW - 30_000)] });
     const file = sessionFileOf(home, folder);
@@ -145,7 +145,7 @@ describe('catch-up', () => {
   });
 
   test("a sub-agent transcript counts in its own folder's repo", async () => {
-    const { home, catchUp } = catchUpOf();
+    const { home, catchUp } = await catchUpOf();
     const origin = 'git@github.com:jeffujioka/spyhop.git';
     const project = join(home, 'spyhop');
     const other = join(home, 'other');
@@ -170,7 +170,7 @@ describe('catch-up', () => {
   });
 
   test('a sessions folder that cannot be listed is logged and ends no run', async () => {
-    const { home, logs, store, catchUp } = catchUpOf();
+    const { home, logs, store, catchUp } = await catchUpOf();
     ompSession(home, join(home, 'api'), { title: 'api', calls: [spent(0.4)] });
     const dir = ompSessionsDir(home);
     // a folder under the sessions folder that `find` cannot go into

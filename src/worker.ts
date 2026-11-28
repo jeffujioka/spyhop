@@ -91,22 +91,24 @@ export default function activate(orca: OrcaWorkerApi): void {
   const home = homedir();
   const log = (message: string) => orca.log(message);
   // The history store, which the catch-ups fill from the worker's start (src/history/catch-up.ts),
-  // and its catch-up; both null when it cannot be opened.
-  let history: { store: Store; catchUp: CatchUp } | null = null;
-  try {
-    const store = openStore(home);
-    history = { store, catchUp: createCatchUp({ run, store, home, log }) };
-  } catch (error) {
-    log(`spyhop: cannot open the history store: ${(error as Error).message}`);
-  }
-  if (history) {
-    const { store, catchUp } = history;
-    const stopCatchUps = scheduleCatchUps(catchUp, log);
-    ending = async () => {
-      await stopCatchUps();
-      store.close();
-    };
-  }
+  // and its catch-up; null when it cannot be opened, `node:sqlite` not loaded included.
+  const opening = openStore(home).then(
+    (store) => {
+      const catchUp = createCatchUp({ run, store, home, log });
+      const stopCatchUps = scheduleCatchUps(catchUp, log);
+      return { store, catchUp, stopCatchUps };
+    },
+    (error) => {
+      log(`spyhop: cannot open the history store: ${(error as Error).message}`);
+      return null;
+    },
+  );
+  ending = async () => {
+    const history = await opening;
+    if (!history) return;
+    await history.stopCatchUps();
+    history.store.close();
+  };
   // The card builder, kept for the worker's life: it keeps the state of its session reads
   // between builds, which start from the scans the storage holds. A storage that cannot be read
   // (the capability not granted), or holds anything but this version's kept scans, gives none.
@@ -297,6 +299,7 @@ export default function activate(orca: OrcaWorkerApi): void {
   });
 
   orca.panels.handle('spyhop.range', async ({ request, tab, range }): Promise<RangeAnswer> => {
+    const history = await opening;
     if (!history) return { request, tab, range, spend: tab === 'spend' ? SPEND_NA : null };
     const { store, catchUp } = history;
     if (!catchUp.running() && Date.now() - (catchUp.startedMs() ?? -Infinity) >= RANGE_REFRESH_MS) await caughtUp(catchUp, log);

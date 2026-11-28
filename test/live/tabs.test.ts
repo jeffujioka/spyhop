@@ -6,6 +6,7 @@
 // real programs under a temporary home. Time is node:test's mock clock.
 import assert from 'node:assert/strict';
 import { mkdirSync, writeFileSync } from 'node:fs';
+import { registerHooks } from 'node:module';
 import { dirname, join } from 'node:path';
 import { mock, test } from 'node:test';
 import { CATCH_UP_MS, RANGE_REFRESH_MS } from '../../src/core/refresh.js';
@@ -90,4 +91,24 @@ test('a store that cannot be opened leaves Live drawn', async () => {
   await opened.openTab('spend');
   for (const name of ['cost', 'tokens', 'calls']) assert.equal(figure(opened.html(), name), 'n/a', name);
   assert.equal(opened.worker.logs.filter((line) => line.includes('history store')).length, 1, JSON.stringify(opened.worker.logs));
+});
+
+test('a runtime without node:sqlite leaves Live drawn', async () => {
+  // the module cannot be loaded from now on, as on a Node that has none or needs a flag for it
+  const hooks = registerHooks({
+    resolve(specifier, context, next) {
+      if (specifier === 'node:sqlite') throw new Error('No such built-in module: node:sqlite');
+      return next(specifier, context);
+    },
+  });
+  try {
+    const opened = await openOnFleet([FIX], { prepare: fixSession });
+
+    assert.deepEqual(titles(opened.html()), ['Fix the login bug']);
+    await opened.openTab('spend');
+    for (const name of ['cost', 'tokens', 'calls']) assert.equal(figure(opened.html(), name), 'n/a', name);
+    assert.equal(opened.worker.logs.filter((line) => line.includes('history store')).length, 1, JSON.stringify(opened.worker.logs));
+  } finally {
+    hooks.deregister();
+  }
 });
