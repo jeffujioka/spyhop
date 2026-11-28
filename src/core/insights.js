@@ -5,6 +5,7 @@
 // a reply, a task or a tool call is kept.
 
 import { dayOf } from './days.js';
+import { FAILURE_TYPES, replyBucket } from './reply-times.js';
 import { addSpan, newLane, pruneGaps } from './trace.js';
 
 // The figures of a daily line. `cost` sums the costs, side calls' included; `costNa` counts the
@@ -19,16 +20,25 @@ import { addSpan, newLane, pruneGaps } from './trace.js';
 // `returnsCold<Band>` those whose next model call was a cold start; and the compactions by kind,
 // `compactionsIdle`, `compactionsFull` and `compactionsManual`, of which `compactionsInferred`
 // were told apart by inference (see noteCompaction).
+//
+// The Health tab's: `fail<Type>` the failed model calls by type (FAILURE_TYPES, src/core/reply-times.js),
+// `retries` the calls that failed and then succeeded on a retry, `cutCalls` the calls whose output
+// was cut at the maximum length, `cutCost` their cost and `cutCostNa` those whose cost is n/a,
+// `thinkingTokens` the thinking tokens of the `thinkingCalls` calls that log them. The reply times
+// of the calls that ended without failure are no figure: a line carries them beside its figures as
+// `replies`, bucket (replyBucket) -> how many, when it has any.
 export const MISS_CAUSES = ['expired', 'model', 'thinking', 'compaction', 'other'];
 export const AWAY_BANDS = ['under5', 'to60', 'over60'];
 export const cap = (word) => word[0].toUpperCase() + word.slice(1);
 // The figures that are money, USD, which a store keeps as reals.
-export const MONEY_FIGURES = ['cost', ...MISS_CAUSES.map((cause) => `coldCost${cap(cause)}`)];
+export const MONEY_FIGURES = ['cost', 'cutCost', ...MISS_CAUSES.map((cause) => `coldCost${cap(cause)}`)];
 export const LINE_FIGURES = [
   'calls', 'tokens', 'uncached', 'read', 'write', 'output', 'cost', 'costNa', 'sideCost', 'sideTokens', 'copilotCost',
   ...MISS_CAUSES.flatMap((cause) => ['cold', 'coldTokens', 'coldCost', 'coldUnpriced', 'coldCostNa'].map((figure) => `${figure}${cap(cause)}`)),
   ...AWAY_BANDS.flatMap((band) => [`returns${cap(band)}`, `returnsCold${cap(band)}`]),
   'compactionsIdle', 'compactionsFull', 'compactionsManual', 'compactionsInferred',
+  ...FAILURE_TYPES.map((type) => `fail${cap(type)}`),
+  'retries', 'cutCalls', 'cutCost', 'cutCostNa', 'thinkingTokens', 'thinkingCalls',
 ];
 
 // A time away of 5 minutes or more is past the first band, one over an hour in the last; a call
@@ -36,7 +46,7 @@ export const LINE_FIGURES = [
 const FIVE_MINUTES = 5 * 60 * 1000;
 const HOUR = 60 * 60 * 1000;
 
-// The open buckets: `day\nmodel` -> `{ day, model, figures }`. The Trace lanes: `thinking`, the
+// The open buckets: `day\nmodel` -> `{ day, model, figures, replies? }`. The Trace lanes: `thinking`, the
 // session's model calls; `tools`, its tool calls; `busy`, both but the tool calls that start or
 // await sub-agents; `developer`, from a reply that ends a turn to the developer's next prompt.
 // `firstMs` and `lastMs`: the first and the last time noted (see noteEntry), null before one;
@@ -130,8 +140,42 @@ function cacheEffects(ins, call, before, thread) {
   return effects;
 }
 
+// The Health figures of `call`, a model call that ended at `end` (epoch ms) under `model`, added
+// `sign` times to its line: its `failure` type (an interrupted call, `aborted`, is none) in
+// `fail<Type>`; `recovered`, a retry that recovered; `cut`, a call cut at the maximum length, with
+// its cost; `thinkingTokens`, null when its harness logs none; and its reply time `replyMs`, when
+// it ended without failure. A pure function of the call, so taking it back out undoes it.
+function noteHealth(ins, call, sign) {
+  const line = lineOf(ins, call.end, call.model);
+  const { figures } = line;
+  if (call.failure) figures[`fail${cap(call.failure)}`] += sign;
+  if (call.recovered) figures.retries += sign;
+  if (call.cut) {
+    figures.cutCalls += sign;
+    if (call.cost === null) figures.cutCostNa += sign;
+    else figures.cutCost += sign * call.cost;
+  }
+  if (typeof call.thinkingTokens === 'number') {
+    figures.thinkingCalls += sign;
+    figures.thinkingTokens += sign * call.thinkingTokens;
+  }
+  if (!call.failure && !call.aborted && call.replyMs > 0) {
+    const replies = (line.replies ??= {});
+    const bucket = replyBucket(call.replyMs);
+    replies[bucket] = (replies[bucket] ?? 0) + sign;
+  }
+}
+
+// A model call that failed (`failure`, its type, src/core/reply-times.js; `recovered`) and spent
+// nothing, so it is no call: it adds its `fail<Type>` to the line of the day it `end`ed and its
+// `model`, and nothing else.
+export function noteFailure(ins, call) {
+  noteHealth(ins, call, 1);
+}
+
 // Adds the model call `call` (`end` epoch ms, `model`, its token counts and `cost`, null when it
-// has none; `side`: a side call, `copilot`: a call through Copilot) to the bucket of its day and
+// has none; `side`: a side call, `copilot`: a call through Copilot; `failure`, `aborted`, `recovered`,
+// `cut`, `thinkingTokens` and `replyMs`, the Health figures: see noteHealth) to the bucket of its day and
 // model. A side call adds its tokens and cost, but no model call nor its prompt's tokens. `sign`
 // -1 takes back a call noted before, for a fold whose later entry replaces it: the call that
 // replaces it is noted again, and its span merges with the one noted before. A call with a
@@ -157,6 +201,7 @@ export function noteCall(ins, call, sign = 1) {
     if (call.side) figures.sideCost += sign * call.cost;
     if (call.copilot) figures.copilotCost += sign * call.cost;
   }
+  if (!call.side) noteHealth(ins, call, sign);
   // a side call and a compaction's summary call (`summary`, written by the compaction agent with its
   // own model) are no cold start and not the call before the next one
   if (call.side || call.summary) return;

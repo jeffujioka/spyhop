@@ -317,7 +317,9 @@ export function ompCalls(home: string, path: string, { title, contexts, cost = 0
 // given;
 // `tools`: the tool calls it makes; `cttl`: it ended at `at` and wrote to a prompt cache that
 // lasts 5 minutes or an hour (omp's `usage.cttl` of `ephemeral5m` or `ephemeral1h`), so the cache
-// goes cold that long after it.
+// goes cold that long after it; `error`: its `errorMessage`, none when not given; `recovered`: it
+// logs a `retryRecovery` whose status is `recovered`; `duration`: its `duration`, ms, none when not
+// given.
 export type OmpCall = {
   at: number;
   provider?: string;
@@ -335,10 +337,13 @@ export type OmpCall = {
   prompt?: string;
   promptedBy?: 'user' | 'agent';
   started?: number;
-  stop?: 'stop' | 'aborted' | 'toolUse';
+  stop?: 'stop' | 'aborted' | 'toolUse' | 'length' | 'error';
   tools?: ToolCall[];
   cttl?: '5m' | '1h';
   thinking?: string;
+  error?: string;
+  recovered?: boolean;
+  duration?: number;
 };
 // A tool call of the tool `name`, whose result says it failed when `failed`; `started`: the time
 // it started running (omp's `tool_execution_start` entry, none when not given; Claude Code's
@@ -362,7 +367,7 @@ export const spent = (usd: number, at = NOW - 60_000): OmpCall => ({ at, output:
 // model call.
 export function ompEntries(calls: OmpCall[], compactions: Compaction[], model: string) {
   const timestamp = (at: number) => new Date(at).toISOString();
-  const message = ({ at, provider = PROVIDER, model: own = model, side, read, write, uncached, output, cost, writeCost, premium, context, started, stop, tools = [], cttl }: OmpCall, i: number) => {
+  const message = ({ at, provider = PROVIDER, model: own = model, side, read, write, uncached, output, cost, writeCost, premium, context, started, stop, tools = [], cttl, error, recovered, duration }: OmpCall, i: number) => {
     const tokens = { input: uncached, cacheRead: read, cacheWrite: write, output };
     const usage = {
       ...Object.fromEntries(Object.entries(tokens).filter(([, value]) => value !== undefined)),
@@ -398,6 +403,9 @@ export function ompEntries(calls: OmpCall[], compactions: Compaction[], model: s
             ...(started === undefined ? {} : { timestamp: started }),
             ...(stop === undefined ? {} : { stopReason: stop }),
             ...(cttl === undefined ? {} : { completedAt: at }),
+            ...(error === undefined ? {} : { errorMessage: error }),
+            ...(recovered ? { retryRecovery: { kind: 'auto-retry', status: 'recovered', attempt: 1 } } : {}),
+            ...(duration === undefined ? {} : { duration }),
           },
         },
         ...starts,
@@ -537,7 +545,9 @@ export function claudeCalls(home: string, path: string, contexts: number[]) {
 // `stop_reason` its blocks log, none when not given.
 // `effort`: the reasoning level its entry logs, and `cache`: the lifetime of the cache it wrote to
 // (`cache_creation`'s split), none when not given.
-export type ClaudeCall = { effort?: string; cache?: '5m' | '1h'; at: number; read?: number; write?: number; uncached?: number; output?: number; tools?: ToolCall[]; prompted?: number; blocks?: number[]; stop?: string };
+// `thinking`: the `thinking_tokens` its usage logs, none when not given; `apiError`: it is the
+// entry Claude Code writes in place of a reply that failed, with the HTTP status (null: none).
+export type ClaudeCall = { effort?: string; cache?: '5m' | '1h'; at: number; read?: number; write?: number; uncached?: number; output?: number; tools?: ToolCall[]; prompted?: number; blocks?: number[]; stop?: string; thinking?: number; apiError?: { status: number | null } };
 
 // A `cost-state` Claude Code logs at `at`: the cost, USD, it gives each model in its `modelUsage`,
 // and its total their sum; null: it holds no `modelUsage`.
@@ -548,7 +558,11 @@ export type CostState = { at: number; models: Record<string, number> | null };
 // entry. A `cost-state` has no timestamp, as Claude Code writes none.
 export function claudeEntries(path: string, calls: ClaudeCall[], compactions: Compaction[], model: string, costStates: CostState[] = []) {
   const entry = (at: number) => ({ sessionId: 'c1', isSidechain: false, cwd: path, timestamp: new Date(at).toISOString() });
-  const response = ({ at, read = 0, write = 0, uncached = 0, output = 0, tools = [], blocks = [], stop, effort, cache }: ClaudeCall, i: number) => {
+  const response = ({ at, read = 0, write = 0, uncached = 0, output = 0, tools = [], blocks = [], stop, effort, cache, thinking, apiError }: ClaudeCall, i: number) => {
+    if (apiError) {
+      const message = { id: `err_${i}`, role: 'assistant', model: '<synthetic>', content: [{ type: 'text', text: '[text]' }], usage: { input_tokens: 0, output_tokens: 0, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 } };
+      return { at, lines: [{ type: 'assistant', uuid: `e${i}`, ...entry(at), isApiErrorMessage: true, apiErrorStatus: apiError.status, message }] };
+    }
     const id = (j: number) => `toolu_${i}_${j}`;
     const uses = tools.map(({ name }, j) => ({ type: 'tool_use', id: id(j), name, input: {} }));
     const results = tools.map(({ failed = false, answered = at, status }, j) => ({
@@ -574,6 +588,7 @@ export function claudeEntries(path: string, calls: ClaudeCall[], compactions: Co
           cache_creation_input_tokens: write,
           cache_read_input_tokens: read,
           output_tokens: output,
+          ...(thinking === undefined ? {} : { output_tokens_details: { thinking_tokens: thinking } }),
           ...(cache === undefined ? {} : { cache_creation: { ephemeral_5m_input_tokens: cache === '5m' ? write : 0, ephemeral_1h_input_tokens: cache === '1h' ? write : 0 } }),
         },
       },

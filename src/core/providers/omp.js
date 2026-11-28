@@ -34,9 +34,10 @@
 import { add, parseEntries, tally } from './jsonl.js';
 import { burnRate, cacheRate, isNumber, tokenCount, wholeSession } from './shared.js';
 import { addCall, addCost, addMinute, detailOf, entryOf, newSeries, pushRecent, toolAnswered, toolCalled } from '../series.js';
-import { modelKey, newInsights, noteCall, noteCompaction, noteEntry, noteHorizon, notePrompt, noteStatus, noteToolEnd, noteToolStart, noteTurnEnd } from '../insights.js';
+import { modelKey, newInsights, noteCall, noteCompaction, noteEntry, noteFailure, noteHorizon, notePrompt, noteStatus, noteToolEnd, noteToolStart, noteTurnEnd } from '../insights.js';
 import { SUBAGENT_TOOLS } from '../trace.js';
 import { callCost, COPILOT, copilotWriteCost } from '../copilot-prices.js';
+import { failureType } from '../reply-times.js';
 
 // A fresh accumulator. Sums are `tally`s: undefined until an entry carries the value.
 function emptyState(opts) {
@@ -116,6 +117,19 @@ const TURN_ENDS = new Set(['stop', 'aborted']);
 // before the model answered, logs a usage of all zeros (or none), so it sent and wrote nothing.
 const spentTokens = (usage) => [usage?.input, usage?.cacheRead, usage?.cacheWrite, usage?.output].some((tokens) => tokenCount(tokens) > 0);
 
+// The Health figures of the assistant message `m` (see noteCall of src/core/insights.js): it failed
+// with the `stopReason` `error`, was interrupted with `aborted` or cut at the maximum length with
+// `length`, logs a `retryRecovery` when a retry recovered it, and its `duration` is its reply time.
+// omp logs no thinking tokens.
+const healthOf = (m) => ({
+  failure: m.stopReason === 'error' ? failureType({ text: m.errorMessage }) : null,
+  aborted: m.stopReason === 'aborted',
+  recovered: m.retryRecovery?.status === 'recovered',
+  cut: m.stopReason === 'length',
+  thinkingTokens: null,
+  replyMs: isNumber(m.duration) ? m.duration : null,
+});
+
 // The cost of the model call or side call `logged` (an assistant message or a `model_usage`
 // entry), by the Copilot cost rule (`callCost`); undefined, nothing to add, when it logged no usage.
 function costOf({ provider, model, usage }) {
@@ -137,8 +151,9 @@ function addSpent(s, logged, spent) {
 // `time`, to the minutes, and, when it logs its model, to the models and the daily lines; a model
 // call that `ran` from `start` to `end` (epoch ms) runs then in the Trace lanes; `cache`: whether
 // it was a cold start, the cost of its cache write (null: none logged) and the lifetime of the
-// cache it wrote (null: none logged), for the Cache tab's figures.
-function addSpend(s, logged, time, call, side, ran = { start: undefined, end: time }, cache = {}) {
+// cache it wrote (null: none logged), for the Cache tab's figures, and its Health figures (see
+// healthOf): `extra`.
+function addSpend(s, logged, time, call, side, ran = { start: undefined, end: time }, extra = {}) {
   const tokens = tokenCount(logged.usage.totalTokens);
   addMinute(s.minutes, time, { ...call, tokens });
   const { provider, model } = logged;
@@ -149,7 +164,7 @@ function addSpend(s, logged, time, call, side, ran = { start: undefined, end: ti
   byModel.cost = addCost(byModel.cost, call.cost);
   byModel.tokens += tokens;
   byModel[side ? 'side' : 'main'] = true;
-  if (s.insights && isNumber(ran.end)) noteCall(s.insights, { ...call, ...cache, thinking: s.thinkingLevel ?? null, start: ran.start, end: ran.end, model: key, tokens, side, copilot: provider === COPILOT });
+  if (s.insights && isNumber(ran.end)) noteCall(s.insights, { ...call, ...extra, thinking: s.thinkingLevel ?? null, start: ran.start, end: ran.end, model: key, tokens, side, copilot: provider === COPILOT });
 }
 
 // Adds `entries` (in file order, after those already in `state`) to `state`, which it changes
@@ -250,7 +265,11 @@ function fold(state, entries, opts) {
             s.cold.cost = addCost(s.cold.cost, written);
           }
           s.calls += 1;
-          addSpend(s, e.message, time, call, false, ran, { cold, writeCost: written, lifetimeMs: lifetimeOf(usage) });
+          addSpend(s, e.message, time, call, false, ran, { cold, writeCost: written, lifetimeMs: lifetimeOf(usage), ...healthOf(e.message) });
+        } else if (s.insights && typeof e.message.model === 'string' && isNumber(ran.end)) {
+          // a call that spent nothing is no model call, but a failed one counts by its type
+          const health = healthOf(e.message);
+          if (health.failure) noteFailure(s.insights, { end: ran.end, model: modelKey(e.message.provider, e.message.model), failure: health.failure, recovered: health.recovered });
         }
         for (const part of Array.isArray(e.message.content) ? e.message.content : []) {
           if (part?.type === 'toolCall') toolCalled(s, part.id, part.name);

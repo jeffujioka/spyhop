@@ -7,6 +7,9 @@
 //   state as JSON (`encodeState` of src/core/refresh.js); an opencode database is one row, whose
 //   lines a catch-up replaces from a day on (`replaceDays`);
 // - `lines`: the figures (LINE_FIGURES) of a file's model calls by session, day, repo and model;
+// - `replies`: the reply times of a file's model calls, one row per line key (session, day, repo,
+//   model) and bucket (`replyBucket` of src/core/reply-times.js) with how many replies are in it;
+//   every write or delete of a file's lines does the same to its replies;
 // - `sessions`: one row per session that is not a sub-agent, by its id (`<host>\0<harness>\0<main
 //   session file or opencode root session id>`), with the file it was read from, its title, repo,
 //   first and last time, its own cost (and how many of its calls have none), tokens and models,
@@ -37,8 +40,9 @@ export const STORE_FILE = '.local/state/spyhop/insights.db';
 // Raise it with KEPT_VERSION (src/core/refresh.js) when a fold's state changes shape, and alone
 // when only the insights a fold keeps for the store change (3: the Trace lanes; 4: another Orca
 // host's rows keyed by its machine; 5: the session summaries and sub-agent rows; 6: the miss
-// causes, returns and compactions of the Cache tab).
-export const HISTORY_VERSION = 6;
+// causes, returns and compactions of the Cache tab; 7: the Health tab's failures, retries, cut
+// output, thinking tokens and reply times).
+export const HISTORY_VERSION = 7;
 
 export type FileRow = { id: number; host: string; harness: string; path: string; pos: number; size: number; mtimeMs: number; version: number; state: unknown };
 
@@ -47,8 +51,9 @@ export type FileMark = Omit<FileRow, 'state'>;
 
 export type DailyLine = { day: string; host: string; repo: string; harness: string; model: string; figures: Record<string, number> };
 
-// A daily line of one read (`takeLines` of src/core/insights.js).
-type LineDelta = { day: string; model: string; figures: Record<string, number> };
+// A daily line of one read (`takeLines` of src/core/insights.js), with the replies of its calls by
+// bucket when it has any.
+type LineDelta = { day: string; model: string; figures: Record<string, number>; replies?: Record<string, number> };
 
 // A daily line of one read, with the session and the repo it counts in.
 export type SessionLine = LineDelta & { session: string; repo: string };
@@ -90,6 +95,9 @@ export type Store = {
   saveSession(file: number, session: string, main: SessionRow, agents: AgentRow[]): void;
   // The daily lines of the days `from` to `to` (YYYY-MM-DD, both included).
   dailyLines(from: string, to: string): DailyLine[];
+  // The reply times of the model calls of the days `from` to `to` (YYYY-MM-DD, both included), by
+  // model: how many replies each bucket (`replyBucket`) holds, of every Orca host, repo and harness.
+  replies(from: string, to: string): Map<string, Map<number, number>>;
   // The ids of the `limit` sessions of the highest whole cost (as `summary` counts it, a cost n/a
   // last) among those with a daily line of a model call (`calls` over 0) on the days `from` to
   // `to` (YYYY-MM-DD, both included); equal costs by id.
@@ -135,6 +143,9 @@ export async function openStore(home: string): Promise<Store> {
       CREATE TABLE IF NOT EXISTS lines (
         file INTEGER NOT NULL REFERENCES files (id), session TEXT NOT NULL, day TEXT NOT NULL, repo TEXT NOT NULL, model TEXT NOT NULL,
         PRIMARY KEY (file, session, day, repo, model));
+      CREATE TABLE IF NOT EXISTS replies (
+        file INTEGER NOT NULL REFERENCES files (id), session TEXT NOT NULL, day TEXT NOT NULL, repo TEXT NOT NULL, model TEXT NOT NULL, bucket INTEGER NOT NULL,
+        count INTEGER NOT NULL, PRIMARY KEY (file, session, day, repo, model, bucket));
       CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS sessions (
         id TEXT PRIMARY KEY, file INTEGER NOT NULL REFERENCES files (id), host TEXT NOT NULL, harness TEXT NOT NULL, title TEXT NOT NULL, repo TEXT NOT NULL,
@@ -166,6 +177,7 @@ export async function openStore(home: string): Promise<Store> {
       db.exec(`
         BEGIN;
         DELETE FROM lines WHERE file IN (SELECT id FROM files WHERE ${other});
+        DELETE FROM replies WHERE file IN (SELECT id FROM files WHERE ${other});
         DELETE FROM files WHERE ${other};
         DELETE FROM meta WHERE key LIKE 'read:%' AND key NOT LIKE 'read:${LOCAL}:%';
         INSERT INTO meta (key, value) VALUES ('host-keys', 'machine-id') ON CONFLICT (key) DO UPDATE SET value = excluded.value;
@@ -186,6 +198,12 @@ export async function openStore(home: string): Promise<Store> {
     RETURNING id`);
   const deleteLines = db.prepare('DELETE FROM lines WHERE file = ?');
   const deleteDays = db.prepare('DELETE FROM lines WHERE file = ? AND day >= ?');
+  const deleteReplies = db.prepare('DELETE FROM replies WHERE file = ?');
+  const deleteReplyDays = db.prepare('DELETE FROM replies WHERE file = ? AND day >= ?');
+  const upsertReply = db.prepare(`
+    INSERT INTO replies (file, session, day, repo, model, bucket, count) VALUES (?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT (file, session, day, repo, model, bucket) DO UPDATE SET count = count + excluded.count`);
+  const selectReplies = db.prepare('SELECT model, bucket, SUM(count) AS count FROM replies WHERE day BETWEEN ? AND ? GROUP BY model, bucket HAVING SUM(count) > 0');
   const upsertLine = db.prepare(`
     INSERT INTO lines (file, session, day, repo, model, ${COLUMNS.join(', ')}) VALUES (?, ?, ?, ?, ?, ${COLUMNS.map(() => '?').join(', ')})
     ON CONFLICT (file, session, day, repo, model) DO UPDATE SET ${COLUMNS.map((column) => `${column} = ${column} + excluded.${column}`).join(', ')}`);
@@ -230,6 +248,12 @@ export async function openStore(home: string): Promise<Store> {
     upsertAgent.run(session, key, file, parent, name, startMs, endMs, cost, costNa, tokens, JSON.stringify(models), running === null ? null : Number(running), statusesText(statuses));
   }
 
+  // Adds the line `line` of `session` in `repo`, read from the file `file`, and its replies.
+  function addLine(file: number, session: string, repo: string, { day, model, figures, replies }: LineDelta) {
+    upsertLine.run(file, session, day, repo, model, ...LINE_FIGURES.map((name) => figures[name]));
+    for (const [bucket, count] of Object.entries(replies ?? {})) if (count !== 0) upsertReply.run(file, session, day, repo, model, Number(bucket), count);
+  }
+
   // Runs `write` in one transaction; what it returns.
   function inTransaction<Result>(write: () => Result) {
     db.exec('BEGIN');
@@ -266,10 +290,11 @@ export async function openStore(home: string): Promise<Store> {
         const id = Number(upsertFile.get(file.host, file.harness, file.path, file.pos, file.size, file.mtimeMs, file.version, JSON.stringify(encodeState(file.state)))!.id);
         if (restarted) {
           deleteLines.run(id);
+          deleteReplies.run(id);
           deleteSessions.run(id);
         }
         if (restarted || agent) deleteAgentsOf.run(id);
-        for (const { day, model, figures } of lines) upsertLine.run(id, session, day, repo, model, ...LINE_FIGURES.map((name) => figures[name]));
+        for (const line of lines) addLine(id, session, repo, line);
         if (main) saveSessionRow(id, session, main);
         if (agent) saveAgentRow(id, session, agent);
         return id;
@@ -278,7 +303,8 @@ export async function openStore(home: string): Promise<Store> {
     replaceDays(file, fromDay, { lines }) {
       inTransaction(() => {
         deleteDays.run(file, fromDay);
-        for (const { session, day, repo, model, figures } of lines) upsertLine.run(file, session, day, repo, model, ...LINE_FIGURES.map((name) => figures[name]));
+        deleteReplyDays.run(file, fromDay);
+        for (const line of lines) addLine(file, line.session, line.repo, line);
       });
     },
     saveSession(file, session, main, agents) {
@@ -297,6 +323,15 @@ export async function openStore(home: string): Promise<Store> {
         model: String(row.model),
         figures: Object.fromEntries(LINE_FIGURES.map((name) => [name, Number(row[name])])),
       }));
+    },
+    replies(from, to) {
+      const byModel = new Map<string, Map<number, number>>();
+      for (const row of selectReplies.all(from, to)) {
+        const model = String(row.model);
+        if (!byModel.has(model)) byModel.set(model, new Map());
+        byModel.get(model)!.set(Number(row.bucket), Number(row.count));
+      }
+      return byModel;
     },
     costliestIn(from, to, limit) {
       return selectCostliest.all(from, to, limit).map((row) => String(row.id));

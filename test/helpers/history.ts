@@ -4,10 +4,13 @@
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import { STORE_FILE } from '../../src/history/store.ts';
+import { run, runBytes } from '../../src/exec.ts';
+import { createCatchUp } from '../../src/history/catch-up.ts';
+import { openStore, STORE_FILE, type Store } from '../../src/history/store.ts';
 import { tabBar, tabBody } from '../../src/live/tabs.ts';
 import type { Range, RangeAnswer, RangeTab } from '../../src/protocol.ts';
 import { type Mounting, mountOn, until } from './live.ts';
+import { setEnv, useTempHome } from './env.ts';
 import type { HostWorkspace } from './orca-host.ts';
 
 // The history store of `home`, read-only; the caller closes it.
@@ -39,3 +42,31 @@ export async function rangeOf(workspaces: HostWorkspace[], { tab, range, ...moun
   const answer = (await mounted.request('spyhop.range', { request: 1, tab, range })) as RangeAnswer;
   return { answer, html: tabBar(tab, range) + tabBody(answer), calls };
 }
+
+// The store after a catch-up, in UTC, of this computer's home once `write` has filled it with
+// sessions, then `more` runs of it, each once `between` has changed the home; the caller closes it.
+export async function caughtUpStore(write: (home: string) => void, between: (home: string) => void = () => {}, more = 0): Promise<Store> {
+  setEnv('TZ', 'UTC');
+  const home = useTempHome();
+  write(home);
+  const store = await openStore(home);
+  const catchUp = createCatchUp({ run, runBytes, store, home, log: () => {}, hosts: async () => [], aliasOf: async () => null });
+  await catchUp.run();
+  for (let i = 0; i < more; i++) {
+    between(home);
+    await catchUp.run();
+  }
+  return store;
+}
+
+// The figures of the daily lines of `store` summed over every day, repo and model, of the repos
+// whose folder is one of `folders` when given (opencode's fixture database holds sessions of its
+// own).
+export function sumsOf(opened: Store, folders: string[]) {
+  const sums: Record<string, number> = {};
+  for (const { repo, figures } of opened.dailyLines('2000-01-01', '2100-01-01')) if (folders.length === 0 || folders.some((folder) => repo.endsWith(`/${folder}`))) for (const [name, value] of Object.entries(figures)) sums[name] = (sums[name] ?? 0) + value;
+  return sums;
+}
+
+// The figures of `sums` named `names` that are not 0.
+export const nonZero = (sums: Record<string, number>, ...names: string[]) => Object.fromEntries(names.filter((name) => sums[name] !== 0).map((name) => [name, sums[name]]));

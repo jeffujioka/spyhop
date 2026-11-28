@@ -87,8 +87,25 @@ export type OpencodeCalls = { provider: string; model: string; contexts: number[
 // `tool` items of its `content`; `finish`: why it finished, `stop` when not given, none when null;
 // `at`: the time it was created, a minute after the call before when not given; `variant`: the
 // reasoning level of its model, `high` when not given; `model`: the model it ran, the session's when
-// not given.
-export type OpencodeCall = { uncached: number; read: number; write: number; output: number; took?: number; prompted?: number; tools?: OpencodeTool[]; finish?: string | null; at?: number; variant?: string; model?: string };
+// not given; `error`: the error it ended with, its `type` and `status`, none when not given;
+// `retry`: it logged a `retry` (of the error it ended with, when it has one); `reasoning`: its
+// reasoning tokens, 0 when not given.
+export type OpencodeCall = {
+  uncached: number;
+  read: number;
+  write: number;
+  output: number;
+  took?: number;
+  prompted?: number;
+  tools?: OpencodeTool[];
+  finish?: string | null;
+  at?: number;
+  variant?: string;
+  model?: string;
+  error?: { type: string; status?: number };
+  retry?: boolean;
+  reasoning?: number;
+};
 
 // A compaction of an opencode session: the time it was written and its `reason` (`manual` or
 // `auto`, as this Mac's database holds them); `summary`: the call that wrote its summary, with its
@@ -128,7 +145,7 @@ export function opencodeSession(
   }: { provider: string; model: string; calls: OpencodeCall[]; cost: number; id?: string; callCost?: number; last?: number; update?: boolean; title?: string; parent?: string; compactions?: OpencodeCompaction[] },
 ) {
   const at = (i: number) => calls[i].at ?? last - 60_000 * (calls.length - 1 - i);
-  const rows = calls.flatMap(({ uncached, read, write, output, took = 1000, prompted, tools = [], finish = 'stop', variant = 'high', model: own = model }, i) => {
+  const rows = calls.flatMap(({ uncached, read, write, output, took = 1000, prompted, tools = [], finish = 'stop', variant = 'high', model: own = model, error, retry, reasoning = 0 }, i) => {
     const content = tools.map(({ name, created, ran, completed, status = 'completed', child }, j) => ({
       type: 'tool',
       id: `toolu_${i}_${j}`,
@@ -142,8 +159,10 @@ export function opencodeSession(
       model: { id: own, providerID: provider, variant },
       content,
       ...(finish === null ? {} : { finish }),
+      ...(error ? { error: { ...error, message: '[text]' } } : {}),
+      ...(retry ? { retry: { attempt: 2, at: at(i), ...(error ? { error: { ...error, message: '[text]' } } : {}) } } : {}),
       cost: callCost,
-      tokens: { input: uncached, output, reasoning: 0, cache: { read, write } },
+      tokens: { input: uncached, output, reasoning, cache: { read, write } },
     };
     const prompt = { time: { created: prompted }, files: [], agents: [] };
     return [

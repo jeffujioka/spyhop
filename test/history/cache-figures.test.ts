@@ -11,6 +11,7 @@ import { openStore, type Store } from '../../src/history/store.ts';
 import { expect } from '../core/helpers/expect.ts';
 import { opencodeSession } from '../helpers/agent-cards.ts';
 import { setEnv, useTempHome } from '../helpers/env.ts';
+import { caughtUpStore, nonZero, sumsOf } from '../helpers/history.ts';
 import { tempHome } from '../helpers/files.ts';
 import { STARFISH_LISTS } from '../helpers/orca-answers.ts';
 import { readOnlyLine } from '../helpers/read-only.ts';
@@ -33,15 +34,6 @@ const MINUTE = 60_000;
 // start but for the first of a session.
 const cold = (time: string, more: Partial<OmpCall> = {}): OmpCall => ({ at: at(time), read: 0, write: 1000, uncached: 10, output: 5, cost: 0.1, writeCost: 0.05, ...more });
 
-// The figures of the daily lines of `store` summed over every day, repo and model, of the repos
-// whose folder is one of `folders` when given (opencode's fixture database holds sessions of its
-// own).
-function sumsOf(opened: Store, folders: string[]) {
-  const sums: Record<string, number> = {};
-  for (const { repo, figures } of opened.dailyLines('2000-01-01', '2100-01-01')) if (folders.length === 0 || folders.some((folder) => repo.endsWith(`/${folder}`))) for (const [name, value] of Object.entries(figures)) sums[name] = (sums[name] ?? 0) + value;
-  return sums;
-}
-
 // A catch-up, in UTC, of the home `write` fills with sessions, then `more` runs of it once `between`
 // has changed the home; the sums of its daily lines (see `sumsOf`).
 async function figuresOf(write: (home: string) => void, ...folders: string[]) {
@@ -49,21 +41,9 @@ async function figuresOf(write: (home: string) => void, ...folders: string[]) {
 }
 
 async function figuresAfter(write: (home: string) => void, between: (home: string) => void, more: number, ...folders: string[]) {
-  setEnv('TZ', 'UTC');
-  const home = useTempHome();
-  write(home);
-  store = await openStore(home);
-  const catchUp = createCatchUp({ run, runBytes, store, home, log: () => {}, hosts: async () => [], aliasOf: async () => null });
-  await catchUp.run();
-  for (let i = 0; i < more; i++) {
-    between(home);
-    await catchUp.run();
-  }
+  store = await caughtUpStore(write, between, more);
   return sumsOf(store, folders);
 }
-
-// The figures of `sums` named `names` that are not 0.
-const nonZero = (sums: Record<string, number>, ...names: string[]) => Object.fromEntries(names.filter((name) => sums[name] !== 0).map((name) => [name, sums[name]]));
 
 describe('miss causes', () => {
   test('Cache lifetime decides expiry', async () => {

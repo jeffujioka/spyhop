@@ -18,7 +18,8 @@
 import { burnRate, isNumber, tokenCount } from './shared.js';
 import { addCall, addCost, addMinute, detailOf, entryOf, newSeries, pushRecent } from '../series.js';
 import { callCost, COPILOT, copilotWriteCost } from '../copilot-prices.js';
-import { modelKey, noteCall, noteCompaction, noteEntry, noteHorizon, notePrompt, noteStatus, noteThinking, noteTool, noteTurnEnd } from '../insights.js';
+import { modelKey, noteCall, noteCompaction, noteEntry, noteFailure, noteHorizon, notePrompt, noteStatus, noteThinking, noteTool, noteTurnEnd } from '../insights.js';
+import { failureType } from '../reply-times.js';
 import { SUBAGENT_TOOLS } from '../trace.js';
 
 function parseSession({ messages, compactions, tools, loggedCost, sources }) {
@@ -77,6 +78,25 @@ function tokens(session) {
 // A message that sent and wrote nothing (an aborted or failed request) is no model call.
 const isCall = (row) => [row.input, row.cacheRead, row.cacheWrite, row.output].some((count) => tokenCount(count) > 0);
 
+// The names of the errors of a message the developer interrupted.
+const INTERRUPTED = new Set(['aborted', 'MessageAbortedError']);
+
+// The Health figures of the assistant message `row` (see noteCall of src/core/insights.js): it
+// failed with an error that is no interruption, a `retry` without an error recovered, `finish`
+// `length` is a cut, `reasoning` tokens are thinking tokens (the field present, even 0), and the
+// reply time runs from `created` to `completed`.
+function healthOf(row) {
+  const aborted = INTERRUPTED.has(row.error);
+  return {
+    failure: row.error != null && !aborted ? failureType({ type: row.error, status: row.errorStatus }) : null,
+    aborted,
+    recovered: row.retry === 1 && row.error == null,
+    cut: row.finish === 'length',
+    thinkingTokens: isNumber(row.reasoning) ? row.reasoning : null,
+    replyMs: isNumber(row.completed) && isNumber(row.created) ? row.completed - row.created : null,
+  };
+}
+
 // The cost of the assistant message `row`, by the Copilot cost rule (`callCost`).
 function costOf(row) {
   const tokens = { uncached: tokenCount(row.input), read: tokenCount(row.cacheRead), write: tokenCount(row.cacheWrite), output: tokenCount(row.output) };
@@ -119,6 +139,12 @@ export function opencodeInsights(rows, ins) {
       if (own) noteTool(ins, start, end, startsSubAgents);
       if (startsSubAgents) noteStatus(ins, row.child, row.status);
     } else {
+      const model = modelKey(row.providerId, row.modelId);
+      const health = healthOf(row);
+      if (!isCall(row) && health.failure && typeof row.modelId === 'string' && isNumber(row.created)) {
+        // a failed call that spent nothing is no model call, but counts by its type
+        noteFailure(ins, { end: row.created, model, failure: health.failure, recovered: health.recovered });
+      }
       if (isCall(row) && typeof row.modelId === 'string' && isNumber(row.created)) {
         const [uncached, read, write, output] = [row.input, row.cacheRead, row.cacheWrite, row.output].map(tokenCount);
         const tokens = tokenCount(messageTotal(row));
@@ -129,7 +155,7 @@ export function opencodeInsights(rows, ins) {
         const cold = !summary && ins.last[thread] !== undefined && row.cacheRead === 0;
         const writeCost = row.providerId === COPILOT ? copilotWriteCost(row.modelId, write, uncached + read + write) : null;
         const thinking = typeof row.variant === 'string' && row.variant ? row.variant : null;
-        noteCall(ins, { end: row.created, model: modelKey(row.providerId, row.modelId), tokens, uncached, read, write, output, cost: costOf(row), copilot: row.providerId === COPILOT, thread, cold, thinking, lifetimeMs: null, writeCost, summary });
+        noteCall(ins, { ...health, end: row.created, model, tokens, uncached, read, write, output, cost: costOf(row), copilot: row.providerId === COPILOT, thread, cold, thinking, lifetimeMs: null, writeCost, summary });
         if (own) noteThinking(ins, row.created, [row.toolStart, row.completed, row.created].find(isNumber));
       }
       // a compaction is a summary that did not end with an error; `manual` is the user's, any other

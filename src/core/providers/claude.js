@@ -26,9 +26,10 @@
 import { add, parseEntries, tally } from './jsonl.js';
 import { burnRate, cacheRate, isNumber, tokenCount, wholeSession } from './shared.js';
 import { addCall, addMinute, detailOf, entryOf, newSeries, pushRecent, retractLastCall, toolAnswered, toolCalled } from '../series.js';
-import { newInsights, noteCall, noteCompaction, noteCost, noteEntry, noteHorizon, notePrompt, noteStatus, noteToolEnd, noteToolStart, noteTurnEnd } from '../insights.js';
+import { newInsights, noteCall, noteCompaction, noteCost, noteEntry, noteFailure, noteHorizon, notePrompt, noteStatus, noteToolEnd, noteToolStart, noteTurnEnd } from '../insights.js';
 import { SUBAGENT_TOOLS } from '../trace.js';
 import { absoluteFolder } from './session-files.js';
+import { failureType } from '../reply-times.js';
 
 // A user entry that carries a tool's result continues a turn; any other (not meta) one starts it.
 const isPrompt = ({ message, isMeta }) =>
@@ -139,7 +140,7 @@ const lineModel = (name) =>
     .replace(/\[[^\]]*\]$/, '')
     .replace(/-\d{8}$/, '');
 
-// Counts the response `last` (`{ id, call, cold, model, tokens, start, thinking, lifetimeMs }`) in the calls, the
+// Counts the response `last` (`{ id, call, cold, model, tokens, start, thinking, lifetimeMs, cut, thinkingTokens, replyMs }`) in the calls, the
 // series, the minutes, the cold starts, the tokens by model and, when it logs its model, the
 // daily lines, at no cost, and the Trace lanes from `start`; `sign` -1 takes it back out, which
 // only the newest one can.
@@ -155,7 +156,7 @@ function count(state, last, sign) {
   if (last.model !== null) entryOf(state.models, last.model, () => ({ cost: null, tokens: 0 })).tokens += sign * last.tokens;
   if (state.insights && last.model !== null) noteCall(
       state.insights,
-      { ...last.call, start: last.start, end: last.call.t, model: lineModel(last.model), tokens: last.tokens, cost: 0, cold: last.cold, thinking: last.thinking, lifetimeMs: last.lifetimeMs, writeCost: null },
+      { ...last.call, start: last.start, end: last.call.t, model: lineModel(last.model), tokens: last.tokens, cost: 0, cold: last.cold, thinking: last.thinking, lifetimeMs: last.lifetimeMs, writeCost: null, failure: null, aborted: false, recovered: false, cut: last.cut, thinkingTokens: last.thinkingTokens, replyMs: last.replyMs },
       sign,
     );
 }
@@ -235,7 +236,21 @@ function fold(state, entries, opts) {
           const model = typeof message.model === 'string' ? message.model : null;
           // the reasoning level the entry logs (`effort`) and the lifetime of the cache it wrote
           const thinking = typeof entry.effort === 'string' ? entry.effort : null;
-          s.last = { id, call, cold, model, tokens: tokenCount(responseTokens(message)), start, thinking, lifetimeMs: lifetimeOf(message.usage) };
+          // the thinking tokens its usage logs (none: null), and its reply time, from what it answers to its newest block
+          const thinkingTokens = message.usage?.output_tokens_details?.thinking_tokens;
+          s.last = {
+            id,
+            call,
+            cold,
+            model,
+            tokens: tokenCount(responseTokens(message)),
+            start,
+            thinking,
+            lifetimeMs: lifetimeOf(message.usage),
+            cut: message.stop_reason === 'max_tokens',
+            thinkingTokens: isNumber(thinkingTokens) ? thinkingTokens : null,
+            replyMs: time - start,
+          };
           count(s, s.last, 1);
         }
         for (const part of Array.isArray(message.content) ? message.content : []) {
@@ -246,6 +261,10 @@ function fold(state, entries, opts) {
         }
         if (s.insights && typeof message.stop_reason === 'string' && message.stop_reason !== 'tool_use') noteTurnEnd(s.insights, time);
         if (s.logged) s.logged.stale = true;
+      }
+      // what Claude Code writes in place of a reply that failed: a failed call of the model of the call before it
+      if (entry.type === 'assistant' && message.model === SYNTHETIC_MODEL && entry.isApiErrorMessage === true && s.insights) {
+        noteFailure(s.insights, { end: time, model: s.last?.model ? lineModel(s.last.model) : 'n/a', failure: failureType({ status: entry.apiErrorStatus }) });
       }
       if (entry.type === 'user' && Array.isArray(message.content)) {
         for (const part of message.content) {
