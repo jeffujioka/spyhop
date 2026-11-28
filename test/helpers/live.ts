@@ -494,15 +494,23 @@ const claudeDir = (home: string, path: string) => join(home, '.claude/projects',
 
 // A Claude Code session of the folder `path`, which it records, with `calls` of `model` and
 // `compactions` (automatic ones), in the order of their times; `cost`: the session's total cost,
-// USD, which Claude Code logs after them, none when not given.
+// USD, which Claude Code logs after them, none when not given, and `modelUsage` the cost, USD, its
+// `cost-state` gives each model, none when not given.
 export function claudeSession(
   home: string,
   path: string,
-  { calls, compactions = [], model = 'claude-opus-4-6', cost }: { calls: ClaudeCall[]; compactions?: Compaction[]; model?: string; cost?: number },
+  {
+    calls,
+    compactions = [],
+    model = 'claude-opus-4-6',
+    cost,
+    modelUsage,
+  }: { calls: ClaudeCall[]; compactions?: Compaction[]; model?: string; cost?: number; modelUsage?: Record<string, number> },
 ) {
   const dir = claudeDir(home, path);
   mkdirSync(dir, { recursive: true });
-  const logged = cost === undefined ? [] : [{ type: 'cost-state', sessionId: 'c1', totalCostUSD: cost }];
+  const usage = modelUsage && { modelUsage: Object.fromEntries(Object.entries(modelUsage).map(([name, costUSD]) => [name, { costUSD }])) };
+  const logged = cost === undefined ? [] : [{ type: 'cost-state', sessionId: 'c1', totalCostUSD: cost, ...usage }];
   const lines = [...claudeEntries(path, calls, compactions, model), ...logged];
   writeFileSync(join(dir, 'c1.jsonl'), lines.map((line) => `${JSON.stringify(line)}\n`).join(''));
 }

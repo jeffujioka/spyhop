@@ -28,7 +28,6 @@ export function sessionDetail(card: BuiltCard, { home, host, view }: { home: str
   const { cost, tokens, reading, counted } = sumsOf(card);
   // Claude Code logs no cost per model call, so nothing of its cost is split
   const claude = card.harness === 'claude';
-  const by = claude ? 'tokens' : 'cost';
   const subCost = claude || reading ? NA : sumOf(counted.map((sub) => spentOf(sub, 'costUsd')));
   const subSeries = counted.map((sub) => seriesOf(sub.stats));
   // the contexts the session reached: after a model call, and before a compaction
@@ -80,7 +79,7 @@ export function sessionDetail(card: BuiltCard, { home, host, view }: { home: str
       agents: card.subAgents!.agents.map((sub) => subAgentView(sub, claude)),
     },
     tools: series && toolsOf(series.tools),
-    models: { by, rows: modelRows(series, counted, by) },
+    models: { by: 'cost', rows: modelRows(series, counted) },
     session: {
       startedMs: stats.firstMessageMs,
       thinking: stats.thinkingLevel,
@@ -116,15 +115,17 @@ function subAgentView({ name, kind, model, task, running, stats, start, end }: N
   };
 }
 
-// The cost, or the tokens (`by`), by model over the session's own series and those of the
-// sub-agents `counted`, each with what used it: the main agent, how many sub-agents, and the
-// session's side calls. The largest first, those that cannot be read last; the main agent's models
-// first among equals. A model a harness does not say who used is its agent's own.
-function modelRows(series: SessionSeries | null, counted: { stats: CardStats }[], by: 'cost' | 'tokens'): SessionView['models']['rows'] {
+// The cost by model over the session's own series and those of the sub-agents `counted`, each
+// with what used it: the main agent, how many sub-agents, and the session's side calls; for
+// Claude Code, which logs no cost per model call, the cost its newest `cost-state` gives each
+// model (`costs`), its sub-agents' included, with nothing said of what used it, and else its
+// models at n/a. The largest first, those that cannot be read last; the main agent's models first
+// among equals. A model a harness does not say who used is its agent's own.
+function modelRows(series: SessionSeries | null, counted: { stats: CardStats }[]): SessionView['models']['rows'] {
   const rows = new Map<string, SessionView['models']['rows'][number]>();
   const add = (models: SessionSeries['models'], own: boolean) => {
-    for (const [model, { cost, tokens, main: used = true, side = false }] of Object.entries(models)) {
-      const value: Num = by === 'tokens' ? tokens : (cost ?? NA);
+    for (const [model, { cost, main: used = true, side = false }] of Object.entries(models)) {
+      const value: Num = cost ?? NA;
       const main = own && used;
       const subAgents = !own && used ? 1 : 0;
       const row = rows.get(model);
@@ -132,8 +133,12 @@ function modelRows(series: SessionSeries | null, counted: { stats: CardStats }[]
       else Object.assign(row, { main: row.main || main, subAgents: row.subAgents + subAgents, sideCalls: row.sideCalls || (own && side), value: sumOf([row.value, value]) });
     }
   };
-  if (series) add(series.models, true);
-  for (const sub of counted) add(seriesOf(sub.stats)?.models ?? {}, false);
+  if (series?.costs) {
+    for (const [model, value] of Object.entries(series.costs)) rows.set(model, { model, main: false, subAgents: 0, sideCalls: false, value });
+  } else {
+    if (series) add(series.models, true);
+    for (const sub of counted) add(seriesOf(sub.stats)?.models ?? {}, false);
+  }
   return [...rows.values()].sort((a, b) => (b.value === NA ? -1 : b.value) - (a.value === NA ? -1 : a.value));
 }
 

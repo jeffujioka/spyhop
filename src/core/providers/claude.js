@@ -64,7 +64,8 @@ function emptyState() {
     // responses that logged a cache read, and those whose cache read was above 0
     cacheReads: tally(),
     cacheHits: tally(),
-    // the latest `cost-state` entry: { usd, stale }, stale once a response came after it
+    // the latest `cost-state` entry: { usd, stale, models }, stale once a response came after it;
+    // `models` the cost, USD, by model of the latest one that gives it, its sub-agents' included
     logged: undefined,
     compactions: 0,
     // a `compact_boundary` whose trigger is neither `manual` nor `auto` was seen: it may be an
@@ -186,7 +187,7 @@ function fold(state, entries) {
         }
       }
     } else if (entry.type === 'cost-state') {
-      s.logged = { usd: entry.totalCostUSD, stale: false };
+      s.logged = { usd: entry.totalCostUSD, stale: false, models: costByModel(entry.modelUsage) ?? s.logged?.models };
     } else if (entry.type === 'system' && entry.subtype === 'compact_boundary') {
       const { trigger, preTokens, postTokens } = entry.compactMetadata ?? {};
       if (trigger === 'auto') s.compactions += 1;
@@ -296,6 +297,15 @@ function cost({ logged }) {
   return logged && !logged.stale && isNumber(logged.usd) ? { costUsd: logged.usd } : {};
 }
 
+// The cost, USD, a `cost-state`'s `modelUsage` gives each model (`modelUsage[model].costUSD`,
+// where it is a number); undefined when it gives none. A fold replaces it whole, never changes it,
+// so the `detail` of `readStats` holds it as it is.
+function costByModel(modelUsage) {
+  if (!modelUsage || typeof modelUsage !== 'object') return undefined;
+  const costs = Object.entries(modelUsage).flatMap(([model, usage]) => (isNumber(usage?.costUSD) ? [[model, usage.costUSD]] : []));
+  return costs.length > 0 ? Object.fromEntries(costs) : undefined;
+}
+
 // Token burn from the session's own duration and token figures. A cost per hour would divide
 // a total logged at save time by the time read here, so there is none.
 const burn = (state) => burnRate({ ...duration(state), ...tokens(state) });
@@ -338,7 +348,7 @@ export const claudeProvider = {
       ...(total ? TOTALS.map((figure) => figure(total)) : []),
       ...(total ? [autocompactions(total, whole), wholeSession(total, whole)] : []),
       ...LATEST.map((figure) => figure(tail, now)),
-      { detail: total && whole ? detailOf(total) : null },
+      { detail: total && whole ? { ...detailOf(total), costs: total.logged?.models ?? null } : null },
     );
   },
 };

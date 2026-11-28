@@ -127,10 +127,6 @@ test('Failed tool call of a Claude Code session', async () => {
   const [section] = parts(html, 'data-part', 'tools');
   assert.equal(text(parts(section, 'class', 'row head')[0]), 'Tools 3 tool calls · 1 failed');
   assert.deepEqual(rows(html, 'tools'), ['Bash 3 1 failed']);
-  // Claude Code logs no cost per model call: its models by tokens
-  assert.deepEqual(rows(html, 'models'), ['claude-opus-4-6 · main agent · 3,030 tokens']);
-  // the model's name is text, in the text font, and its tokens a figure
-  assert.equal(textOutsideFigures(parts(html, 'data-part', 'models')[0]), 'Models by tokens claude-opus-4-6 · main agent · tokens');
 });
 
 test('Session section of a local omp session', async () => {

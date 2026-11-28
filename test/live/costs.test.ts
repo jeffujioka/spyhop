@@ -1,13 +1,14 @@
-// What an omp or an opencode session costs on its session screen: omp's side calls (its
-// `model_usage` entries) counted in its cost but not as model calls, and the Copilot calls of
-// either priced from the Copilot price table (src/core/copilot-prices.js), which the tests set
-// (test/helpers/prices.ts). Drawn from the real worker's session answer over omp session files or
-// opencode's database under a temporary home (`sessionOf`, test/helpers/live.ts), and read through
-// the markup's conventions (test/helpers/markup.ts).
+// What an omp, an opencode or a Claude Code session costs on its session screen: omp's side calls
+// (its `model_usage` entries) counted in its cost but not as model calls, the Copilot calls of omp
+// or opencode priced from the Copilot price table (src/core/copilot-prices.js), which the tests set
+// (test/helpers/prices.ts), and Claude Code's cost by model from its newest `cost-state`. Drawn
+// from the real worker's session answer over omp or Claude Code session files or opencode's
+// database under a temporary home (`sessionOf`, test/helpers/live.ts), and read through the
+// markup's conventions (test/helpers/markup.ts).
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { NOW, opencodeSession, type OpencodeCall, workspace } from '../helpers/agent-cards.ts';
-import { FIX, folderOf, ompSession, sessionOf, type OmpCall } from '../helpers/live.ts';
+import { claudeSession, claudeSubAgent, FIX, folderOf, ompSession, sessionOf, type OmpCall } from '../helpers/live.ts';
 import { figure, parts, text } from '../helpers/markup.ts';
 import { withCopilotPrices } from '../helpers/prices.ts';
 
@@ -108,4 +109,23 @@ test('an opencode session with a Copilot call costs the sum of its calls', async
   const { html } = await opencodeScreenOf([{ uncached: 10_000, read: 100_000, write: 16_000, output: 2_000 }], 3);
 
   assert.equal(figure(html, 'cost'), '$0.25');
+});
+
+test('Models section of a Claude Code session', async () => {
+  const { html } = await sessionOf([{ project: 'web', name: 'main', agents: ['working'], harness: 'claude' }], {
+    prepare: (home) => {
+      const path = workspace(home, 'web-main');
+      claudeSession(home, path, {
+        calls: [{ at: NOW - 2 * MINUTE, uncached: 500_000 }],
+        model: 'claude-opus-5-5[1m]',
+        cost: 6.22,
+        modelUsage: { 'claude-sonnet-5': 0.77, 'claude-haiku-4-5-20251001': 0.21, 'claude-opus-5-5[1m]': 5.24 },
+      });
+      claudeSubAgent(home, path, 'a1', { calls: [{ at: NOW - MINUTE, uncached: 74_880 }], model: 'claude-sonnet-5' });
+    },
+  });
+
+  assert.deepEqual(models(html), ['claude-opus-5-5[1m] · $5.24', 'claude-sonnet-5 · $0.77', 'claude-haiku-4-5-20251001 · $0.21']);
+  const [bar] = parts(parts(html, 'data-part', 'subagents')[0], 'data-agent');
+  assert.equal(text(parts(bar, 'class', 'row label')[0]).split(' · ').at(-1), 'n/a');
 });

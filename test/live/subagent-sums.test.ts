@@ -172,7 +172,9 @@ test('Main agent and a sub-agent on one model', async () => {
   assert.deepEqual(rows(html, 'models'), ['anthropic/claude-opus-5.5-1m · main agent and 1 sub-agent · $1.50']);
 });
 
-test('Tokens by model for Claude Code', async () => {
+// A guard of the n/a rows, no scenario of the spec: a Claude Code session whose `cost-state`
+// gives no cost by model shows its models and those of its sub-agents, by what used them, at n/a.
+test('Claude Code models without a cost by model', async () => {
   const { html } = await sessionOf([{ project: 'web', name: 'main', agents: ['working'], harness: 'claude' }], {
     prepare: (home) => {
       const path = workspace(home, 'web-main');
@@ -181,6 +183,5 @@ test('Tokens by model for Claude Code', async () => {
     },
   });
 
-  assert.deepEqual(rows(html, 'models'), ['claude-opus-4-6 · main agent · 500,000 tokens', 'haiku · 1 sub-agent · 74,880 tokens']);
-  assert.doesNotMatch(text(parts(html, 'data-part', 'models')[0]), /\$/);
+  assert.deepEqual(rows(html, 'models'), ['claude-opus-4-6 · main agent · n/a', 'haiku · 1 sub-agent · n/a']);
 });

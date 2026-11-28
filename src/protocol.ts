@@ -114,8 +114,9 @@ export type SubAgentView = { name: string; kind: string; model: string; task: st
 // time, `cost.noCall` what the harness logged of the session's own cost without a model call
 // (null when nothing); `subAgents`: the session's sub-agents, in the order they started, null
 // without any;
-// `models`: the models of the session and its sub-agents by what the harness logs of them, each
-// with what used it: the main agent, how many sub-agents, and the session's side calls;
+// `models`: the cost of the session and its sub-agents by model, each with what used it where the
+// harness says (Claude Code does not): the main agent, how many sub-agents, and the session's side
+// calls;
 // `session`: the Session section, `host` the Orca host's name when it is not this computer.
 export type SessionView = {
   card: CardView;
@@ -135,7 +136,7 @@ export type SessionView = {
   cost: { harness: string; total: Num; perHour: Num; own: { t: number; v: number }[] | 'n/a'; noCall: number | null; sub: { t: number; v: number }[] | 'n/a' } | null;
   subAgents: { running: Num; total: number; cost: Num; agents: SubAgentView[] } | null;
   tools: { calls: number; failed: number; byTool: { name: string; calls: number; failed: number }[] } | null;
-  models: { by: 'cost' | 'tokens'; rows: { model: string; main: boolean; subAgents: number; sideCalls: boolean; value: Num }[] };
+  models: { by: 'cost'; rows: { model: string; main: boolean; subAgents: number; sideCalls: boolean; value: Num }[] };
   session: { startedMs: Num; thinking: string; latencyMs: Num; premium: Num; branch: string | null; remote: string | null; host: string | null };
 };
 

@@ -39,8 +39,9 @@ export type OrcaAgent = {
 // tokens by model, with whether the file's own model calls (`main`) and its side calls (`side`)
 // used it (omp's; another harness's are its own model calls'), the agent kind and the model a
 // sub-agent's transcript records of itself (null: none recorded), the times of the file's first
-// and last entry (null: none), and the sums of its newest minutes (a Minute of
-// src/core/series.js each, oldest first).
+// and last entry (null: none), the sums of its newest minutes (a Minute of src/core/series.js
+// each, oldest first), and Claude Code's cost, USD, by model of its newest `cost-state` that gives
+// one, its sub-agents' included (`costs`; null: none; another harness has none).
 export type SessionSeries = {
   points: Point[];
   sides: Point[];
@@ -53,6 +54,7 @@ export type SessionSeries = {
   start: number | null;
   end: number | null;
   minutes: Minute[];
+  costs?: Record<string, number> | null;
 };
 
 // The model calls of one epoch minute `m` (src/core/series.js): their cost (null once one logged
