@@ -7,14 +7,16 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { afterEach, describe, test } from 'node:test';
-import { run, runBytes } from '../../src/exec.ts';
-import { createCatchUp } from '../../src/history/catch-up.ts';
+import { historyRowsQuery, sessionsIn } from '../../src/core/providers/opencode-sources.js';
+import { quote, run, runBytes } from '../../src/exec.ts';
+import { createCatchUp, PAGE_ROOTS } from '../../src/history/catch-up.ts';
 import { openStore, STORE_FILE, type Store } from '../../src/history/store.ts';
 import { expect } from '../core/helpers/expect.ts';
 import { NOW, opencodeSession } from '../helpers/agent-cards.ts';
 import { setEnv, useTempHome } from '../helpers/env.ts';
 import { caughtUp, storeOf } from '../helpers/history.ts';
 import { claudeSession, claudeSubAgent, mountOn, ompSession, ompSubAgent, spent } from '../helpers/live.ts';
+import { ZSTD_PIPE } from '../helpers/read-only.ts';
 
 let store: Store | undefined;
 afterEach(() => {
@@ -309,5 +311,15 @@ describe('session summaries', () => {
     await catchUp.run();
 
     expect(store.summary('local\0opencode\0ses_window')?.cost).toBeCloseTo(1200, 6);
+  });
+
+  // A guard of the remote runner, no scenario of the spec: a rebuild's query of a page of root
+  // sessions, over both of opencode's table generations, as the ssh line runs it compressed, stays
+  // well under Linux's limit of one argument (131,072 bytes).
+  test("a page of roots' query fits in one ssh argument", () => {
+    const roots = Array.from({ length: PAGE_ROOTS }, (_, i) => `ses_${String(i).padStart(26, '0')}`);
+    const query = historyRowsQuery(sessionsIn([{ name: 'session_v2' }, { name: 'session' }]), NOW, `${roots[0]}/u1`, 5000, roots);
+    const line = `${ZSTD_PIPE} ${['sqlite3', '-readonly', '-json', '/home/someone/.local/share/opencode/opencode.db', query].map(quote).join(' ')}`;
+    expect(line.length).toBeLessThan(64 * 1024);
   });
 });

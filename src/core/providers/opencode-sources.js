@@ -215,8 +215,9 @@ const HISTORY_COLUMNS = [
 /** @param {string[] | null} [roots] */
 export function historyRowsQuery(sessions, fromMs, afterId, limit, roots = null) {
   const from = Number(fromMs);
-  const inRoot = roots === null ? '' : ` AND tree.root IN (${listOf(roots)})`;
-  const after = (id) => (afterId === null ? `m.time_created >= ${from}${inRoot}` : `(m.time_created > ${from} OR (m.time_created = ${from} AND ${id} > ${literal(afterId)}))${inRoot}`);
+  // the trees of `roots` only, filtered once, where the tree starts
+  const inRoots = roots === null ? '' : ` AND id IN (${listOf(roots)})`;
+  const after = (id) => (afterId === null ? `m.time_created >= ${from}` : `(m.time_created > ${from} OR (m.time_created = ${from} AND ${id} > ${literal(afterId)}))`);
   // the row of `values` (column -> SQL), NULL in the columns it does not give
   const row = (values) => HISTORY_COLUMNS.map((name) => `${values[name] ?? 'NULL'} AS "${name}"`).join(', ');
   const json = (path, of = 'm.data') => `json_extract(${of}, '$.${path}')`;
@@ -279,7 +280,7 @@ export function historyRowsQuery(sessions, fromMs, afterId, limit, roots = null)
   const parts = { [BOTH]: [...current, ...legacy], [CURRENT]: current, [LEGACY]: legacy }[sessions];
   return (
     `WITH RECURSIVE s AS ${sessions}, tree(id, root, parent, title, directory, current) AS (` +
-    'SELECT id, id, NULL, title, directory, current FROM s WHERE parent_id IS NULL OR parent_id NOT IN (SELECT id FROM s) ' +
+    `SELECT id, id, NULL, title, directory, current FROM s WHERE (parent_id IS NULL OR parent_id NOT IN (SELECT id FROM s))${inRoots} ` +
     'UNION SELECT s.id, tree.root, s.parent_id, s.title, s.directory, s.current FROM s JOIN tree ON s.parent_id = tree.id) ' +
     `${parts.join(' UNION ALL ')} ORDER BY created, id LIMIT ${Number(limit)}`
   );

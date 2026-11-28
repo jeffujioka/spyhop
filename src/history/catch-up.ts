@@ -113,7 +113,7 @@ export const OPENCODE_OPEN_DAYS = 10;
 const PAGE_ROWS = 5000;
 
 // How many root sessions one query of a rebuild of their rows reads, so that its text stays short.
-const PAGE_ROOTS = 500;
+export const PAGE_ROOTS = 500;
 
 // The script, run as `sh -c <script> sh <program> <args…>`, that prints the program's output
 // compressed by `zstd` and exits with the program's exit code: the code goes out of the pipe on

@@ -50,7 +50,7 @@ export type BytesResult = { code: number; stdout: Buffer; stderr: string };
 export type RunBytes = (command: string, args: string[], options?: RunOptions) => Promise<BytesResult>;
 
 // A word as the remote POSIX shell reads it back unchanged.
-const quote = (word: string) => `'${word.replaceAll("'", `'\\''`)}'`;
+export const quote = (word: string) => `'${word.replaceAll("'", `'\\''`)}'`;
 
 // alias, after `owned ` for its ssh calls with spyhop's options for reusing connections and
 // `shared ` for those without -> the limit those programs run under. An alias whose settings
