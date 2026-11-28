@@ -23,8 +23,8 @@
 // `detailOf(state)` gives the series of the whole file (src/core/series.js), from the same state,
 // with the agent kind and the model a sub-agent's `session_init` entry records, and the times of
 // the file's first and last entry, a sub-agent's start and end. Asked with `{ insights: true }`
-// when the state starts, `fold` also notes each model call in the state's daily lines
-// (src/core/insights.js).
+// when the state starts, `fold` also notes each model call that logs its model in the state's
+// daily lines (src/core/insights.js), as `models` counts only such calls.
 
 import { add, parseEntries, tally } from './jsonl.js';
 import { burnRate, cacheRate, isNumber, tokenCount, wholeSession } from './shared.js';
@@ -164,8 +164,9 @@ function fold(state, entries, opts) {
             s.cold.cost = addCost(s.cold.cost, isNumber(usage.cost?.cacheWrite) ? usage.cost.cacheWrite : null);
           }
           s.calls += 1;
-          if (s.insights && isNumber(time)) {
-            const { provider, model } = e.message;
+          // a call that logs no model is in no daily line: no line is filed under a made-up model
+          const { provider, model } = e.message;
+          if (s.insights && isNumber(time) && typeof model === 'string') {
             noteCall(s.insights, {
               ...call,
               end: time,

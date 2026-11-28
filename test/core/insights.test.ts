@@ -45,6 +45,16 @@ describe('insights: day buckets of model calls', () => {
     expect(takeLines(bare.insights)[0].model).toBe('claude-opus-5.5');
   });
 
+  test('a call that logs no model is filed under no model', () => {
+    const state = fold([
+      call('2026-11-27T12:00:00.000Z', 1, { provider: 'p', model: undefined }),
+      call('2026-11-27T12:01:00.000Z', 1, { provider: undefined, model: undefined }),
+      call('2026-11-27T12:02:00.000Z', 2),
+    ]);
+
+    expect(takeLines(state.insights).map((line) => [line.model, line.figures.cost])).toEqual([['p/m', 2]]);
+  });
+
   test('a call of no logged cost counts in costNa', () => {
     const state = fold([call('2026-11-27T12:00:00.000Z', 2), call('2026-11-27T12:01:00.000Z', null)]);
     const [line] = takeLines(state.insights);
