@@ -35,12 +35,11 @@ READ_REFRESHES=30
 REFRESH_WAIT=3
 # The history store the worker's catch-ups fill (src/history/store.ts).
 STORE=$HOME/.local/state/spyhop/insights.db
-# The most a catch-up of a store already filled takes, in seconds: the meta `catch-ups` grows once
-# every Orca host has been read.
-CATCH_UP_WAIT=300
-# The most a first catch-up takes, which reads every Orca host whole: 16.5 minutes on the Mac this
-# was built on (README, Refresh).
-FIRST_CATCH_UP_WAIT=1800
+# The most a catch-up takes, in seconds, whether the store is missing or filled: a store left by a
+# re-read of the history or a change of its host keys is read again from every Orca host whole,
+# which took about 16 minutes on the Mac this was built on (README, Refresh). The wait ends once
+# the meta `catch-ups` grows, so the bound only caps a catch-up that never ends.
+CATCH_UP_WAIT=1800
 
 work=$(mktemp -d)
 watch=
@@ -97,24 +96,22 @@ run "$work/check.json" plugin check . --json || status=$?
 [ -n "$dry" ] || record "$work/check.json" check "$status" 'a.result.panels.length > 0'
 
 # The catch-ups the history store counts in its meta `catch-ups` before the dev plugin is loaded,
-# 0 while it counts none: the check waits for one more, the dev plugin's own, for CATCH_UP_WAIT,
-# or FIRST_CATCH_UP_WAIT while the store is missing. `sqlite3 -readonly` cannot open a store in
-# WAL mode that no worker holds, which has no `-shm` file, so its count is then read from the file
-# alone (`immutable=1`), where a worker that closed the store left every change.
+# 0 while it counts none: the check waits for one more, the dev plugin's own, for CATCH_UP_WAIT.
+# `sqlite3 -readonly` cannot open a store in WAL mode that no worker holds, which has no `-shm`
+# file, so its count is then read from the file alone (`immutable=1`), where a worker that closed
+# the store left every change.
 count="SELECT value FROM meta WHERE key = 'catch-ups'"
 catch_ups() {
   sqlite3 -readonly "$STORE" "$count" 2>/dev/null || sqlite3 -readonly "file:$STORE?immutable=1" "$count" 2>/dev/null
 }
 printf '+ %s\n' "sqlite3 -readonly $STORE \"$count\""
 before=
-wait=$CATCH_UP_WAIT
 if [ -n "$dry" ]; then
   :
 elif [ ! -e "$STORE" ]; then
-  wait=$FIRST_CATCH_UP_WAIT
-  echo "frame check: no history store yet; waiting up to $FIRST_CATCH_UP_WAIT s for the first catch-up, which reads every Orca host"
+  echo "frame check: no history store yet; waiting up to $CATCH_UP_WAIT s for the first catch-up, which reads every Orca host"
 elif before=$(catch_ups); then
-  echo "frame check: the history store counts ${before:-0} catch-ups; waiting for one more"
+  echo "frame check: the history store counts ${before:-0} catch-ups; waiting up to $CATCH_UP_WAIT s for one more"
 else
   echo "frame check: cannot read the catch-ups of the history store $STORE" >&2
   exit 1
@@ -214,7 +211,7 @@ EOF
 # Orca's limit with a cost that is a number or `n/a`, and the store is not empty.
 printf '+ %s\n' "sqlite3 -readonly $STORE \"$count\""
 if [ -z "$dry" ]; then
-  deadline=$((SECONDS + wait))
+  deadline=$((SECONDS + CATCH_UP_WAIT))
   # sqlite3 fails while the store is missing or locked, and prints nothing before a catch-up ends
   until [ "$(catch_ups || true)" -gt "$before" ] 2>/dev/null; do
     if [ "$SECONDS" -ge "$deadline" ]; then
@@ -222,7 +219,7 @@ if [ -z "$dry" ]; then
       if ! catch_ups > /dev/null; then
         echo "frame check: cannot open the history store $STORE" >&2
       else
-        echo "frame check: no catch-up of the history store $STORE ended within $wait s" >&2
+        echo "frame check: no catch-up of the history store $STORE ended within $CATCH_UP_WAIT s" >&2
       fi
       exit 1
     fi

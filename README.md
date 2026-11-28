@@ -443,8 +443,9 @@ the panel closed.
   opens the Live panel, asks the worker for the fleet and then
   for the session of each of its cards with `orca plugin dev request` (each answer under 1 MiB,
   each series at most 120 points, every card's sub-agents read within 30 refreshes), waits up
-  to 300 seconds for the restarted worker's own catch-up to end, or up to 30 minutes when there is
-  no store yet, as the first catch-up reads every Orca host whole (see Refresh), asks it for the
+  to 30 minutes for the restarted worker's own catch-up to end, as long whether the store is
+  missing or filled, as a missing store or one left by a re-read reads every Orca host whole (see
+  Refresh; the wait ends as soon as the catch-up does), asks it for the
   Spend tab over a day and a year (each answer under 1 MiB, its cost a number or `n/a`) and
   checks that the store is not empty. It then takes one shot it does not keep, which shows the
   panel: a panel opened while Orca's window is hidden asks the worker for nothing until shown.

@@ -111,14 +111,15 @@ test('a missing store waits for the first catch-up, and another host that cannot
   assert.equal(shots[0], 'plugin shot local.spyhop --panel spyhop --width 300 --json');
 });
 
-test('a store sqlite3 cannot open read-only is counted from its file', async () => {
+test('a store sqlite3 cannot open read-only is counted from its file, waiting as long as for a missing one', async () => {
   const home = tempHome();
   countCatchUps(home, 2);
 
   const run = await wholeCheck(home, [], 3);
 
   assert.equal(run.status, 0, run.stderr);
-  assert.ok(run.stdout.includes('frame check: the history store counts 2 catch-ups; waiting for one more'), run.stdout);
+  // a filled store may be left by a re-read of every host, so it gets the first catch-up's bound
+  assert.ok(run.stdout.includes('frame check: the history store counts 2 catch-ups; waiting up to 1800 s for one more'), run.stdout);
 });
 
 test('a catch-up that cannot read a file of this computer fails', async () => {
