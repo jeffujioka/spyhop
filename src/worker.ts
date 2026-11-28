@@ -21,7 +21,10 @@
 // panel is open, and for the palette command `spyhop.show`, which shows the panel. Apart from
 // them, a catch-up reads this computer's omp session files into the history store
 // (src/history/catch-up.ts) when the worker starts and every CATCH_UP_MS after.
-// `spyhop.range` answers a range tab from the history store as it is then (src/history/views.ts).
+// `spyhop.range` answers a range tab from the history store (src/history/views.ts): at once while
+// a catch-up runs, else after a catch-up when the last one started RANGE_REFRESH_MS ago or more.
+// A history store that cannot be opened is logged once; no catch-up runs then, and each range
+// tab's figures are n/a, while the fleet and the sessions are answered as ever.
 // `spyhop.focus` focuses a card's pane
 // in this computer's Orca window: an agent on this computer or an SSH workspace by Orca's
 // `terminal.focus`, one on a paired Orca server by `orca terminal switch` to the server's
@@ -31,14 +34,14 @@ import { homedir } from 'node:os';
 import type { OrcaWorkerApi } from 'orca/worker';
 import { type BuiltCard, createAgentCards, type OrcaAgent, sameButStates } from './agent-cards.ts';
 import { cardView } from './card-view.ts';
-import { CATCH_UP_MS, decodeScans, encodeScans, keptPartsOf } from './core/refresh.js';
+import { CATCH_UP_MS, decodeScans, encodeScans, keptPartsOf, RANGE_REFRESH_MS } from './core/refresh.js';
 import { createTtlCache } from './core/ttl-cache.js';
 import { run } from './exec.ts';
 import { attentionRows, burnCard, type FleetAgent, groupCards, LOCAL, stateCounts } from './fleet.ts';
 import { orca as cli, type HostLists, listHosts, readServerAgents, type RemoteHost, remoteHosts, type ServerAgent } from './hosts.ts';
-import type { CardView, FleetAnswer, HostGroup, Pane, RangeAnswer, SessionAnswer } from './protocol.ts';
+import type { CardView, FleetAnswer, HostGroup, Pane, RangeAnswer, SessionAnswer, SpendView } from './protocol.ts';
 import { type CatchUp, createCatchUp } from './history/catch-up.ts';
-import { openStore } from './history/store.ts';
+import { openStore, type Store } from './history/store.ts';
 import { spendView } from './history/views.ts';
 import { sessionDetail } from './session-detail.ts';
 
@@ -52,6 +55,14 @@ const KEPT_KEY = 'session-totals';
 const keptKey = (part: number) => (part === 0 ? KEPT_KEY : `${KEPT_KEY}.${part}`);
 const KEPT_WRITE_MS = 30 * 1000;
 
+// The Spend tab's view when the history store cannot be opened.
+const SPEND_NA: SpendView = { cost: 'n/a', tokens: 'n/a', calls: 'n/a', chart: null };
+
+// Runs `catchUp`, or waits for the one running; a run that fails is logged, and resolves.
+function caughtUp(catchUp: CatchUp, log: (message: string) => void) {
+  return catchUp.run().catch((error) => log(`spyhop: catch-up failed: ${(error as Error).message}`));
+}
+
 // Runs `catchUp` at once and again CATCH_UP_MS after each run started, whether the panel is open
 // or not; a run that fails is logged. Returns the stop: no further run starts, and it resolves
 // once the running one has ended.
@@ -59,7 +70,7 @@ export function scheduleCatchUps(catchUp: CatchUp, log: (message: string) => voi
   let timer: NodeJS.Timeout;
   const next = () => {
     timer = setTimeout(next, CATCH_UP_MS);
-    catchUp.run().catch((error) => log(`spyhop: catch-up failed: ${(error as Error).message}`));
+    caughtUp(catchUp, log);
   };
   next();
   return async () => {
@@ -78,13 +89,24 @@ export async function deactivate() {
 
 export default function activate(orca: OrcaWorkerApi): void {
   const home = homedir();
-  // The history store, which the catch-ups fill from the worker's start (src/history/catch-up.ts).
-  const store = openStore(home);
-  const stopCatchUps = scheduleCatchUps(createCatchUp({ run, store, home, log: (message) => orca.log(message) }), (message) => orca.log(message));
-  ending = async () => {
-    await stopCatchUps();
-    store.close();
-  };
+  const log = (message: string) => orca.log(message);
+  // The history store, which the catch-ups fill from the worker's start (src/history/catch-up.ts),
+  // and its catch-up; both null when it cannot be opened.
+  let history: { store: Store; catchUp: CatchUp } | null = null;
+  try {
+    const store = openStore(home);
+    history = { store, catchUp: createCatchUp({ run, store, home, log }) };
+  } catch (error) {
+    log(`spyhop: cannot open the history store: ${(error as Error).message}`);
+  }
+  if (history) {
+    const { store, catchUp } = history;
+    const stopCatchUps = scheduleCatchUps(catchUp, log);
+    ending = async () => {
+      await stopCatchUps();
+      store.close();
+    };
+  }
   // The card builder, kept for the worker's life: it keeps the state of its session reads
   // between builds, which start from the scans the storage holds. A storage that cannot be read
   // (the capability not granted), or holds anything but this version's kept scans, gives none.
@@ -274,12 +296,12 @@ export default function activate(orca: OrcaWorkerApi): void {
     return { request, session: sessionDetail(card, { home, host, view: views.get(id)!, now: Date.now() }) };
   });
 
-  orca.panels.handle('spyhop.range', async ({ request, tab, range }): Promise<RangeAnswer> => ({
-    request,
-    tab,
-    range,
-    spend: tab === 'spend' ? spendView(store, range, Date.now()) : null,
-  }));
+  orca.panels.handle('spyhop.range', async ({ request, tab, range }): Promise<RangeAnswer> => {
+    if (!history) return { request, tab, range, spend: tab === 'spend' ? SPEND_NA : null };
+    const { store, catchUp } = history;
+    if (!catchUp.running() && Date.now() - (catchUp.startedMs() ?? -Infinity) >= RANGE_REFRESH_MS) await caughtUp(catchUp, log);
+    return { request, tab, range, spend: tab === 'spend' ? spendView(store, range, Date.now()) : null };
+  });
 
   orca.panels.handle('spyhop.focus', async (pane: Pane) => {
     try {

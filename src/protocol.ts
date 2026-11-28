@@ -153,8 +153,9 @@ export type RangePoint = { key: string; v: Num };
 
 // The Spend tab of a range (src/history/views.ts), over every session the history store holds,
 // sub-agents included: its cost (n/a when a model call of it logged none), tokens and model calls,
-// and its cost by day or month, null for Day.
-export type SpendView = { cost: Num; tokens: Num; calls: number; chart: RangePoint[] | null };
+// and its cost by day or month, null for Day; every figure n/a, and no chart, when the store
+// cannot be opened.
+export type SpendView = { cost: Num; tokens: Num; calls: Num; chart: RangePoint[] | null };
 
 // The range tab `tab` over `range`, as the history store holds it: the Spend tab's view when it is
 // the Spend tab, else null; `request`: the panel's number of the request.

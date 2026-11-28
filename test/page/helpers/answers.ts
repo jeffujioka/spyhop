@@ -4,9 +4,10 @@
 // of its cards, with the charts it gives. A test changes its fleet between two refreshes by
 // changing what `fleet` returns. Each fleet answer's cards have been in their state as many
 // minutes as the request's number, so that a test sees which answer the page drew last: the
-// answer to the request 3 reads `3m` on each card.
+// answer to the request 3 reads `3m` on each card. A range tab is answered with the Spend tab a
+// test gives for its range, and with none for a range it gives none of.
 import { MINUTE_MS } from '../../../src/core/series.js';
-import type { AttentionRow, BurnCard, CardView, FleetAnswer, SessionAnswer, SessionView } from '../../../src/protocol.ts';
+import type { AttentionRow, BurnCard, CardView, FleetAnswer, Range, RangeAnswer, RangeTab, SessionAnswer, SessionView, SpendView } from '../../../src/protocol.ts';
 import type { Answers } from './orca.ts';
 
 export const FIX = 'Fix the login bug';
@@ -78,8 +79,9 @@ function session(of: CardView): SessionView {
 
 // The worker's answers over the fleet `fleet` returns at each request: the fleet, and the session
 // of each of its cards, with what the fleet gives of it (null, as for an agent Orca no longer
-// lists, for a card not in it).
-export function answersOf(fleet: () => Fleet): Answers {
+// lists, for a card not in it); and each range tab, the Spend tab with what `spend` gives of its
+// range.
+export function answersOf(fleet: () => Fleet, spend: Partial<Record<Range, SpendView>> = {}): Answers {
   return {
     'spyhop.fleet': ({ request }): FleetAnswer => fleetAnswer(request as number, fleet()),
     'spyhop.session': ({ request, card: id }): SessionAnswer => {
@@ -87,5 +89,11 @@ export function answersOf(fleet: () => Fleet): Answers {
       const of = cards.find((found) => found.id === id);
       return { request: request as number, session: of ? { ...session(of), ...sessions?.[of.id] } : null };
     },
+    'spyhop.range': ({ request, tab, range }): RangeAnswer => ({
+      request: request as number,
+      tab: tab as RangeTab,
+      range: range as Range,
+      spend: tab === 'spend' ? (spend[range as Range] ?? null) : null,
+    }),
   };
 }

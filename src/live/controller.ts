@@ -1,8 +1,9 @@
-// The live panel's controller: the screen it draws, the fleet or one session's, and the refresh
-// loop that feeds it, with no DOM (src/panel.ts is the page's glue). While shown it asks the
-// worker for what the screen draws, the fleet or the session, now and then REFRESH_INTERVAL_MS
-// after each ask started, or at its answer when that came later, never two asks at once, and asks
-// nothing while hidden or once closed. During a fleet ask it draws each Orca host's group the
+// The live panel's controller: the screen it draws, the fleet, one session's or a range tab's,
+// and the refresh loop that feeds it, with no DOM (src/panel.ts is the page's glue). While shown
+// it asks the worker for what the screen draws, the fleet or the session REFRESH_INTERVAL_MS and a
+// range tab RANGE_REFRESH_MS after each ask started, or at its answer when that came later, never
+// two asks at once but for one a press of a tab or a range left undrawn, and asks nothing while
+// hidden or once closed. During a fleet ask it draws each Orca host's group the
 // worker posts for it (`spyhop.group`) in the place of that host's drawn group; the whole answer
 // then replaces the groups and is kept as the last whole fleet, the only source of the header's
 // counts. Pressing a card or a folded line draws that session's screen at once, from the fleet's
@@ -10,18 +11,24 @@
 // the fleet the same way, as does a session answer that says Orca no longer lists the agent. Show
 // all lists every sub-agent of the open session until the screen changes. Focus
 // asks the worker to focus the pane of the open session's agent; its answer, and its failure,
-// change nothing drawn. An answer is drawn only on the screen, and for the card, it was asked for.
+// change nothing drawn. The Live tab draws the last fleet, a range tab or range draws that tab
+// over the range at once, and each asks for what it draws at once, the answer of an ask out then
+// left undrawn. The range is Day when the controller starts, and a range tab keeps the one pressed
+// last. An answer is drawn only on the screen, the card, the tab and the range it was asked for.
 // A change of Orca's theme draws nothing: the stylesheet's variables follow it in place. A failed
 // answer keeps what is drawn; a draw that fails is left uncaught, for Orca to log as the frame's
-// error. Each drawing says whether it is of the screen drawn before it, the fleet or the session
-// of the same card, so that the page keeps its scroll position across a refresh and starts a new
-// screen at the top. Its only ways out are `frame.plugin.request` and `draw(html, drawing)`.
-import { REFRESH_INTERVAL_MS } from '../core/refresh.js';
+// error. Each drawing says whether it is of the screen drawn before it, the fleet, the session
+// of the same card or the same range tab, so that the page keeps its scroll position and focus
+// across a refresh and starts a new screen at the top. Its only ways out are
+// `frame.plugin.request` and `draw(html, drawing)`.
+import { RANGE_REFRESH_MS, REFRESH_INTERVAL_MS } from '../core/refresh.js';
 import { withGroup } from '../fleet.ts';
 import type { OrcaFrameApi } from 'orca/frame';
-import type { CardView, SessionView } from '../protocol.ts';
+import type { CardView, Range, RangeAnswer, RangeTab, SessionView } from '../protocol.ts';
 import { type FleetView, fleetScreen } from './fleet.ts';
 import { sessionScreen } from './session.ts';
+import { spendTab } from './spend.ts';
+import { tabBar } from './tabs.ts';
 
 // What the controller uses of Orca's Frame API (the global `orca` of an HTML panel).
 export type Frame = {
@@ -37,51 +44,70 @@ export type Live = { show(visible: boolean): void; press(target: string): void; 
 // before it.
 export type Drawing = { sameScreen: boolean };
 
-// The screen drawn: the fleet, or the session of the card `id`, with the fleet's card of it (null
+// The screen drawn: the fleet, the session of the card `id`, with the fleet's card of it (null
 // when the fleet drawn has none), its answer once one is in, and whether every sub-agent is
-// listed (`showAll`).
-type Screen = { name: 'fleet' } | { name: 'session'; id: string; card: CardView | null; session: SessionView | null; showAll: boolean };
+// listed (`showAll`), or the range tab `tab` over `range`, with its answer once one is in.
+type Screen =
+  | { name: 'fleet' }
+  | { name: 'session'; id: string; card: CardView | null; session: SessionView | null; showAll: boolean }
+  | { name: 'range'; tab: RangeTab; range: Range; answer: RangeAnswer | null };
 
-const LOADING = '<main data-screen="fleet"><p data-part="loading" class="muted">Reading the Orca agents</p></main>';
-const EMPTY = '<main data-screen="fleet"><p class="muted">No Orca agents</p></main>';
+const LIVE_TABS = tabBar('live', null);
+const LOADING = `<main data-screen="fleet">${LIVE_TABS}<p data-part="loading" class="muted">Reading the Orca agents</p></main>`;
+const EMPTY = `<main data-screen="fleet">${LIVE_TABS}<p class="muted">No Orca agents</p></main>`;
 const FLEET: Screen = { name: 'fleet' };
+
+// The range tab `screen`: its tab bar, then its answer, or a loading line until one is in.
+function rangeScreen({ tab, range, answer }: Extract<Screen, { name: 'range' }>) {
+  const body = answer ? spendTab(answer) : '<p data-part="loading" class="muted">Reading the history</p>';
+  return `<main data-screen="range" data-tab="${tab}">${tabBar(tab, range)}${body}</main>`;
+}
 
 export function createLive(frame: Frame, draw: (html: string, drawing: Drawing) => void): Live {
   let view: FleetView = { groups: [], whole: null };
   let screen: Screen = FLEET;
-  // the number of the newest ask, which no other ask has, and whether it is unanswered
+  // the number of the newest ask, which no other ask has, and whether it is unanswered; an older
+  // ask still out is one a press left undrawn
   let request = 0;
   let asking = false;
+  // the range of the range tabs, kept for the controller's life
+  let range: Range = 'day';
   // whether the screen changed during an ask, so that its answer is followed by an ask at once
   let due = false;
   let shown = false;
   let closed = false;
   // the timer of the next ask; null when none is set: it ran out, or the panel was hidden
   let timer: ReturnType<typeof setTimeout> | null = null;
-  // the screen drawn last, `fleet` or the id of the session's card; null before the first drawing
+  // the screen drawn last, `fleet`, the id of the session's card or the range tab; null before
+  // the first drawing
   let drawn: string | null = null;
 
   function redraw() {
-    const now = screen.name === 'session' ? `session:${screen.id}` : 'fleet';
+    const now = screen.name === 'session' ? `session:${screen.id}` : screen.name === 'range' ? `range:${screen.tab}` : 'fleet';
     const drawing = { sameScreen: now === drawn };
     drawn = now;
     if (screen.name === 'session') draw(sessionScreen(screen.session, { card: screen.card, showAll: screen.showAll, now: Date.now() }), drawing);
+    else if (screen.name === 'range') draw(rangeScreen(screen), drawing);
     else if (view.groups.length > 0) draw(fleetScreen(view), drawing);
     else draw(view.whole ? EMPTY : LOADING, drawing);
   }
 
   // Asks the worker for what the screen draws, and sets the timer of the next ask,
-  // REFRESH_INTERVAL_MS from this one's start. A timer that runs out during an ask leaves the next
-  // ask to its answer.
+  // REFRESH_INTERVAL_MS from this one's start, RANGE_REFRESH_MS on a range tab. A timer that runs
+  // out during an ask leaves the next ask to its answer.
   function ask() {
     clearTimeout(timer ?? undefined);
-    timer = setTimeout(() => {
-      timer = null;
-      if (!asking) ask();
-    }, REFRESH_INTERVAL_MS);
+    timer = setTimeout(
+      () => {
+        timer = null;
+        if (!asking) ask();
+      },
+      screen.name === 'range' ? RANGE_REFRESH_MS : REFRESH_INTERVAL_MS,
+    );
     asking = true;
     due = false;
     request += 1;
+    const mine = request;
     const asked = screen;
     // a failed answer keeps what is drawn; a failed draw is not caught, so Orca logs it
     const kept = () => undefined;
@@ -93,12 +119,19 @@ export function createLive(frame: Frame, draw: (html: string, drawing: Drawing) 
             else showFleet();
             redraw();
           }, kept)
-        : frame.plugin.request('spyhop.fleet', { request }).then((answer) => {
-            if (closed) return;
-            view = { groups: answer.groups, whole: answer };
-            if (screen.name === 'fleet') redraw();
-          }, kept);
+        : asked.name === 'range'
+          ? frame.plugin.request('spyhop.range', { request, tab: asked.tab, range: asked.range }).then((answer) => {
+              if (closed || screen.name !== 'range' || screen.tab !== asked.tab || screen.range !== asked.range) return;
+              screen = { ...screen, answer };
+              redraw();
+            }, kept)
+          : frame.plugin.request('spyhop.fleet', { request }).then((answer) => {
+              if (closed) return;
+              view = { groups: answer.groups, whole: answer };
+              if (screen.name === 'fleet') redraw();
+            }, kept);
     answered.finally(() => {
+      if (mine !== request) return;
       asking = false;
       if (shown && (!timer || due)) ask();
     });
@@ -114,6 +147,14 @@ export function createLive(frame: Frame, draw: (html: string, drawing: Drawing) 
   function askSoon() {
     if (asking) due = true;
     else if (shown) ask();
+  }
+
+  // Draws `next` and asks for it at once, leaving the answer of an ask out undrawn; nothing is
+  // asked while hidden.
+  function switchTo(next: Screen) {
+    screen = next;
+    redraw();
+    if (shown) ask();
   }
 
   // A group posted for the fleet ask out is drawn on the fleet screen; one of an older ask, or of
@@ -142,6 +183,13 @@ export function createLive(frame: Frame, draw: (html: string, drawing: Drawing) 
       screen = { name: 'session', id, card, session: null, showAll: false };
       askSoon();
       redraw();
+    } else if (target === 'tab:live') {
+      switchTo(FLEET);
+    } else if (target.startsWith('tab:')) {
+      switchTo({ name: 'range', tab: target.slice('tab:'.length) as RangeTab, range, answer: null });
+    } else if (target.startsWith('range:') && screen.name === 'range' && target !== `range:${screen.range}`) {
+      range = target.slice('range:'.length) as Range;
+      switchTo({ ...screen, range, answer: null });
     } else if (target === 'back' && screen.name === 'session') {
       showFleet();
       redraw();

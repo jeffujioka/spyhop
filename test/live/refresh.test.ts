@@ -13,6 +13,7 @@ import { appendFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { mock, test } from 'node:test';
 import { REFRESH_INTERVAL_MS } from '../../src/core/refresh.js';
+import { tabBar } from '../../src/live/tabs.ts';
 import type { GroupPost } from '../../src/protocol.ts';
 import { costTurn, ompSessionOf } from '../helpers/agent-cards.ts';
 import { tempHome } from '../helpers/files.ts';
@@ -223,7 +224,7 @@ test('Fleet with no Orca agents', async () => {
   const { html } = await openLive([]);
 
   await until(() => parts(html(), 'data-part', 'loading').length === 0);
-  assert.equal(text(html()), 'No Orca agents');
+  assert.equal(text(html().replace(tabBar('live', null), '')), 'No Orca agents');
 });
 
 // A draw that throws reaches the page as an unhandled rejection, which Orca logs as a `[frame]`

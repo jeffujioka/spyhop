@@ -1,4 +1,5 @@
-// The fleet screen of the live panel, as markup: the header, with the number of agents in each
+// The fleet screen of the live panel, as markup, under the tab bar with Live shown: the header,
+// with the number of agents in each
 // Orca state, the burn rate card and the attention list, all once the whole fleet is answered,
 // then each Orca host's group of sessions, a card per session whose agent is not done and a folded
 // line per done one. Each card, folded line and row of the attention list opens its session's
@@ -15,6 +16,7 @@ import type { AttentionRow, BurnCard, CardView, FleetAnswer, HostGroup } from '.
 import { BURN_TITLE, burnChart, contextBar, sparkLine } from './charts.ts';
 import { esc, num } from './html.ts';
 import { levelOf } from './levels.ts';
+import { tabBar } from './tabs.ts';
 
 // The groups drawn so far, and the whole answer once it is in; the counts, the burn rate card and
 // the attention list come only from it.
@@ -148,5 +150,5 @@ export function fleetScreen({ groups, whole }: FleetView): string {
   const header =
     `<header data-part="header"><div class="row"><b class="logo grow">Spyhop</b><span data-part="live" class="live"><i class="dot"></i> live</span></div>` +
     `${whole ? counts(whole) : ''}</header>`;
-  return `<main data-screen="fleet">${header}${whole ? burnCard(whole.burn) + attention(whole.attention) : ''}${groups.map(group).join('')}</main>`;
+  return `<main data-screen="fleet">${tabBar('live', null)}${header}${whole ? burnCard(whole.burn) + attention(whole.attention) : ''}${groups.map(group).join('')}</main>`;
 }

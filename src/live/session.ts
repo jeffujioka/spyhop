@@ -1,4 +1,5 @@
-// The session screen of the live panel, as markup: the header, with the back control, the Orca
+// The session screen of the live panel, as markup, under the tab bar with Live shown: the header,
+// with the back control, the Orca
 // state and the title, and the Focus button when the agent has a pane; the four figures; the
 // context, tokens and cost cards; then the Sub-agents, Tools, Models and Session sections. A part
 // with nothing to show is not drawn; a figure that cannot be read reads n/a. While the session's
@@ -11,6 +12,7 @@ import type { CardView, SessionView, SubAgentView } from '../protocol.ts';
 import { agentBars, contextChart, costChart, tokensChart } from './charts.ts';
 import { readingNote } from './fleet.ts';
 import { esc, num } from './html.ts';
+import { tabBar } from './tabs.ts';
 
 // The tools the Tools section names, the most called first; the rest are summed as `others`.
 export const TOP_TOOLS = 6;
@@ -143,9 +145,9 @@ function session({ startedMs, thinking, latencyMs, premium, branch, remote, host
 
 export function sessionScreen(view: SessionView | null, ui: SessionUi): string {
   const { card } = ui;
-  if (!view) return `<main data-screen="session">${header(card, card?.folder ?? '')}<p data-part="loading" class="muted">Reading the session…</p></main>`;
+  if (!view) return `<main data-screen="session">${tabBar('live', null)}${header(card, card?.folder ?? '')}<p data-part="loading" class="muted">Reading the session…</p></main>`;
   return (
-    `<main data-screen="session">${header(view.card, view.path)}${figures(view.figures, view.card.reading)}` +
+    `<main data-screen="session">${tabBar('live', null)}${header(view.card, view.path)}${figures(view.figures, view.card.reading)}` +
     `${view.context ? contextChart(view.context) : ''}${view.tokens ? tokensChart(view.tokens) : ''}${view.cost ? costCard(view.cost) : ''}` +
     `${view.subAgents ? subAgents(view.subAgents, ui) : ''}${view.tools ? tools(view.tools) : ''}${models(view.models)}${session(view.session)}</main>`
   );

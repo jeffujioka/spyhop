@@ -15,7 +15,7 @@ export function spendTab({ range, spend }: RangeAnswer): string {
     `<div class="figures">` +
     titled('What the range cost', 'Every harness session on every Orca host, sub-agents included', num('cost', formatCost(cost))) +
     titled('Tokens', 'Prompt and output tokens of every model call, cached ones included', num('tokens', orNa(tokens, formatCount))) +
-    titled('Model calls', 'Every call to a model, sub-agents included', num('calls', formatCount(calls))) +
+    titled('Model calls', 'Every call to a model, sub-agents included', num('calls', orNa(calls, formatCount))) +
     `</div>`;
   const over = chart
     ? titled('Cost over time', range === 'year' ? 'What each month cost' : 'What each day cost', rangeChart('cost', chart, formatCost))

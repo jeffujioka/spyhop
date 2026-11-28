@@ -27,11 +27,15 @@ const setHidden = (page: Page, hidden: boolean) =>
     document.dispatchEvent(new Event('visibilitychange'));
   }, hidden);
 
+// Presses Tab past the tab bar's four tabs, each a stop of its own, and then `stops` times more.
+async function tabPastTabs(page: Page, stops: number) {
+  for (let i = 0; i < 4 + stops; i++) await page.keyboard.press('Tab');
+}
+
 test('Enter on a card after redraws', async () => {
   const { page } = await openPanel(answersOf(() => ({ cards: [card(FIX), card(DOCS)] })));
   await drawn(page, 1);
-  await page.keyboard.press('Tab');
-  await page.keyboard.press('Tab');
+  await tabPastTabs(page, 2);
   assert.ok(await isFocused(cardOf(page, DOCS)));
 
   await drawn(page, 3);
@@ -44,8 +48,7 @@ test('Focus kept when a row appears', async () => {
   let fleet: Fleet = { cards: [card(FIX), card(DOCS)] };
   const { page } = await openPanel(answersOf(() => fleet));
   await drawn(page, 1);
-  await page.keyboard.press('Tab');
-  await page.keyboard.press('Tab');
+  await tabPastTabs(page, 2);
   assert.ok(await isFocused(cardOf(page, DOCS)));
 
   const blocked = card(FIX, { state: 'blocked' });
@@ -60,7 +63,7 @@ test('Focus when a row goes', async () => {
   let fleet: Fleet = { cards: [blocked, card(DOCS)], attention: [blockedRow(blocked)] };
   const { page } = await openPanel(answersOf(() => fleet));
   await drawn(page, 1);
-  await page.keyboard.press('Tab');
+  await tabPastTabs(page, 1);
   assert.ok(await isFocused(page.locator('[data-row="state"]', { hasText: FIX })));
 
   fleet = { cards: [card(FIX), card(DOCS)] };
@@ -73,7 +76,7 @@ test('Focus when a card folds', async () => {
   let fleet: Fleet = { cards: [card(FIX), card(DOCS)] };
   const { page } = await openPanel(answersOf(() => fleet));
   await drawn(page, 1);
-  await page.keyboard.press('Tab');
+  await tabPastTabs(page, 1);
   assert.ok(await isFocused(cardOf(page, FIX)));
 
   fleet = { cards: [card(FIX, { state: 'done' }), card(DOCS)] };

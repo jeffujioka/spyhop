@@ -23,7 +23,7 @@ import { SUBAGENT_READS_PER_REFRESH } from '../../src/core/providers/session-fil
 import { createLive, type Drawing, type Frame, type Live } from '../../src/live/controller.ts';
 import { fleetScreen } from '../../src/live/fleet.ts';
 import { sessionScreen } from '../../src/live/session.ts';
-import type { CardView, FleetAnswer, SessionAnswer } from '../../src/protocol.ts';
+import type { CardView, FleetAnswer, Range, RangeTab, SessionAnswer } from '../../src/protocol.ts';
 import * as workerModule from '../../src/worker.ts';
 import { NOW, ompSessionDir, sqlText, subAgentFile, workspace } from './agent-cards.ts';
 import { atTestEnd, setEnv, useTempHome } from './env.ts';
@@ -131,7 +131,8 @@ type LiveOptions = {
 // `html()`: what the panel drew last; `requests(name)`: how many requests `name` it has started;
 // `settled(name)`: how many of them were answered or failed, counted before the panel takes the
 // answer, so that the panel has taken it by the next turn of the event loop; `calls`: the
-// stand-ins' calls.
+// stand-ins' calls; `openTab(tab, range)`: presses the range tab `tab` and then, when given, the
+// range `range`, and waits for the tab drawn from its answer.
 export async function openLive(workspaces: HostWorkspace[], { homes = {}, orca = {}, held = [], prepare, storage, onDraw }: LiveOptions = {}) {
   setEnv('TZ', 'UTC');
   mock.timers.enable({ apis: ['setTimeout', 'Date'], now: NOW });
@@ -152,13 +153,14 @@ export async function openLive(workspaces: HostWorkspace[], { homes = {}, orca =
     });
   }) as Frame['plugin']['request'];
   let drawn = '';
-  live = createLive({ ...frame, plugin: { ...frame.plugin, request } }, (html, drawing) => {
+  const panel = createLive({ ...frame, plugin: { ...frame.plugin, request } }, (html, drawing) => {
     drawn = html;
     onDraw?.(html, drawing);
   });
-  live.show(true);
+  live = panel;
+  panel.show(true);
   return {
-    live,
+    live: panel,
     html: () => drawn,
     worker,
     host,
@@ -166,6 +168,11 @@ export async function openLive(workspaces: HostWorkspace[], { homes = {}, orca =
     calls,
     requests: (name: string) => started.get(name) ?? 0,
     settled: (name: string) => ended.get(name) ?? 0,
+    async openTab(tab: RangeTab, range?: Range) {
+      panel.press(`tab:${tab}`);
+      if (range) panel.press(`range:${range}`);
+      await until(() => attr(drawn, 'data-screen') === 'range' && parts(drawn, 'data-part', 'loading').length === 0);
+    },
   };
 }
 
