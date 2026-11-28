@@ -28,8 +28,8 @@
 // lanes: a model call from its message's `timestamp` to its `completedAt`, a tool call from its
 // `tool_execution_start` to its result, a turn's end at a reply that stops it and the developer's
 // prompts, the user messages not attributed to an agent; and for the session's summary, the
-// newest `title_change` and each status of a background job (a sub-agent, keyed by its name) its
-// `async-result` entries deliver.
+// newest `title_change` and each status of a sub-agent (a background job of the type `task`,
+// keyed by its id) its `async-result` entries deliver.
 
 import { add, parseEntries, tally } from './jsonl.js';
 import { burnRate, cacheRate, isNumber, tokenCount, wholeSession } from './shared.js';
@@ -176,7 +176,7 @@ function fold(state, entries, opts) {
     } else if (e.type === 'custom' && e.customType === 'tool_execution_start') {
       if (s.insights) noteToolStart(s.insights, e.data?.toolCallId, Date.parse(e.data?.startedAt), e.data?.toolName);
     } else if (e.type === 'custom_message' && e.customType === 'async-result') {
-      if (s.insights) for (const job of Array.isArray(e.details?.jobs) ? e.details.jobs : []) noteStatus(s.insights, job?.jobId, job?.status);
+      if (s.insights) for (const job of Array.isArray(e.details?.jobs) ? e.details.jobs : []) if (job?.type === 'task') noteStatus(s.insights, job.jobId, job.status);
     } else if (e.type === 'title_change') {
       if (s.insights && typeof e.title === 'string') s.insights.title = e.title;
     } else if (e.type === 'model_usage') {

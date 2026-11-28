@@ -192,7 +192,7 @@ const HISTORY_COLUMNS = [
 
 // The rows the history store keeps of `sessions` (see sessionsIn), created from `fromMs` on (epoch
 // ms), after the row `afterId` of that time when given, `limit` of them (-1: all), by `created`
-// and `id`, those of the root session `root` only when given; a legacy session the current tables
+// and `id`, those of the root sessions `roots` only when given; a legacy session the current tables
 // hold is read from them. Only the fields of the figures, of the Trace and of the session's
 // summary are read, never a message's text. Each row is one of:
 //   - a model call (`role` 'assistant'): the current tables' `assistant` and `compaction` rows and
@@ -212,10 +212,10 @@ const HISTORY_COLUMNS = [
 // root (its `parent_id` followed to a session without one, or whose parent the database lacks),
 // `ownId`, `parentId`, `title` and `directory` the id, the parent's id, the title and the folder
 // of the row's own session, and `own` 1 when that session is the root.
-/** @param {string | null} [root] */
-export function historyRowsQuery(sessions, fromMs, afterId, limit, root = null) {
+/** @param {string[] | null} [roots] */
+export function historyRowsQuery(sessions, fromMs, afterId, limit, roots = null) {
   const from = Number(fromMs);
-  const inRoot = root === null ? '' : ` AND tree.root = ${literal(root)}`;
+  const inRoot = roots === null ? '' : ` AND tree.root IN (${listOf(roots)})`;
   const after = (id) => (afterId === null ? `m.time_created >= ${from}${inRoot}` : `(m.time_created > ${from} OR (m.time_created = ${from} AND ${id} > ${literal(afterId)}))${inRoot}`);
   // the row of `values` (column -> SQL), NULL in the columns it does not give
   const row = (values) => HISTORY_COLUMNS.map((name) => `${values[name] ?? 'NULL'} AS "${name}"`).join(', ');

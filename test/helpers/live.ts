@@ -409,8 +409,9 @@ export function ompEntries(calls: OmpCall[], compactions: Compaction[], model: s
 }
 
 // The background jobs whose results omp delivered at `at` (epoch ms): each job's id (the name of
-// its sub-agent) and its status, with `text` as the delivery's content.
-export type AsyncResult = { at: number; jobs: { jobId: string; status: string }[]; text?: string };
+// its sub-agent), its status and its type (`task` when not given), with `text` as the delivery's
+// content.
+export type AsyncResult = { at: number; jobs: { jobId: string; status: string; type?: string }[]; text?: string };
 
 // The `async-result` entries of `results`, oldest first.
 const asyncResultLines = (results: AsyncResult[]) =>
@@ -419,7 +420,7 @@ const asyncResultLines = (results: AsyncResult[]) =>
     timestamp: new Date(at).toISOString(),
     customType: 'async-result',
     content: text,
-    details: { jobs: jobs.map((job) => ({ ...job, type: 'task', agentId: job.jobId, label: job.jobId })) },
+    details: { jobs: jobs.map((job) => ({ type: 'task', agentId: job.jobId, label: job.jobId, ...job })) },
   }));
 
 // Lines in the order of their timestamps, those without one first.

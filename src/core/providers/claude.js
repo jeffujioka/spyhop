@@ -20,8 +20,8 @@
 // `cost-state` adds to each model's cost (see `noteCostState`), and the session's Trace lanes: a
 // response from the prompt or the tool result it answers to its last block, a tool use from its
 // block to its result, a turn's end at a block that stops for no tool use, and the prompts; and
-// for the session's summary, the newest `custom-title` and the status of each tool use's result
-// (`toolUseResult.status`, a sub-agent's keyed by the id of the tool use that started it).
+// for the session's summary, the newest `custom-title` and the status of each sub-agent's tool
+// use's result (`toolUseResult.status`, keyed by the id of the tool use that started it).
 
 import { add, parseEntries, tally } from './jsonl.js';
 import { burnRate, cacheRate, isNumber, tokenCount, wholeSession } from './shared.js';
@@ -245,8 +245,9 @@ function fold(state, entries, opts) {
         for (const part of message.content) {
           if (part?.type !== 'tool_result') continue;
           if (s.insights) {
+            // a sub-agent's status, by the id of the tool use that started it
+            if (SUBAGENT_TOOLS['claude-code'].includes(s.insights.started.get(part.tool_use_id)?.name)) noteStatus(s.insights, part.tool_use_id, entry.toolUseResult?.status);
             noteToolEnd(s.insights, part.tool_use_id, time, SUBAGENT_TOOLS['claude-code']);
-            noteStatus(s.insights, part.tool_use_id, entry.toolUseResult?.status);
           }
           toolAnswered(s, part.tool_use_id, part.is_error === true);
         }

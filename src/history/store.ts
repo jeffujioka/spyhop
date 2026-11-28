@@ -11,10 +11,11 @@
 //   session file or opencode root session id>`), with the file it was read from, its title, repo,
 //   first and last time, its own cost (and how many of its calls have none), tokens and models,
 //   its Trace lanes and the statuses its harness logged of the sub-agents it started;
-// - `subagents`: one row per sub-agent of a session, by its key in it (omp: its name, Claude Code:
-//   the id of the tool use that started it, opencode: its session id), with the file it was read
-//   from, the key of the agent that started it (null: the main agent), its name, times, cost,
-//   tokens, models, whether it runs (null: not known) and the statuses it logged of its own;
+// - `subagents`: one row per sub-agent of a session, by its key in it (omp: its path under its
+//   session's folder, Claude Code: the id of the tool use that started it, opencode: its session
+//   id), with the file it was read from (whose each read replaces the row), the key of the agent
+//   that started it (null: the main agent), its name, times, cost, tokens, models, whether it
+//   runs (null: not known) and the statuses it logged of its own;
 // - `meta`: string values by key; `host-keys` set to `machine-id` once the rows of another Orca
 //   host are keyed by the machine it reaches, `machine:<identity>:<home>`
 //   (src/history/catch-up.ts), not by its ssh alias, `ssh:<alias>`, as HISTORY_VERSION 3 kept
@@ -77,8 +78,8 @@ export type Store = {
   state(id: number): unknown;
   // Saves a read of a file of session `session` in `repo`, in one transaction: its lines added to
   // the file's (which a `restarted` read replaces, with its session's and sub-agent's rows) and its
-  // row, with the row of its session (`main`) or of the sub-agent it is (`agent`) when given.
-  // Returns the file's id.
+  // row, with the row of its session (`main`) or of the sub-agent it is (`agent`, which replaces
+  // the file's, as a file holds one sub-agent) when given. Returns the file's id.
   saveRead(file: Omit<FileRow, 'id'>, read: { session: string; repo: string; lines: LineDelta[]; restarted: boolean; main?: SessionRow; agent?: AgentRow }): number;
   // Replaces the lines of the file of id `file` of the day `fromDay` (YYYY-MM-DD) and later with
   // `read.lines`, in one transaction; '' replaces them all.
@@ -91,6 +92,8 @@ export type Store = {
   // The summary of the session `id`, its sub-agents counted in it; null when none is kept. A
   // Claude Code session's own cost holds its sub-agents' already.
   summary(id: string): SessionSummary | null;
+  // The first time of the session `id`; null when none is kept, or it has none.
+  startOf(id: string): number | null;
   // The Trace of the session `id` (traceOf of src/core/trace.js), from its first to its last
   // time; null when none is kept, or it has no time.
   trace(id: string): TraceView | null;
@@ -194,6 +197,7 @@ export async function openStore(home: string): Promise<Store> {
     INSERT OR REPLACE INTO subagents (session, key, file, parent, name, start_ms, end_ms, cost, cost_na, tokens, models, running, statuses)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
   const selectSession = db.prepare('SELECT * FROM sessions WHERE id = ?');
+  const selectStart = db.prepare('SELECT start_ms FROM sessions WHERE id = ?');
   const selectAgents = db.prepare('SELECT * FROM subagents WHERE session = ?');
 
   // The statuses of a row as it keeps them, and back.
@@ -250,8 +254,8 @@ export async function openStore(home: string): Promise<Store> {
         if (restarted) {
           deleteLines.run(id);
           deleteSessions.run(id);
-          deleteAgentsOf.run(id);
         }
+        if (restarted || agent) deleteAgentsOf.run(id);
         for (const { day, model, figures } of lines) upsertLine.run(id, session, day, repo, model, ...LINE_FIGURES.map((name) => figures[name]));
         if (main) saveSessionRow(id, session, main);
         if (agent) saveAgentRow(id, session, agent);
@@ -303,6 +307,9 @@ export async function openStore(home: string): Promise<Store> {
         durationMs: start === null || end === null ? 'n/a' : end - start,
         subAgents: agents.length,
       } satisfies SessionSummary;
+    },
+    startOf(id) {
+      return timeOf(selectStart.get(id)?.start_ms ?? null);
     },
     trace(id) {
       const row = selectSession.get(id);
