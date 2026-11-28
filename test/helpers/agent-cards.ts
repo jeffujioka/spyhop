@@ -86,8 +86,9 @@ export type OpencodeCalls = { provider: string; model: string; contexts: number[
 // given; `prompted`: the time of a user message before it, none when not given; `tools`: the
 // `tool` items of its `content`; `finish`: why it finished, `stop` when not given, none when null;
 // `at`: the time it was created, a minute after the call before when not given; `variant`: the
-// reasoning level of its model, `high` when not given.
-export type OpencodeCall = { uncached: number; read: number; write: number; output: number; took?: number; prompted?: number; tools?: OpencodeTool[]; finish?: string | null; at?: number; variant?: string };
+// reasoning level of its model, `high` when not given; `model`: the model it ran, the session's when
+// not given.
+export type OpencodeCall = { uncached: number; read: number; write: number; output: number; took?: number; prompted?: number; tools?: OpencodeTool[]; finish?: string | null; at?: number; variant?: string; model?: string };
 
 // A compaction of an opencode session: the time it was written and its `reason` (`manual` or
 // `auto`, as this Mac's database holds them).
@@ -125,7 +126,7 @@ export function opencodeSession(
   }: { provider: string; model: string; calls: OpencodeCall[]; cost: number; id?: string; callCost?: number; last?: number; update?: boolean; title?: string; parent?: string; compactions?: OpencodeCompaction[] },
 ) {
   const at = (i: number) => calls[i].at ?? last - 60_000 * (calls.length - 1 - i);
-  const rows = calls.flatMap(({ uncached, read, write, output, took = 1000, prompted, tools = [], finish = 'stop', variant = 'high' }, i) => {
+  const rows = calls.flatMap(({ uncached, read, write, output, took = 1000, prompted, tools = [], finish = 'stop', variant = 'high', model: own = model }, i) => {
     const content = tools.map(({ name, created, ran, completed, status = 'completed', child }, j) => ({
       type: 'tool',
       id: `toolu_${i}_${j}`,
@@ -136,7 +137,7 @@ export function opencodeSession(
     const data = {
       time: { created: at(i), completed: at(i) + took },
       agent: 'build',
-      model: { id: model, providerID: provider, variant },
+      model: { id: own, providerID: provider, variant },
       content,
       ...(finish === null ? {} : { finish }),
       cost: callCost,

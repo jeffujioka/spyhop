@@ -8,15 +8,18 @@
 // Then every Orca host end to end: this computer, the SSH host `devbox`, which has `zstd`, and
 // `oldbox`, which cannot be reached, stood in for by `orca` and `ssh` (test/helpers/stand-ins.ts),
 // through the Spend tab's Month.
+// Then the Cache tab end to end: omp and Claude Code on this computer and opencode on `devbox`, each
+// with its cold starts, returns and compactions, through the Cache tab's Week and back from Spend.
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { mock, test } from 'node:test';
 import { RANGE_REFRESH_MS } from '../../src/core/refresh.js';
 import { opencodeSession, workspace } from '../helpers/agent-cards.ts';
 import { tempHome } from '../helpers/files.ts';
 import { caughtUp } from '../helpers/history.ts';
-import { claudeSession, FIX, folderOf, ompSession, ompSubAgent, type OmpCall, open, openLive, openOnFleet, until } from '../helpers/live.ts';
+import { claudeSession, FIX, folderOf, ompSession, ompSubAgent, ompWindow, type OmpCall, open, openLive, openOnFleet, until } from '../helpers/live.ts';
 import { attr, figure, listOf, parts, text } from '../helpers/markup.ts';
 import { DEVBOX, DEVBOX_HOST, DEVBOX_LISTS, environmentListOf, hostListOf, LOCAL_HOST } from '../helpers/orca-answers.ts';
 import type { HostWorkspace } from '../helpers/orca-host.ts';
@@ -233,4 +236,105 @@ test("a session's Trace end to end", async () => {
   const devbox = opened.calls.ssh().filter(([alias]) => alias === 'devbox');
   assert.ok(devbox.some((args) => args.at(-1)!.startsWith(`${ZSTD_PIPE} 'dd'`)), JSON.stringify(devbox));
   assert.deepEqual(opened.calls.ssh().filter((args) => !readOnlyLine(args.at(-1)!)), []);
+});
+
+test('the Cache tab end to end', async () => {
+  assert.doesNotThrow(() => execFileSync('zstd', ['-V'], { stdio: 'ignore' }), 'this Mac has no zstd');
+  const devboxHome = tempHome();
+  const day = (time: string) => on('2026-11-27', time.slice(0, 5)) + (time.length > 5 ? Number(time.slice(6)) * 1000 : 0);
+  // a model call of 1,000 tokens written to the prompt cache, which read none, ended by `stop`
+  const cold = (time: string, more: Partial<OmpCall> = {}): OmpCall => ({ at: day(time), read: 0, write: 1000, uncached: 10, output: 5, cost: 0.1, writeCost: 0.05, stop: 'stop', thinking: 'high', ...more });
+  const write = { uncached: 10, read: 0, write: 1000, output: 5 };
+  let home = '';
+  const opened = await openLive([], {
+    now: CLOCK,
+    homes: { devbox: devboxHome },
+    orca: { 'host list --json': hostListOf(LOCAL_HOST, DEVBOX_HOST), 'environment list --json': environmentListOf() },
+    prepare: (made) => {
+      home = made;
+      // this computer, omp: an expired cache, a compaction (inferred from the context's size), a model
+      // switch, a thinking-level switch, a warm call and a return after 3 hours
+      ompWindow(home, 1_000_000);
+      mkdirSync(join(home, '.omp/agent'), { recursive: true });
+      writeFileSync(join(home, '.omp/agent/config.yml'), 'compaction:\n  thresholdTokens: 800000\n');
+      ompSession(home, join(home, 'api'), {
+        title: 'api',
+        calls: [
+          cold('10:00', { cttl: '5m' }),
+          cold('10:20', { cttl: '5m', prompted: day('10:19:59') }),
+          cold('10:21', { prompted: day('10:20:59') }),
+          cold('10:22', { model: 'model-b' }),
+          cold('10:23', { model: 'model-b', thinking: 'low' }),
+          cold('10:24', { model: 'model-b', thinking: 'low', read: 900, write: 100, uncached: 0 }),
+          cold('14:00', { model: 'model-b', thinking: 'low', prompted: day('13:59:59') }),
+        ],
+        compactions: [{ at: day('10:20:30'), before: 820_000, after: 20_000 }],
+      });
+      // this computer, Claude Code: a compaction and a cold start after it, which logs no cost
+      claudeSession(home, join(home, 'cc'), {
+        calls: [
+          { at: day('10:00'), uncached: 10, output: 5 },
+          { at: day('10:10'), uncached: 10, write: 50_000, output: 5 },
+        ],
+        compactions: [{ at: day('10:05'), trigger: 'auto', before: 150_000, after: 10_000 }],
+      });
+      // devbox, opencode: a return after 2 hours, a model switch, a variant switch and a compaction
+      // of each reason with a cold start after it
+      opencodeSession(devboxHome, join(devboxHome, 'web'), {
+        provider: 'anthropic',
+        model: 'claude-opus-5.5',
+        cost: 0.7,
+        calls: [
+          { ...write, at: day('09:00') },
+          { ...write, at: day('11:00') },
+          { ...write, at: day('11:01'), model: 'claude-sonnet-5' },
+          { ...write, at: day('11:02'), model: 'claude-sonnet-5', variant: 'low' },
+          { ...write, at: day('11:04'), model: 'claude-sonnet-5', variant: 'low' },
+          { ...write, at: day('11:07'), model: 'claude-sonnet-5', variant: 'low' },
+        ],
+        compactions: [{ at: day('11:03:30'), reason: 'manual' }, { at: day('11:06:30'), reason: 'auto' }],
+      });
+    },
+  });
+  await caughtUp(home);
+
+  await opened.openTab('cache', 'week');
+  const pressed = () => parts(opened.html(), 'data-press').filter((button) => attr(button, 'aria-pressed') === 'true').map((button) => attr(button, 'data-press')).filter((press) => press!.startsWith('range:'));
+  assert.deepEqual(pressed(), ['range:week']);
+  const drawn = () => {
+    const html = opened.html();
+    // the hit rate chart, which has the day's calls
+    const [chart] = parts(html, 'data-chart', 'range-hitRate');
+    assert.ok(chart !== undefined && parts(chart, 'data-key').some((point) => attr(point, 'data-key') === '2026-11-27' && attr(point, 'data-v') !== 'n/a'), html);
+    // the five causes, with the cold starts of omp, Claude Code and opencode
+    assert.equal(figure(html, 'cold-expired'), '1 · 1,000 · $0.05');
+    assert.match(figure(html, 'cold-model'), /^2 · 2,000/);
+    assert.match(figure(html, 'cold-thinking'), /^2 · 2,000/);
+    assert.match(figure(html, 'cold-compaction'), /^4 · 53,000/);
+    assert.match(figure(html, 'cold-other'), /^2 · 2,000/);
+    assert.match(text(parts(html, 'data-part', 'left-out')[0]), /Claude Code/);
+    // the three time-away bands: the return after 1 minute, after 20 minutes and after 3 hours
+    assert.equal(figure(html, 'away-under5'), '1 return · 1 cold');
+    assert.equal(figure(html, 'away-to60'), '1 return · 1 cold');
+    assert.equal(figure(html, 'away-over60'), '1 return · 1 cold');
+    // the compaction kinds: omp's inferred, Claude Code's and one of opencode's by reason `auto`, and one `manual`
+    assert.equal(figure(html, 'compactions'), '3 context full · 1 manual');
+    assert.equal(parts(html, 'data-part', 'inferred').length, 1);
+    // a hint per cause but other
+    assert.deepEqual(parts(html, 'data-part', 'hint').map((hint) => attr(hint, 'data-cause')).sort(), ['compaction', 'expired', 'model', 'thinking']);
+  };
+  drawn();
+
+  // the range stays Week when the tab changes to Spend and back
+  await opened.openTab('spend');
+  assert.equal(attr(opened.html(), 'data-tab'), 'spend');
+  assert.deepEqual(pressed(), ['range:week']);
+  await opened.openTab('cache');
+  assert.equal(attr(opened.html(), 'data-tab'), 'cache');
+  assert.deepEqual(pressed(), ['range:week']);
+  drawn();
+
+  const lines = opened.calls.ssh();
+  assert.ok(lines.some(([alias]) => alias === 'devbox'), JSON.stringify(lines));
+  assert.deepEqual(lines.filter((args) => !readOnlyLine(args.at(-1)!)), []);
 });
