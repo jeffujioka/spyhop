@@ -15,7 +15,7 @@ import { run, type Run, type RunBytes, runBytes, type RunOptions } from '../../s
 import { createCatchUp } from '../../src/history/catch-up.ts';
 import { openStore, type Store } from '../../src/history/store.ts';
 import { spendTab } from '../../src/live/spend.ts';
-import { historyHosts, listHosts, machineOf } from '../../src/hosts.ts';
+import { historyHosts, listHosts, machineIdIn, machineOf } from '../../src/hosts.ts';
 import type { RangeAnswer } from '../../src/protocol.ts';
 import { ompSessionDir } from '../helpers/agent-cards.ts';
 import { setEnv, useTempHome } from '../helpers/env.ts';
@@ -214,6 +214,7 @@ test('a target re-added in Orca is read once', async () => {
     [machineKeyOf(remoteHome)],
   );
   assert.equal(figure(spendTab(answer), 'cost'), '$1.00');
+  assert.deepEqual(answer.notRead, []);
 });
 
 // The two lists when the SSH hosts `aliases`, each Orca's id its alias, are the only other Orca
@@ -295,14 +296,58 @@ test('a machine listed under another alias in a later run is read once', async (
     [machineKeyOf(remoteHome)],
   );
   assert.equal(figure(spendTab(answer), 'cost'), '$1.00');
+  assert.deepEqual(answer.notRead, []);
 });
 
-test("a machine's identity is its id, else its node name, never empty", async () => {
-  assert.equal(type(), 'Darwin', 'this test reads the machine id of a Mac');
+test("a machine's id in its id program's answer", () => {
+  const ioreg = (line: string) => `+-o J316sAP  <class IOPlatformExpertDevice>\n  {\n    "IOPlatformSerialNumber" = "C02X"\n${line}  }\n`;
+  assert.equal(machineIdIn('Darwin', ioreg('    "IOPlatformUUID" = "4C4C4544-0042-3510"\n')), '4C4C4544-0042-3510');
+  assert.equal(machineIdIn('Darwin', ioreg('')), '');
+  assert.equal(machineIdIn('Darwin', ioreg('    "IOPlatformUUID" = ""\n')), '');
+  assert.equal(machineIdIn('Linux', 'b08dfa6083e7567a1921a715000001fb \n'), 'b08dfa6083e7567a1921a715000001fb');
+  assert.equal(machineIdIn('Linux', '\n'), '');
+});
+
+test("a machine's identity is its id, else its node name, never empty", { skip: type() !== 'Darwin' }, async () => {
   assert.match(await machineOf(run, 'Darwin', 'node-a'), /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
-  // a Mac has no /etc/machine-id
+  // a Mac has no /etc/machine-id: `cat` answers, exiting 1
   assert.equal(await machineOf(run, 'Linux', 'node-a'), 'node-a');
   await assert.rejects(machineOf(run, 'Linux', ''), /machine unknown/);
+});
+
+// The word of the command line that asks a stand-in machine its id.
+const ID_WORD = type() === 'Darwin' ? "'ioreg'" : "'/etc/machine-id'";
+
+test('a host whose id is not answered is not read', async () => {
+  const remoteHome = tempHome();
+  ompSession(remoteHome, join(remoteHome, 'api'), { title: 'api', calls: [spent(1)] });
+  // once `lost`, the ask of starfish-bs's id rejects, as a run past its timeout does
+  let lost = false;
+  const exec: Run = async (command, args, options) => {
+    if (lost && options?.on === 'starfish-bs' && (command === 'ioreg' || args.includes('/etc/machine-id'))) throw new Error('timed out');
+    return run(command, args, options);
+  };
+  const { home, catchUp } = await catchUpOf(remoteHome, { exec });
+  await catchUp.run();
+  assert.deepEqual(catchUp.notRead(), []);
+
+  lost = true;
+  await catchUp.run();
+  assert.deepEqual(catchUp.notRead(), ['starfish-bs']);
+
+  // ssh drops while the id is asked
+  lost = false;
+  standIns({ homes: { 'starfish-bs': remoteHome }, orca: STARFISH_LISTS, failing: [`ssh starfish-bs ${ID_WORD}`] });
+  await catchUp.run();
+  assert.deepEqual(catchUp.notRead(), ['starfish-bs']);
+
+  const db = storeOf(home);
+  const hosts = db.prepare("SELECT DISTINCT host FROM files WHERE host != 'local'").all();
+  db.close();
+  assert.deepEqual(
+    hosts.map(({ host }) => host),
+    [machineKeyOf(remoteHome)],
+  );
 });
 
 test('Appended bytes only', async () => {

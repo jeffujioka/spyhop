@@ -422,8 +422,8 @@ export function createCatchUp({
     };
   }
 
-  // This computer's machine, as `probe` keys another host's, asked once.
-  let thisMachine: Promise<string> | null = null;
+  // This computer's machine, as `probe` keys another host's, once asked; a failed ask is not kept.
+  let thisMachine: string | null = null;
 
   async function runOnce() {
     shares = [];
@@ -431,18 +431,25 @@ export function createCatchUp({
     const local: Place = { host: LOCAL, name: LOCAL, rank: 0, exec: run, read: run, os: type(), home, reached: () => true };
     // the first phase on every host at once, every other host's machine asked first: a machine is
     // read once, over its first alias in Orca's order, and this computer, read here, never over
-    // ssh; a host whose machine cannot be asked is not read
+    // ssh; a host whose machine cannot be asked is not read, nor is any while this computer's
+    // cannot, since none can then be told from it
     const [localRead, remotes] = await Promise.all([
       phaseOne(local, recent),
       hosts().then(async (listed) => {
         const probed = await Promise.all(listed.map((host, i) => probe(host, i + 1)));
-        thisMachine ??= machineOf(run, type(), hostname().toLowerCase()).then((identity) => `machine:${identity}:${home}`);
-        const machines = new Set([await thisMachine]);
+        thisMachine ??= await machineOf(run, type(), hostname().toLowerCase()).then(
+          (identity) => `machine:${identity}:${home}`,
+          (error) => {
+            log(`spyhop: catch-up cannot ask this computer's machine: ${(error as Error).message}`);
+            return null;
+          },
+        );
+        const machines = new Set([thisMachine]);
         const kept = listed.flatMap((host, i) => {
-          const machine = probed[i]?.machine;
+          const machine = thisMachine === null ? undefined : probed[i]?.machine;
           if (machine !== undefined && machines.has(machine)) return [];
           if (machine !== undefined) machines.add(machine);
-          return [{ name: host.name, probed: probed[i] }];
+          return [{ name: host.name, probed: machine === undefined ? null : probed[i] }];
         });
         return Promise.all(
           kept.map(async ({ name, probed: found }) => {

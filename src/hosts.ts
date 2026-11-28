@@ -86,14 +86,22 @@ export function placeOf(uname: RunResult, printenv: RunResult | null, home: stri
   return { os, node: node.toLowerCase(), home: found };
 }
 
+// The machine id in `stdout`, the answer of the id program of a machine whose system is `os`
+// (macOS: the IOPlatformUUID `ioreg -rd1 -c IOPlatformExpertDevice` prints; any other system:
+// /etc/machine-id); '' when it holds none.
+export function machineIdIn(os: string, stdout: string): string {
+  return os === 'Darwin' ? (/"IOPlatformUUID" = "([^"]*)"/.exec(stdout)?.[1] ?? '') : stdout.trim();
+}
+
 // The identity of the machine whose system is `os` and node name `node`, asked through `exec` on
-// it: its machine id, lowercased (macOS: the IOPlatformUUID `ioreg -rd1 -c
-// IOPlatformExpertDevice` prints; any other system: /etc/machine-id), else, when it gives none,
-// its node name. Throws when both are empty: the machine is unknown.
+// it: its machine id, lowercased (`machineIdIn`), else, when the id program answered without one
+// (it exited non-zero, but for ssh's 255, or printed none), its node name. Throws when the answer
+// is lost (`exec` rejects, as past its timeout, or ssh exits 255), or when both are empty: the
+// machine is unknown, never taken for its node name, which would key it twice.
 export async function machineOf(exec: Run, os: string, node: string): Promise<string> {
-  const mac = os === 'Darwin';
-  const answer = await (mac ? exec('ioreg', ['-rd1', '-c', 'IOPlatformExpertDevice']) : exec('cat', ['/etc/machine-id'])).catch(() => null);
-  const id = answer?.code === 0 ? (mac ? /"IOPlatformUUID" = "([^"]*)"/.exec(answer.stdout)?.[1] : answer.stdout.trim()) : undefined;
+  const answer = await (os === 'Darwin' ? exec('ioreg', ['-rd1', '-c', 'IOPlatformExpertDevice']) : exec('cat', ['/etc/machine-id'])).catch(() => null);
+  if (!answer || answer.code === 255) throw new Error('machine unknown');
+  const id = answer.code === 0 ? machineIdIn(os, answer.stdout) : '';
   const identity = (id || node).toLowerCase();
   if (!identity) throw new Error('machine unknown');
   return identity;

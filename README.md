@@ -294,12 +294,14 @@ whether the panel is open or closed, and between catch-ups reads nothing for the
 reads this computer and every Orca host Orca lists, each SSH host and each paired Orca server,
 another host over ssh (see Other hosts). It first asks every other host the machine it reaches:
 its machine id (on a Mac the IOPlatformUUID of `ioreg -rd1 -c IOPlatformExpertDevice`, else
-`cat /etc/machine-id`), else, when it gives none, its node name (`uname -sn`), and its home
-(`printenv HOME`). Hosts of the same identity and home are one machine, read once, whatever
-aliases reach it, over the first of them in Orca's order; an alias that reaches this computer
-(its identity and home this computer's, asked the same way here) is never read over ssh, nor
-named as not read, since this computer is read here. A host whose identity or home cannot be
-asked, or is empty, is named as not read. On each it lists the omp and Claude
+`cat /etc/machine-id`), else, when that program answers without one, its node name (`uname
+-sn`), and its home (`printenv HOME`). Hosts of the same identity and home are one machine, read
+once, whatever aliases reach it, over the first of them in Orca's order; an alias that reaches
+this computer (its identity and home this computer's, asked the same way here) is never read
+over ssh, nor named as not read, since this computer is read here. A host whose identity or home
+cannot be asked, or is empty, is named as not read: an id answer lost to a timeout or a dropped
+connection never falls back to the node name, which would count the machine twice. While this
+computer's own identity cannot be asked, no other host is read. On each it lists the omp and Claude
 Code session files and sub-agent transcripts with one `find` for each, and reads each one into
 the history store (see What spyhop stores) from where its last
 read ended, one program at a time: a file whose size and modified time are those of its last read
