@@ -2,7 +2,7 @@
 // and the refresh loop that feeds it, with no DOM (src/panel.ts is the page's glue). While shown
 // it asks the worker for what the screen draws, the fleet or the session REFRESH_INTERVAL_MS and a
 // range tab RANGE_REFRESH_MS after each ask started, or at its answer when that came later, never
-// two asks at once but for one a press of a tab or a range left undrawn, and asks nothing while
+// two asks at once, and asks nothing while
 // hidden or once closed. During a fleet ask it draws each Orca host's group the
 // worker posts for it (`spyhop.group`) in the place of that host's drawn group; the whole answer
 // then replaces the groups and is kept as the last whole fleet, the only source of the header's
@@ -12,9 +12,10 @@
 // all lists every sub-agent of the open session until the screen changes. Focus
 // asks the worker to focus the pane of the open session's agent; its answer, and its failure,
 // change nothing drawn. The Live tab draws the last fleet, a range tab or range draws that tab
-// over the range at once, and each asks for what it draws at once, the answer of an ask out then
-// left undrawn. The range is Day when the controller starts, and a range tab keeps the one pressed
-// last. An answer is drawn only on the screen, the card, the tab and the range it was asked for.
+// over the range at once, and each asks for what it draws as soon as no ask is out; pressing the
+// tab or the range shown does nothing. The range is Day when the controller starts, and a range
+// tab keeps the one pressed last. An answer is drawn only on the screen, the card, the tab and the
+// range it was asked for.
 // A change of Orca's theme draws nothing: the stylesheet's variables follow it in place. A failed
 // answer keeps what is drawn; a draw that fails is left uncaught, for Orca to log as the frame's
 // error. Each drawing says whether it is of the screen drawn before it, the fleet, the session
@@ -66,8 +67,7 @@ function rangeScreen({ tab, range, answer }: Extract<Screen, { name: 'range' }>)
 export function createLive(frame: Frame, draw: (html: string, drawing: Drawing) => void): Live {
   let view: FleetView = { groups: [], whole: null };
   let screen: Screen = FLEET;
-  // the number of the newest ask, which no other ask has, and whether it is unanswered; an older
-  // ask still out is one a press left undrawn
+  // the number of the newest ask, which no other ask has, and whether it is unanswered
   let request = 0;
   let asking = false;
   // the range of the range tabs, kept for the controller's life
@@ -107,7 +107,6 @@ export function createLive(frame: Frame, draw: (html: string, drawing: Drawing) 
     asking = true;
     due = false;
     request += 1;
-    const mine = request;
     const asked = screen;
     // a failed answer keeps what is drawn; a failed draw is not caught, so Orca logs it
     const kept = () => undefined;
@@ -131,7 +130,6 @@ export function createLive(frame: Frame, draw: (html: string, drawing: Drawing) 
               if (screen.name === 'fleet') redraw();
             }, kept);
     answered.finally(() => {
-      if (mine !== request) return;
       asking = false;
       if (shown && (!timer || due)) ask();
     });
@@ -149,12 +147,11 @@ export function createLive(frame: Frame, draw: (html: string, drawing: Drawing) 
     else if (shown) ask();
   }
 
-  // Draws `next` and asks for it at once, leaving the answer of an ask out undrawn; nothing is
-  // asked while hidden.
+  // Draws `next` and asks for it as soon as no ask is out.
   function switchTo(next: Screen) {
     screen = next;
     redraw();
-    if (shown) ask();
+    askSoon();
   }
 
   // A group posted for the fleet ask out is drawn on the fleet screen; one of an older ask, or of
@@ -184,9 +181,10 @@ export function createLive(frame: Frame, draw: (html: string, drawing: Drawing) 
       askSoon();
       redraw();
     } else if (target === 'tab:live') {
-      switchTo(FLEET);
+      if (screen.name !== 'fleet') switchTo(FLEET);
     } else if (target.startsWith('tab:')) {
-      switchTo({ name: 'range', tab: target.slice('tab:'.length) as RangeTab, range, answer: null });
+      const tab = target.slice('tab:'.length) as RangeTab;
+      if (screen.name !== 'range' || screen.tab !== tab) switchTo({ name: 'range', tab, range, answer: null });
     } else if (target.startsWith('range:') && screen.name === 'range' && target !== `range:${screen.range}`) {
       range = target.slice('range:'.length) as Range;
       switchTo({ ...screen, range, answer: null });

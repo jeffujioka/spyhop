@@ -47,6 +47,19 @@ test("Today's cost while the Spend tab is shown", async () => {
   assert.equal(opened.requests('spyhop.fleet'), fleets);
 });
 
+test('a tab pressed during an ask is asked for at its answer', async () => {
+  const opened = await openLive([FIX], { prepare: fixSession });
+  // the fleet's first ask is out
+  opened.live.press('tab:spend');
+  opened.live.press('tab:spend');
+  assert.equal(opened.requests('spyhop.range'), 0);
+
+  await until(() => opened.requests('spyhop.range') === 1);
+  assert.equal(opened.settled('spyhop.fleet'), 1);
+  await until(() => opened.settled('spyhop.range') === 1);
+  assert.equal(opened.requests('spyhop.range'), 1);
+});
+
 test('Catch-up with the panel closed', async () => {
   const opened = await openLive([]);
   opened.live.show(false);
