@@ -54,9 +54,9 @@ const TRACE_C1 = SESSION('{"request":4,"card":"c1","trace":true}');
 const months = (n: number) => Array.from({ length: n }, (_, i) => ({ key: `2026-${i}`, v: 0 }));
 const lane = (lane: string, spans: number) => ({ lane, totalMs: 0, spans: Array.from({ length: spans }, (_, i) => [i, i + 1]) });
 const traceAnswer = (spans: number) => answer({ result: { request: 4, session: { trace: { startMs: 0, endMs: 1, lanes: [lane('thinking', spans), lane('tools', 1)], agents: [] } } } });
-function wholeRun(png: string, lines: string[], over: Record<string, string> = {}) {
+function wholeRun(png: string, lines: string[], over: Record<string, string | string[]> = {}) {
   const shot = answer({ path: png, errors: [], settled: true, themeApplied: true });
-  const answers: Record<string, string> = {
+  const answers: Record<string, string | string[]> = {
     ...answeredUpToFleet(fleetListing(['c1'])),
     [SESSION_C1]: answer({ result: { request: 2, session: { card: { reading: null } } } }),
     [TRACE_C1]: traceAnswer(240),
@@ -88,7 +88,7 @@ function countCatchUps(home: string, count: number) {
 // Runs a copy of the script in the home `home`, `orca` answering a whole run (wholeRun) with the
 // log lines `lines` and holding the restart: once the script asks for it, the store counts `after`
 // catch-ups and the restart is answered. Its exit status and output, and the `orca` calls.
-async function wholeCheck(home: string, lines: string[], after: number, over: Record<string, string> = {}) {
+async function wholeCheck(home: string, lines: string[], after: number, over: Record<string, string | string[]> = {}) {
   const orca = standIns({ homes: {}, orca: wholeRun(png(), lines, over), held: [RESTART] });
   const folder = tempHome();
   mkdirSync(join(folder, 'scripts'));
@@ -213,7 +213,7 @@ for (const [name, over, message] of [
   ['a Trace lane of 241 spans', { [TRACE_C1]: traceAnswer(241) }, 'the Trace answer of "c1" is not under 1048576 bytes with lanes of at most 240 spans'],
   ['a Trace without lanes of a card the fleet lists', { [TRACE_C1]: answer({ result: { request: 4, session: {} } }), [FLEET_AGAIN]: answer({ result: fleetListing(['c1']) }) }, 'the Trace answer of "c1" has no trace while the fleet still lists it'],
   ['a linked card with a null Trace', { [TRACE_C1]: answer({ result: { request: 4, session: { linked: true, trace: null } } }), [FLEET_AGAIN]: answer({ result: fleetListing(['c1']) }) }, 'the Trace answer of "c1" has no trace while the fleet still lists it'],
-] as [string, Record<string, string>, string][]) {
+] as [string, Record<string, string | string[]>, string][]) {
   test(`${name} stops the check`, async () => {
     const home = tempHome();
     countCatchUps(home, 1);
@@ -235,29 +235,33 @@ test('a host not read that the fleet does not reach passes and is printed', asyn
   assert.ok(run.stdout.includes('frame check: not read, not reached by the fleet: maria'), run.stdout);
 });
 
-const WATCH = 'plugin dev watch . --json';
-const errored = JSON.stringify({ type: 'loaded', pluginKey: 'local.spyhop', added: true, status: 'errored', error: 'plugin local.spyhop changed or is no longer approved' });
-const running = JSON.stringify({ type: 'status', pluginKey: 'local.spyhop', status: 'running', previousStatus: 'errored' });
+const OPEN = 'plugin open local.spyhop --panel spyhop';
+const activation = 'local.spyhop is errored: plugin local.spyhop changed or was disabled during activation, so Orca shows none of its panels or editors.';
 
-test('a plugin loaded errored waits for the status line that says it runs', async () => {
+test('an open that fails after a first activation error is retried once, after a restart', async () => {
   const home = tempHome();
   countCatchUps(home, 1);
 
-  const run = await wholeCheck(home, [], 2, { [WATCH]: `${errored}\n${running}\n` });
+  const run = await wholeCheck(home, [], 2, { [OPEN]: [`{"ok":false,"error":"${activation}"}`, ''] });
 
   assert.equal(run.status, 0, run.stderr);
+  assert.deepEqual(run.calls.filter((line) => line === OPEN || line === RESTART), [RESTART, OPEN, RESTART, OPEN]);
 });
 
-test('a plugin loaded errored that never runs fails with the watch output before the restart', () => {
-  const orca = standIns({ homes: {}, orca: { ...answeredUpToFleet(fleetListing(['c1'])), [WATCH]: `${errored}\n` } });
+for (const [name, opens] of [
+  ['an open that fails twice with the activation error', [activation, activation]],
+  ['an open that fails for another reason', ['local.spyhop is not running']],
+] as [string, string[]][]) {
+  test(`${name} fails with its output`, () => {
+    const orca = standIns({ homes: {}, orca: { ...answeredUpToFleet(fleetListing(['c1'])), [OPEN]: opens.map((text) => `{"ok":false,"error":"${text}"}`) } });
 
-  const run = frameCheck();
+    const run = frameCheck();
 
-  assert.equal(run.status, 1);
-  assert.ok(run.stderr.includes('frame check: plugin local.spyhop is still errored after the watch loaded it'), run.stderr);
-  assert.ok(run.stderr.includes('no longer approved'), run.stderr);
-  assert.ok(!orca.orca().includes(RESTART));
-});
+    assert.equal(run.status, 1);
+    assert.ok(run.stderr.includes(opens[opens.length - 1]), run.stderr);
+    assert.equal(orca.orca().filter((line) => line === OPEN).length, opens.length);
+  });
+}
 
 test('a card that is not linked has no Trace to check, and a linked one still does', async () => {
   const home = tempHome();

@@ -25,7 +25,7 @@ const machineIdOf = (home: string) => `ID-${basename(home).toUpperCase()}`;
 export const machineKeyOf = (home: string) => `machine:${machineIdOf(home).toLowerCase()}:${home}`;
 
 // `homes`: each reachable alias and its home folder; any other alias is unreachable. `orca`: each
-// command line and its recorded answer; any other line fails. `controlmaster`: each alias whose
+// command line and its recorded answer, or the answers of its successive calls; any other line fails. `controlmaster`: each alias whose
 // `ssh -G` answers, and the `controlmaster` it prints; `ssh -G` on any other alias fails. `held`:
 // each `orca` command line whose answer is held back, each `ssh <alias>` whose every command on
 // that alias is, and each `ssh <alias> <word>` whose commands on that alias that hold the word
@@ -43,7 +43,7 @@ export function standIns({
   noZstd = [],
 }: {
   homes: Record<string, string>;
-  orca: Record<string, string>;
+  orca: Record<string, string | string[]>;
   controlmaster?: Record<string, string>;
   held?: string[];
   failing?: string[];
@@ -61,9 +61,14 @@ export function standIns({
   const releaseOf = (key: string) => join(bin, `released ${key.replaceAll('/', '%')}`);
   // the shell's wait for the release of `key`, when the test holds it
   const hold = (key: string) => (held.includes(key) ? `until [ -e '${releaseOf(key)}' ]; do sleep 0.01; done; ` : '');
+  // an answer holding `"ok":false` exits 1, as `orca` does; a list of answers is one a call, the
+  // last repeated
   const orcaCases = Object.entries(orca).map(([args, output], i) => {
-    writeFileSync(join(bin, `orca-${i}.json`), output);
-    return `  '${args}') ${hold(args)}cat '${join(bin, `orca-${i}.json`)}' ;;`;
+    const outputs = Array.isArray(output) ? output : [output];
+    outputs.forEach((one, j) => writeFileSync(join(bin, `orca-${i}-${j}.json`), one));
+    const counter = join(bin, `orca-${i}.count`);
+    const pick = `n=$(cat '${counter}' 2>/dev/null || echo 0); echo $((n + 1)) > '${counter}'; [ "$n" -lt ${outputs.length} ] || n=${outputs.length - 1}; f='${join(bin, `orca-${i}-`)}'"$n.json"; `;
+    return `  '${args}') ${hold(args)}${pick}cat "$f"; ! grep -q '"ok":false' "$f" ;;`;
   });
   writeFileSync(
     join(bin, 'orca'),
