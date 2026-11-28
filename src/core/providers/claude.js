@@ -72,6 +72,9 @@ function emptyState(opts) {
     // the latest `cost-state` entry: { usd, stale, models }, stale once a response came after it;
     // `models` the cost, USD, by model of the latest one that gives it, its sub-agents' included
     logged: undefined,
+    // the cost, USD, by model of the latest `cost-state` whose cost the daily lines noted (see
+    // `noteCostState`)
+    noted: undefined,
     compactions: 0,
     // a `compact_boundary` whose trigger is neither `manual` nor `auto` was seen: it may be an
     // automatic compaction under a name this reader does not know, so the count is unknown
@@ -120,6 +123,15 @@ function credit(state, parts, sign) {
   for (const [key, value] of Object.entries(parts)) add(state[key], value, sign);
 }
 
+// The daily lines' name of the Claude model `name`: a transcript logs a model's id, which may end
+// in a date (`claude-haiku-4-5-20251001`), and a `cost-state` keys it with a provider before it
+// (`anthropic.`) or a context size after it (`[1m]`); each is dropped, so one model is one line.
+const lineModel = (name) =>
+  name
+    .replace(/^anthropic\./, '')
+    .replace(/\[[^\]]*\]$/, '')
+    .replace(/-\d{8}$/, '');
+
 // Counts the response `last` (`{ id, call, cold, model, tokens }`) in the calls, the series, the
 // minutes, the cold starts, the tokens by model and, when it logs its model, the daily lines, at
 // no cost; `sign` -1 takes it back out, which only the newest one can.
@@ -133,17 +145,21 @@ function count(state, last, sign) {
     state.cold.tokens += sign * last.call.write;
   }
   if (last.model !== null) entryOf(state.models, last.model, () => ({ cost: null, tokens: 0 })).tokens += sign * last.tokens;
-  if (state.insights && last.model !== null) noteCall(state.insights, { ...last.call, end: last.call.t, model: last.model, tokens: last.tokens, cost: 0 }, sign);
+  if (state.insights && last.model !== null) noteCall(state.insights, { ...last.call, end: last.call.t, model: lineModel(last.model), tokens: last.tokens, cost: 0 }, sign);
 }
 
 // Notes in the daily lines what the `cost-state` that gives `models` (see `costByModel`) adds to
-// each model's cost: its cost less that of the session's previous `cost-state` that gives one (0
-// without one). A `cost-state` has no timestamp, so it counts on the day of the entry before it;
-// one before any dated entry notes nothing.
+// each model's cost: its cost less that of the previous `cost-state` the daily lines noted (0
+// without one). A cost below the one before starts the session's cost again (a restart), so the
+// `cost-state`'s costs are noted whole and no day is negative. A `cost-state` has no timestamp, so
+// it counts on the day of the entry before it; one before any dated entry notes nothing, and the
+// next one that does notes its cost.
 function noteCostState(s, models) {
   if (!s.insights || !isNumber(s.lastEntry)) return;
-  const before = s.logged?.models ?? {};
-  for (const [model, usd] of Object.entries(models)) noteCost(s.insights, s.lastEntry, model, usd - (before[model] ?? 0));
+  const before = s.noted ?? {};
+  const restart = Object.entries(models).some(([model, usd]) => usd < (before[model] ?? 0));
+  for (const [model, usd] of Object.entries(models)) noteCost(s.insights, s.lastEntry, lineModel(model), restart ? usd : usd - (before[model] ?? 0));
+  s.noted = models;
 }
 
 // Adds `entries` (in file order, after those already in `state`) to `state`, which it changes
