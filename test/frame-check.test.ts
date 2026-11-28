@@ -57,6 +57,8 @@ test('the whole-panel steps are listed', () => {
     'plugin open local.spyhop --panel spyhop',
     'plugin dev request . spyhop.fleet --data {"request":1} --json',
     'plugin dev request . spyhop.session --data {"request":2,"card":"<id>"} --json',
+    'plugin dev request . spyhop.range --data {"request":3,"tab":"spend","range":"day"} --json',
+    'plugin dev request . spyhop.range --data {"request":3,"tab":"spend","range":"year"} --json',
     'plugin shot local.spyhop --panel spyhop --width 300 --theme dark --json',
     'plugin shot local.spyhop --panel spyhop --width 300 --theme light --json',
     'plugin shot local.spyhop --panel spyhop --width 420 --theme dark --json',
@@ -64,6 +66,24 @@ test('the whole-panel steps are listed', () => {
     'plugin logs local.spyhop --json',
     'plugin dev unload . --json',
   ]);
+  assert.deepEqual(orca.orca(), []);
+});
+
+test('the insights steps are listed', () => {
+  const orca = standIns({ homes: {}, orca: {} });
+
+  // throws when the script exits with anything but 0
+  const out = execFileSync('bash', ['scripts/frame-check.sh', '--dry-run'], { cwd: new URL('..', import.meta.url), encoding: 'utf8' });
+
+  const lines = out.split('\n');
+  const step = `+ ${process.env.ORCA_CLI_COMMAND} `;
+  for (const line of [
+    `${step}plugin dev request . spyhop.range --data {"request":3,"tab":"spend","range":"day"} --json`,
+    `${step}plugin dev request . spyhop.range --data {"request":3,"tab":"spend","range":"year"} --json`,
+    `+ test -s ${process.env.HOME}/.local/state/spyhop/insights.db`,
+  ]) {
+    assert.ok(lines.includes(line), `${line}\nnot in\n${out}`);
+  }
   assert.deepEqual(orca.orca(), []);
 });
 

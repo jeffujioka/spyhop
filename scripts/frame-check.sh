@@ -3,9 +3,11 @@
 # computer, as the dev plugin `local.spyhop`, and stops at the first step that fails, with the
 # step's answer on stderr. It validates the folder, records `orca plugin check`, loads the folder
 # with `orca plugin dev watch` (stopped when the script exits), opens the panel, asks the worker
-# for the fleet, then for the session of each of its cards, checks every answer's bounds, shoots
-# the fleet screen 300 and 420 pixels wide in Orca's dark and light themes, keeping each PNG, and
-# reads the logs. The themes take effect only while Orca's window is hidden or minimized.
+# for the fleet, then for the session of each of its cards, waits for the first catch-up of the
+# history store, asks the worker for the Spend tab over a day and a year, checks every answer's
+# bounds, shoots the fleet screen 300 and 420 pixels wide in Orca's dark and light themes, keeping
+# each PNG, and reads the logs. The themes take effect only while Orca's window is hidden or
+# minimized.
 # `plugin check` lists no HTML panel and `plugin shot --scenario` refuses one (Orca 1.4.273), so
 # the live shot of the dev plugin is the frame check and `plugin check` is only recorded.
 # Usage: bash scripts/frame-check.sh [--dry-run]; --dry-run prints each `orca` command line and
@@ -27,6 +29,10 @@ SERIES_POINTS=120
 READ_REFRESHES=30
 # A little over the panel's refresh period of 2 s.
 REFRESH_WAIT=3
+# The history store the worker's catch-ups fill (src/history/store.ts).
+STORE=$HOME/.local/state/spyhop/insights.db
+# The most a first catch-up of this computer's sessions takes, in seconds.
+CATCH_UP_WAIT=300
 
 work=$(mktemp -d)
 watch=
@@ -164,6 +170,30 @@ while IFS= read -r card <&3; do
 done 3<<EOF
 $cards
 EOF
+
+# The history store and the Spend tab: once the first catch-up has ended, as counted by the
+# store's meta `catch-ups`, the Spend tab over a day and over a year is under Orca's limit with a
+# cost that is a number or `n/a`, and the store is not empty.
+count="SELECT value FROM meta WHERE key = 'catch-ups'"
+printf '+ %s\n' "sqlite3 -readonly $STORE \"$count\""
+if [ -z "$dry" ]; then
+  deadline=$((SECONDS + CATCH_UP_WAIT))
+  # sqlite3 fails while the store is missing or locked, and prints nothing before a catch-up ends
+  until [ "$(sqlite3 -readonly "$STORE" "$count" 2>/dev/null || true)" -ge 1 ] 2>/dev/null; do
+    if [ "$SECONDS" -ge "$deadline" ]; then
+      echo "frame check: no catch-up of the history store $STORE ended within $CATCH_UP_WAIT s" >&2
+      exit 1
+    fi
+    sleep 1
+  done
+fi
+for range in day year; do
+  run "$work/range.json" plugin dev request . spyhop.range --data "{\"request\":3,\"tab\":\"spend\",\"range\":\"$range\"}" --json
+  [ -n "$dry" ] || expect "Buffer.byteLength(JSON.stringify(a.result.result)) < $MAX_ANSWER_BYTES && (typeof a.result.result.spend.cost === 'number' || a.result.result.spend.cost === 'n/a')" \
+    "the Spend answer over a $range is not under $MAX_ANSWER_BYTES bytes with a cost that is a number or n/a" "$work/range.json"
+done
+printf '+ test -s %s\n' "$STORE"
+[ -n "$dry" ] || test -s "$STORE" || { echo "frame check: the history store $STORE is missing or empty" >&2; exit 1; }
 [ -n "$dry" ] || sleep "$REFRESH_WAIT"
 
 # Each shot writes the same PNG, so each is kept as .orca/shots/frame-check-<width>-<theme>.png,
@@ -190,5 +220,7 @@ done
 run "$work/logs.json" plugin logs "$KEY" --json
 # the whole answer as text, so that a `[frame]` line is found in whichever field holds it
 [ -n "$dry" ] || expect '!JSON.stringify(a).includes("[frame]")' 'the logs hold a [frame] error' "$work/logs.json"
+[ -n "$dry" ] || expect '!JSON.stringify(a).includes("node:sqlite")' 'the logs hold a node:sqlite error' "$work/logs.json"
+[ -n "$dry" ] || expect '!JSON.stringify(a).includes("catch-up cannot")' 'the logs hold a catch-up that cannot read a file of this computer' "$work/logs.json"
 
 [ -n "$dry" ] || echo 'frame check: passed'
