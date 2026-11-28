@@ -392,6 +392,16 @@ own panel, so the command does it through the Orca CLI: it finds the plugin's ke
 plugin list` (the spyhop install that is not disabled, when a Git and a folder install are both
 listed) and runs `orca plugin open <key> --panel spyhop`.
 
+## Status bar item
+
+The plugin puts one item in Orca's status bar, `$<cost> today`: today's model spend on every
+Orca host, the Spend tab's Day figure, set when the worker starts and after each catch-up (n/a
+when the history store cannot be opened). Its tooltip is `Spyhop: today's model spend on every
+Orca host`, and pressing it shows the panel, as the palette command does. It is there because
+Orca stops a plugin's worker after 5 minutes with no request, unless the plugin has a status bar
+item: with it, the worker runs while the plugin is enabled, so the 15-minute catch-ups go on with
+the panel closed.
+
 ## Install, develop, test
 
 - Install from Git: `orca plugin install https://github.com/jeffujioka/spyhop`, or from a clean

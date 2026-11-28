@@ -31,6 +31,13 @@
         "command": "spyhop.show",
         "key": "Mod+Alt+Shift+S"
       }
+    ],
+    "statusBarItems": [
+      {
+        "id": "spyhop",
+        "icon": "bar-chart-3",
+        "command": "spyhop.show"
+      }
     ]
   },
   "capabilities": [

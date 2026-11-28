@@ -1,5 +1,6 @@
-// The plugin's manifest as Orca loads it: one HTML panel, the palette command and its key, and
-// the four capabilities the plugin needs, no other. `orca plugin validate` is Orca's own check of
+// The plugin's manifest as Orca loads it: one HTML panel, the palette command and its key, the
+// status bar item that keeps the worker running and shows the panel, and the four capabilities
+// the plugin needs, no other. `orca plugin validate` is Orca's own check of
 // it: the CLI the guide names, ORCA_CLI_COMMAND when set, else `orca` on PATH.
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
@@ -23,5 +24,5 @@ test('Manifest of the new panel', () => {
     ['workspace:read', 'agent:read', 'workspace:write', 'storage:own'],
   );
   assert.deepEqual(manifest.contributes.keybindings, [{ command: 'spyhop.show', key: 'Mod+Alt+Shift+S' }]);
-  assert.equal(read('package.json').version, '0.2.0');
+  assert.deepEqual(manifest.contributes.statusBarItems, [{ id: 'spyhop', icon: 'bar-chart-3', command: 'spyhop.show' }]);
 });

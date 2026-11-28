@@ -34,18 +34,23 @@
 // `terminal.focus`, one on a paired Orca server by `orca terminal switch` to the server's
 // terminal; neither runs anything over ssh. A press that cannot focus answers `focused: false`
 // and writes the reason to the worker's log.
+// The status bar item `spyhop` (orca-plugin.json) shows today's spend on every Orca host
+// (`spendView` over Day), set when the store is opened, or cannot be, and after each catch-up:
+// Orca keeps the worker of a plugin with a status bar item running while it is enabled, so the
+// catch-ups go on with the panel closed. Pressing it runs `spyhop.show`.
 import { homedir } from 'node:os';
 import type { OrcaWorkerApi } from 'orca/worker';
 import { type BuiltCard, createAgentCards, type OrcaAgent, sameButStates } from './agent-cards.ts';
 import { cardView } from './card-view.ts';
 import { CATCH_UP_MS, decodeScans, encodeScans, keptPartsOf, RANGE_REFRESH_MS, REFRESH_INTERVAL_MS } from './core/refresh.js';
+import { formatCost } from './core/format.js';
 import { createTtlCache } from './core/ttl-cache.js';
 import { run, runBytes } from './exec.ts';
 import { attentionRows, burnCard, type FleetAgent, groupCards, LOCAL, stateCounts } from './fleet.ts';
 import { orca as cli, historyHosts, type HostLists, listHosts, readServerAgents, type RemoteHost, remoteHosts, type ServerAgent } from './hosts.ts';
-import type { CardView, FleetAnswer, HostGroup, Pane, RangeAnswer, SessionAnswer, SpendView } from './protocol.ts';
+import type { CardView, FleetAnswer, HostGroup, Num, Pane, RangeAnswer, SessionAnswer, SpendView } from './protocol.ts';
 import { type CatchUp, createCatchUp } from './history/catch-up.ts';
-import { openStore } from './history/store.ts';
+import { openStore, type Store } from './history/store.ts';
 import { spendView } from './history/views.ts';
 import { sessionDetail } from './session-detail.ts';
 
@@ -67,19 +72,27 @@ const SPEND_NA: SpendView = { cost: 'n/a', tokens: 'n/a', calls: 'n/a', chart: n
 // the catch-up starts a few ms later, when the worker takes the ask.
 const RANGE_CATCH_UP_MS = RANGE_REFRESH_MS - REFRESH_INTERVAL_MS;
 
-// Runs `catchUp`, or waits for the one running; a run that fails is logged, and resolves.
-function caughtUp(catchUp: CatchUp, log: (message: string) => void) {
-  return catchUp.run().catch((error) => log(`spyhop: catch-up failed: ${(error as Error).message}`));
+// The status bar item's id, as orca-plugin.json declares it, and its tooltip.
+const STATUS_ITEM = 'spyhop';
+const STATUS_TOOLTIP = "Spyhop: today's model spend on every Orca host";
+
+// Runs `catchUp`, or waits for the one running, then `caught`; a run that fails is logged, and
+// resolves.
+function caughtUp(catchUp: CatchUp, log: (message: string) => void, caught: () => void) {
+  return catchUp
+    .run()
+    .catch((error) => log(`spyhop: catch-up failed: ${(error as Error).message}`))
+    .then(caught);
 }
 
 // Runs `catchUp` at once and again CATCH_UP_MS after each run started, whether the panel is open
-// or not; a run that fails is logged. Returns the stop: no further run starts, and it resolves
-// once the running one has ended.
-export function scheduleCatchUps(catchUp: CatchUp, log: (message: string) => void) {
+// or not, `caught` after each; a run that fails is logged. Returns the stop: no further run
+// starts, and it resolves once the running one has ended.
+export function scheduleCatchUps(catchUp: CatchUp, log: (message: string) => void, caught: () => void) {
   let timer: NodeJS.Timeout;
   const next = () => {
     timer = setTimeout(next, CATCH_UP_MS);
-    caughtUp(catchUp, log);
+    caughtUp(catchUp, log, caught);
   };
   next();
   return async () => {
@@ -99,6 +112,19 @@ export async function deactivate() {
 export default function activate(orca: OrcaWorkerApi): void {
   const home = homedir();
   const log = (message: string) => orca.log(message);
+  // Sets the status bar item's text to today's spend in `store`, n/a when there is none or it
+  // cannot be read; an update Orca refuses is logged.
+  function showToday(store: Store | null) {
+    let cost: Num = 'n/a';
+    try {
+      if (store) cost = spendView(store, 'day', Date.now()).cost;
+    } catch (error) {
+      log(`spyhop: cannot read the history store: ${(error as Error).message}`);
+    }
+    orca.host
+      .call('statusBar.update', { id: STATUS_ITEM, text: `${formatCost(cost)} today`, tooltip: STATUS_TOOLTIP })
+      .catch((error) => log(`spyhop: cannot update the status bar item: ${(error as Error).message}`));
+  }
   // Orca's lists of hosts and paired servers, which the catch-ups and the requests share.
   const hostLists = createTtlCache(HOST_LISTS_TTL_MS);
   const listsNow = () => hostLists('hosts', Date.now(), () => listHosts(run)) as Promise<HostLists>;
@@ -106,12 +132,14 @@ export default function activate(orca: OrcaWorkerApi): void {
   // and its catch-up; null when it cannot be opened, `node:sqlite` not loaded included.
   const opening = openStore(home).then(
     (store) => {
+      showToday(store);
       const catchUp = createCatchUp({ run, runBytes, store, home, log, hosts: async () => historyHosts(await listsNow()) });
-      const stopCatchUps = scheduleCatchUps(catchUp, log);
+      const stopCatchUps = scheduleCatchUps(catchUp, log, () => showToday(store));
       return { store, catchUp, stopCatchUps };
     },
     (error) => {
       log(`spyhop: cannot open the history store: ${(error as Error).message}`);
+      showToday(null);
       return null;
     },
   );
@@ -310,7 +338,7 @@ export default function activate(orca: OrcaWorkerApi): void {
     const history = await opening;
     if (!history) return { request, tab, range, spend: tab === 'spend' ? SPEND_NA : null, notRead: [], progress: null };
     const { store, catchUp } = history;
-    if (!catchUp.running() && Date.now() - (catchUp.startedMs() ?? -Infinity) >= RANGE_CATCH_UP_MS) await caughtUp(catchUp, log);
+    if (!catchUp.running() && Date.now() - (catchUp.startedMs() ?? -Infinity) >= RANGE_CATCH_UP_MS) await caughtUp(catchUp, log, () => showToday(store));
     const read = { notRead: catchUp.notRead(), progress: catchUp.progress() };
     if (tab !== 'spend') return { request, tab, range, spend: null, ...read };
     // a read that fails, such as a store held past its busy timeout, is n/a until one succeeds

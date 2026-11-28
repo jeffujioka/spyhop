@@ -115,7 +115,7 @@ describe('catch-up', () => {
     ompSession(home, join(home, 'api'), { title: 'api', calls: [spent(0.4)] });
     // the listings of omp's sessions folder: one a run
     const finds = () => calls.filter(({ command, args }) => command === 'find' && args.includes(ompSessionsDir(home))).length;
-    stop = scheduleCatchUps(catchUp, () => {});
+    stop = scheduleCatchUps(catchUp, () => {}, () => {});
     await caughtUp(home);
     const mark = calls.length;
 
