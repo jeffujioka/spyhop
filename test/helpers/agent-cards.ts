@@ -101,7 +101,8 @@ export type OpencodeCall = {
   finish?: string | null;
   at?: number;
   variant?: string;
-  model?: string;
+  // null: the call logs no model
+  model?: string | null;
   error?: { type: string; status?: number };
   retry?: boolean;
   reasoning?: number;

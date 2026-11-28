@@ -141,9 +141,10 @@ export function opencodeInsights(rows, ins) {
     } else {
       const model = modelKey(row.providerId, row.modelId);
       const health = healthOf(row);
-      if (!isCall(row) && health.failure && typeof row.modelId === 'string' && isNumber(row.created)) {
-        // a failed call that spent nothing is no model call, but counts by its type
-        noteFailure(ins, { end: row.created, model, failure: health.failure, recovered: health.recovered });
+      if (health.failure && isNumber(row.created) && (!isCall(row) || typeof row.modelId !== 'string')) {
+        // a failed call that spent nothing is no model call, and one that logs no model is in no line of
+        // the calls, but both count by their type, the second under n/a
+        noteFailure(ins, { end: row.created, model: typeof row.modelId === 'string' ? model : 'n/a', failure: health.failure, recovered: health.recovered });
       }
       if (isCall(row) && typeof row.modelId === 'string' && isNumber(row.created)) {
         const [uncached, read, write, output] = [row.input, row.cacheRead, row.cacheWrite, row.output].map(tokenCount);

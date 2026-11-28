@@ -3,13 +3,22 @@
 // catch-up reads them from omp's, Claude Code's and opencode's sessions into the daily lines and
 // the replies of the history store. The store, the runner and the programs are the real ones,
 // under a temporary home, in UTC.
+import { execFileSync } from 'node:child_process';
 import { appendFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, describe, test } from 'node:test';
+import { run, runBytes } from '../../src/exec.ts';
+import { createCatchUp } from '../../src/history/catch-up.ts';
+import { historyHosts, listHosts } from '../../src/hosts.ts';
 import { LINE_FIGURES, newInsights, noteCall, takeLines } from '../../src/core/insights.js';
 import { failureType, replyBucket, replyQuantile } from '../../src/core/reply-times.js';
-import type { Store } from '../../src/history/store.ts';
-import { opencodeSession } from '../helpers/agent-cards.ts';
+import { openStore, type Store } from '../../src/history/store.ts';
+import { opencodeDatabase, opencodeSession, sqlText } from '../helpers/agent-cards.ts';
+import { setEnv, useTempHome } from '../helpers/env.ts';
+import { tempHome } from '../helpers/files.ts';
+import { STARFISH_LISTS } from '../helpers/orca-answers.ts';
+import { readOnlyLine } from '../helpers/read-only.ts';
+import { standIns } from '../helpers/stand-ins.ts';
 import { caughtUpStore, nonZero, sumsOf } from '../helpers/history.ts';
 import { claudeSession, MODEL, ompSession, type ClaudeCall, type OmpCall } from '../helpers/live.ts';
 import { expect } from './helpers/expect.ts';
@@ -116,6 +125,18 @@ describe('omp', () => {
     );
 
     expect(nonZero(sums, 'coldOther', 'coldModel', 'failOther', 'calls')).toEqual({ coldOther: 1, failOther: 1, calls: 3 });
+  });
+
+  test('a failed call that logged no model counts under n/a, with or without tokens', async () => {
+    const sums = await sumsAfter((home) =>
+      ompSession(home, join(home, 'api'), {
+        title: 'api',
+        calls: [call('10:00'), failed('10:01', 'fetch failed', { model: null }), failed('10:02', 'fetch failed', { model: null, uncached: 2, output: 8 })],
+      }),
+    );
+
+    expect(nonZero(sums, ...NAMES, 'calls')).toEqual({ failNetwork: 2, calls: 1 });
+    expect(store!.dailyLines(...RANGE).filter((line) => line.figures.failNetwork > 0).map((line) => line.model)).toEqual(['n/a']);
   });
 
   test('an interrupted call is no failure', async () => {
@@ -259,6 +280,12 @@ describe('opencode', () => {
     expect(nonZero(sums, 'coldOther', 'coldModel', 'failNetwork', 'calls')).toEqual({ coldOther: 1, failNetwork: 1, calls: 3 });
   });
 
+  test('a failed call that logged no model counts under n/a', async () => {
+    await sumsAfter(session([{ ...NONE, at: at('10:00'), model: null, error: { type: 'provider.auth', status: 401 } }, { ...WRITE, at: at('10:01') }]), () => {}, 0, 'web');
+
+    expect(store!.dailyLines(...RANGE).filter((line) => line.figures.failAuth > 0).map((line) => line.model)).toEqual(['n/a']);
+  });
+
   test('a retry without an error recovered', async () => {
     const sums = await sumsAfter(session([{ ...WRITE, at: at('10:00'), retry: true }, { ...WRITE, at: at('10:01'), retry: true }, { ...WRITE, at: at('10:02') }]), () => {}, 0, 'web');
 
@@ -339,5 +366,57 @@ describe('noteCall taken back', () => {
     expect(nonZero(line.figures, ...LINE_FIGURES)).toEqual({});
     expect(Object.values(line.replies ?? {})).toEqual([0]);
     expect(takeLines(ins)).toHaveLength(1);
+  });
+});
+
+describe('a remote opencode database', () => {
+  // the sums of the daily lines after a catch-up of this computer and starfish-bs, whose home
+  // `prepare` fills; the lines the stand-in ssh ran, which must all be read-only
+  async function remoteSums(prepare: (remoteHome: string) => void) {
+    setEnv('TZ', 'UTC');
+    const remoteHome = tempHome();
+    prepare(remoteHome);
+    const home = useTempHome();
+    const calls = standIns({ homes: { 'starfish-bs': remoteHome }, orca: STARFISH_LISTS });
+    store = await openStore(home);
+    await createCatchUp({ run, runBytes, store, home, log: () => {}, hosts: async () => historyHosts(await listHosts(run)), aliasOf: async () => null }).run();
+    const lines = calls.ssh();
+    expect(lines.filter((args) => args[0] !== 'starfish-bs' || !readOnlyLine(args.at(-1)!))).toEqual([]);
+    // the query that reads the retry and the error status went through ssh
+    expect(lines.some((args) => /retry/.test(args.at(-1)!) && /errorStatus/.test(args.at(-1)!))).toBe(true);
+    return sumsOf(store, []);
+  }
+
+  test('the retries and the error statuses of the current tables come through ssh', async () => {
+    const sums = await remoteSums((remoteHome) =>
+      opencodeSession(remoteHome, join(remoteHome, 'web'), {
+        provider: 'anthropic',
+        model: 'claude-opus-5.5',
+        cost: 0.2,
+        calls: [
+          { uncached: 10, read: 0, write: 100, output: 5, at: at('10:00'), retry: true },
+          { uncached: 0, read: 0, write: 0, output: 0, at: at('10:01'), finish: 'error', error: { type: 'provider.invalid-request', status: 404 } },
+        ],
+      }),
+    );
+
+    expect(nonZero(sums, 'retries', 'failNotFound')).toEqual({ retries: 1, failNotFound: 1 });
+  });
+
+  test('the retries and the error statuses of the legacy tables come through ssh', async () => {
+    const sums = await remoteSums((remoteHome) => {
+      const database = opencodeDatabase(remoteHome, 'basic');
+      const message = (id: string, created: number, data: object) => `INSERT INTO message VALUES ('${id}', 'ses_basic', ${created}, ${created}, ${sqlText(JSON.stringify(data))});`;
+      const base = { role: 'assistant', parentID: 'm01', modelID: 'model-a', providerID: 'p', time: { created: 0 } };
+      execFileSync('sqlite3', [
+        database,
+        [
+          message('m90', at('10:00'), { ...base, cost: 0.1, tokens: { input: 10, output: 5, reasoning: 0, cache: { read: 0, write: 100 } }, finish: 'stop', retry: { attempt: 2 } }),
+          message('m91', at('10:01'), { ...base, cost: 0, tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }, error: { name: 'APIError', data: { statusCode: 404 } } }),
+        ].join('\n'),
+      ]);
+    });
+
+    expect(nonZero(sums, 'retries', 'failNotFound')).toEqual({ retries: 1, failNotFound: 1 });
   });
 });

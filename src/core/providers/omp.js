@@ -266,10 +266,13 @@ function fold(state, entries, opts) {
           }
           s.calls += 1;
           addSpend(s, e.message, time, call, false, ran, { cold, writeCost: written, lifetimeMs: lifetimeOf(usage), ...healthOf(e.message) });
-        } else if (s.insights && typeof e.message.model === 'string' && isNumber(ran.end)) {
-          // a call that spent nothing is no model call, but a failed one counts by its type
-          const health = healthOf(e.message);
-          if (health.failure) noteFailure(s.insights, { end: ran.end, model: modelKey(e.message.provider, e.message.model), failure: health.failure, recovered: health.recovered });
+        }
+        // a failed call that spent nothing is no model call, and one that logs no model is in no line
+        // of the calls, but both count by their type, the second under n/a
+        const health = healthOf(e.message);
+        const named = typeof e.message.model === 'string';
+        if (s.insights && health.failure && isNumber(ran.end) && (!spentTokens(usage) || !named)) {
+          noteFailure(s.insights, { end: ran.end, model: named ? modelKey(e.message.provider, e.message.model) : 'n/a', failure: health.failure, recovered: health.recovered });
         }
         for (const part of Array.isArray(e.message.content) ? e.message.content : []) {
           if (part?.type === 'toolCall') toolCalled(s, part.id, part.name);

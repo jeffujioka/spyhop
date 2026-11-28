@@ -323,7 +323,8 @@ export function ompCalls(home: string, path: string, { title, contexts, cost = 0
 export type OmpCall = {
   at: number;
   provider?: string;
-  model?: string;
+  // null: the message logs no model
+  model?: string | null;
   side?: 'title-fork' | 'recap' | 'composer-prediction';
   read?: number;
   write?: number;
