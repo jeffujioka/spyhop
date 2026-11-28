@@ -13,12 +13,14 @@
 // the cards the same way, posts nothing, and
 // answers with the session of the one card it asks for (src/session-detail.ts), or none when
 // Orca no longer lists its agent. The session reader's totals of each scanned session file are
-// kept in the plugin's storage (capability `storage:own`), and nothing else is: they are loaded
+// kept in the plugin's storage (capability `storage:own`), and nothing else is there: they are loaded
 // when the worker starts, which the first request waits for, and written at the end of a request
 // when a scan changed, at most once every 30 seconds, so a file scanned before is not scanned
 // again from its start. Orca stores no value over 256 KiB, so they are split over the keys
 // `session-totals`, `session-totals.1` and on. The CLI runs on each request, so only while the
-// panel is open, and for the palette command `spyhop.show`, which shows the panel.
+// panel is open, and for the palette command `spyhop.show`, which shows the panel. Apart from
+// them, a catch-up reads this computer's omp session files into the history store
+// (src/history/catch-up.ts) when the worker starts and every CATCH_UP_MS after.
 // `spyhop.focus` focuses a card's pane
 // in this computer's Orca window: an agent on this computer or an SSH workspace by Orca's
 // `terminal.focus`, one on a paired Orca server by `orca terminal switch` to the server's
@@ -28,12 +30,14 @@ import { homedir } from 'node:os';
 import type { OrcaWorkerApi } from 'orca/worker';
 import { type BuiltCard, createAgentCards, type OrcaAgent, sameButStates } from './agent-cards.ts';
 import { cardView } from './card-view.ts';
-import { decodeScans, encodeScans, keptPartsOf } from './core/refresh.js';
+import { CATCH_UP_MS, decodeScans, encodeScans, keptPartsOf } from './core/refresh.js';
 import { createTtlCache } from './core/ttl-cache.js';
 import { run } from './exec.ts';
 import { attentionRows, burnCard, type FleetAgent, groupCards, LOCAL, stateCounts } from './fleet.ts';
 import { orca as cli, type HostLists, listHosts, readServerAgents, type RemoteHost, remoteHosts, type ServerAgent } from './hosts.ts';
 import type { CardView, FleetAnswer, HostGroup, Pane, SessionAnswer } from './protocol.ts';
+import { type CatchUp, createCatchUp } from './history/catch-up.ts';
+import { openStore } from './history/store.ts';
 import { sessionDetail } from './session-detail.ts';
 
 // How long Orca's lists of hosts and paired servers are kept: a server is paired seldom, its
@@ -46,8 +50,39 @@ const KEPT_KEY = 'session-totals';
 const keptKey = (part: number) => (part === 0 ? KEPT_KEY : `${KEPT_KEY}.${part}`);
 const KEPT_WRITE_MS = 30 * 1000;
 
+// Runs `catchUp` at once and again CATCH_UP_MS after each run started, whether the panel is open
+// or not; a run that fails is logged. Returns the stop: no further run starts, and it resolves
+// once the running one has ended.
+export function scheduleCatchUps(catchUp: CatchUp, log: (message: string) => void) {
+  let timer: NodeJS.Timeout;
+  const next = () => {
+    timer = setTimeout(next, CATCH_UP_MS);
+    catchUp.run().catch((error) => log(`spyhop: catch-up failed: ${(error as Error).message}`));
+  };
+  next();
+  return async () => {
+    clearTimeout(timer);
+    if (catchUp.running()) await catchUp.run().catch(() => {});
+  };
+}
+
+// What `deactivate` ends: the catch-ups and the history store of the active worker.
+let ending: (() => Promise<void>) | null = null;
+
+export async function deactivate() {
+  await ending?.();
+  ending = null;
+}
+
 export default function activate(orca: OrcaWorkerApi): void {
   const home = homedir();
+  // The history store, which the catch-ups fill from the worker's start (src/history/catch-up.ts).
+  const store = openStore(home);
+  const stopCatchUps = scheduleCatchUps(createCatchUp({ run, store, home, log: (message) => orca.log(message) }), (message) => orca.log(message));
+  ending = async () => {
+    await stopCatchUps();
+    store.close();
+  };
   // The card builder, kept for the worker's life: it keeps the state of its session reads
   // between builds, which start from the scans the storage holds. A storage that cannot be read
   // (the capability not granted), or holds anything but this version's kept scans, gives none.

@@ -232,9 +232,19 @@ When the refresh ends its whole answer replaces what is drawn, so the group of a
 gone disappears then, and the header's counts are drawn from it. A group built for an older
 refresh is never drawn.
 
+Apart from the panel, the worker runs a catch-up when it starts and every 15 minutes after,
+whether the panel is open or closed, and between catch-ups reads nothing for them. A catch-up
+lists this computer's omp session files and sub-agent transcripts with one `find`, and reads each
+one into the history store (see What spyhop stores) from where its last read ended, one program at
+a time: a file whose size and modified time are those of its last read is not read, and a file
+shorter than that read, or no longer the file that was read, is read again from its start and its
+counts replace those it gave before. A file that cannot be read is written to the worker's log and
+tried again at the next catch-up.
+
 ## What spyhop stores
 
-Session totals only, in the plugin's own storage on this computer (`storage:own`); the panel's
+Session totals, in the plugin's own storage on this computer (`storage:own`), and the history
+store (below); the panel's
 page keeps nothing of its own, and shows only what the worker answers. For each session file,
 and each omp or Claude Code sub-agent transcript, larger than the 256 KiB a refresh reads from
 its end, the totals the session reader counted over the file, the context sizes of its last 30
@@ -260,6 +270,14 @@ left out is scanned again whole after a restart. They are stored as version
 5: the first open after an update from a spyhop that stored another version, or stored them in
 another form, scans each file once from its start, which is all that deleting the storage costs
 too.
+
+The history store is the SQLite file `~/.local/state/spyhop/insights.db` on this computer, made
+when missing, which the catch-ups fill and nothing deletes, so it keeps what they read after omp
+deletes its files. For each session file it holds the daily lines of its model calls: their
+count, tokens and cost summed by the day each call ended, the session, the repo and the model,
+and how far the file was read with the session reader's state there. A file's repo is set when it
+is first read: the git origin of the folder its `session` entry records, else that folder, else
+`n/a`; a sub-agent's transcript counts in its own folder's repo and in its main session.
 
 ## Focus pane
 

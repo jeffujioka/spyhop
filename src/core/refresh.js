@@ -11,6 +11,9 @@ import { parseEntries } from './providers/jsonl.js';
 // The plugin refreshes its cards this often.
 export const REFRESH_INTERVAL_MS = 2000;
 
+// The worker catches up on the session files this often (src/history/catch-up.ts).
+export const CATCH_UP_MS = 15 * 60 * 1000;
+
 // The most of a session file one refresh reads for the figures about its end. A line cut at
 // the start of the window is skipped by the provider, which ignores lines that are not whole
 // JSON.
@@ -198,6 +201,91 @@ export function decodeScans(values) {
   }
 }
 
+// Advances `scan` over the file `path`, of `size` bytes or more, with the provider's `fold`, so
+// that its state covers the file's whole lines; resolves to the scan, which is `scan` itself
+// when one is given (a finished scan `{ state, pos }` will do), and whether its earlier coverage
+// was dropped and the file read again from its start (`restarted`). Read as little as possible:
+//
+// - The first sight of a file is one read-only pass over all of it, in blocks of
+//   `SCAN_CHUNK_BYTES` by `dd` (the block `skip` of size `bs`, exactly), each within the
+//   runner's output cap. A block ends anywhere, so the text of one is cut at its last
+//   newline, the lines before it are folded and the rest carried to the next block: no line
+//   is split. A character that a block boundary cuts reads as U+FFFD at both ends of the
+//   carried line;
+//   that can only change text inside a JSON string, never a figure.
+//   The pass ends at the first short block. `dd` reports the bytes it copied (the number at
+//   the start of its statistics line, whatever the language of the line), which is the exact
+//   length of the block; the covered bytes end where the carried line begins. A line with no
+//   newline yet that ends in a cut character is measured too long, so `pos` falls short; the
+//   check below finds that out and the file is scanned again, which is safe, and the line is
+//   whole at a later read.
+// - Afterwards only what was appended: `tail -c +<pos>` starts at the last covered byte, a
+//   newline, so the text after it begins a line, and its whole lines are folded; `pos`
+//   advances by their UTF-8 length. A line being written is left for the next read, when
+//   it is whole. Starting one byte early checks the bookkeeping: anything but a newline
+//   there means the file is not what was scanned, and it is scanned again.
+// - When more was appended than one read can take, the pass goes on in blocks from the one
+//   that holds `pos`, dropping its bytes that are covered already.
+// - A smaller file than scanned was replaced, so the scan starts over.
+//
+// The scan is changed in place, so a read that fails leaves it as far as it got (a block is
+// folded only once read), the next read goes on from there, and the promise rejects.
+export async function scanFile(exec, fold, scan, path, size) {
+  let restarted = false;
+  const restart = () => {
+    restarted = true;
+    Object.assign(scan, newScan());
+  };
+  scan ??= newScan();
+  if (size < (scan.pos >= 0 ? scan.pos : scan.block * SCAN_CHUNK_BYTES) || scan.pos === 0) restart();
+  if (scan.pos >= 0) {
+    if (size === scan.pos) return { scan, restarted };
+    if (size - scan.pos > SCAN_CHUNK_BYTES) {
+      scan.block = Math.floor(scan.pos / SCAN_CHUNK_BYTES);
+      scan.skip = scan.pos - scan.block * SCAN_CHUNK_BYTES;
+      scan.carry = '';
+      scan.pos = -1;
+    } else {
+      const added = await exec('tail', ['-c', `+${scan.pos}`, '--', path]);
+      if (added.code !== 0) throw new Error(`tail failed on ${path}`);
+      if (added.stdout.startsWith('\n')) {
+        const rest = added.stdout.slice(1);
+        const whole = rest.slice(0, rest.lastIndexOf('\n') + 1);
+        scan.state = fold(scan.state, parseEntries(whole));
+        scan.pos += utf8Length(whole);
+        return { scan, restarted };
+      }
+      restart();
+    }
+  }
+  while (scan.pos < 0) {
+    const block = await exec('dd', [`if=${path}`, `bs=${SCAN_CHUNK_BYTES}`, `skip=${scan.block}`, 'count=1']);
+    const copied = /^(\d+) \S/m.exec(block.stderr ?? '');
+    if (block.code !== 0 || !copied) throw new Error(`dd failed on ${path}`);
+    let blockText = block.stdout;
+    if (scan.skip > 0) {
+      blockText = dropBytes(blockText, scan.skip);
+      if (blockText === null) {
+        // not the file that was scanned
+        restart();
+        continue;
+      }
+      scan.skip = 0;
+    }
+    const text = scan.carry + blockText;
+    const cut = text.lastIndexOf('\n') + 1;
+    scan.state = fold(scan.state, parseEntries(text.slice(0, cut)));
+    scan.carry = text.slice(cut);
+    const length = Number(copied[1]);
+    if (length < SCAN_CHUNK_BYTES) {
+      scan.pos = scan.block * SCAN_CHUNK_BYTES + length - utf8Length(scan.carry);
+      scan.carry = '';
+    }
+    scan.block += 1;
+  }
+  return { scan, restarted };
+}
+
 // `exec`: the plugin's runner. `fold(state, entries)`: the provider's accumulator (see
 // src/core/providers/omp.js). `read(file)` takes `{ path, mtimeMs, size }` of a linked session file
 // and resolves to the `input` of `readStats(harness, input, now)`: `{ text, sources, state }`
@@ -235,95 +323,22 @@ export function createSessionReader({ exec, fold, kept = [] }) {
   // path -> when that file was last asked for (epoch ms), which `encodeScans` drops by
   const readAt = new Map();
 
-  // The state of the file's first `size` bytes or more, read as little as possible:
-  //
-  // - The first sight of a file is one read-only pass over all of it, in blocks of
-  //   `SCAN_CHUNK_BYTES` by `dd` (the block `skip` of size `bs`, exactly), each within the
-  //   runner's output cap. A block ends anywhere, so the text of one is cut at its last
-  //   newline, the lines before it are folded and the rest carried to the next block: no line
-  //   is split. A character that a block boundary cuts reads as U+FFFD at both ends of the
-  //   carried line;
-  //   that can only change text inside a JSON string, never a figure.
-  //   The pass ends at the first short block. `dd` reports the bytes it copied (the number at
-  //   the start of its statistics line, whatever the language of the line), which is the exact
-  //   length of the block; the covered bytes end where the carried line begins. A line with no
-  //   newline yet that ends in a cut character is measured too long, so `pos` falls short; the
-  //   check below finds that out and the file is scanned again, which is safe, and the line is
-  //   whole at a later refresh.
-  // - Afterwards only what was appended: `tail -c +<pos>` starts at the last covered byte, a
-  //   newline, so the text after it begins a line, and its whole lines are folded; `pos`
-  //   advances by their UTF-8 length. A line being written is left for the next refresh, when
-  //   it is whole. Starting one byte early checks the bookkeeping: anything but a newline
-  //   there means the file is not what was scanned, and it is scanned again.
-  // - When more was appended than one read can take, the pass goes on in blocks from the one
-  //   that holds `pos`, dropping its bytes that are covered already.
-  // - A smaller file than scanned was replaced, so the scan starts over.
-  // - A file with a kept scan and none yet starts from the kept one, as if this reader had
-  //   scanned it: the two checks above tell when it is not the file that was scanned.
-  //
-  // A read that fails leaves the scan as it was (a block is folded only once read), so the next
-  // refresh goes on from there, and throws.
+  // The state of the file's first `size` bytes or more (see `scanFile`). A file with a kept scan
+  // and none yet starts from the kept one, as if this reader had scanned it: the checks of
+  // `scanFile` tell when it is not the file that was scanned. A finished scan changes when its
+  // pass ends or its `pos` moves.
   async function advance(path, size) {
     let scan = scans.get(path);
     const keptScan = keptScans.get(path);
     if (!scan && keptScan) {
       scan = { ...newScan(), state: keptScan.state, pos: keptScan.pos };
-      scans.set(path, scan);
       keptScans.delete(path);
     }
-    if (scan && (size < (scan.pos >= 0 ? scan.pos : scan.block * SCAN_CHUNK_BYTES) || scan.pos === 0)) scan = undefined;
-    if (scan?.pos >= 0) {
-      if (size === scan.pos) return scan.state;
-      if (size - scan.pos > SCAN_CHUNK_BYTES) {
-        scan.block = Math.floor(scan.pos / SCAN_CHUNK_BYTES);
-        scan.skip = scan.pos - scan.block * SCAN_CHUNK_BYTES;
-        scan.carry = '';
-        scan.pos = -1;
-      } else {
-        const added = await exec('tail', ['-c', `+${scan.pos}`, '--', path]);
-        if (added.code !== 0) throw new Error(`tail failed on ${path}`);
-        if (added.stdout.startsWith('\n')) {
-          const rest = added.stdout.slice(1);
-          const whole = rest.slice(0, rest.lastIndexOf('\n') + 1);
-          scan.state = fold(scan.state, parseEntries(whole));
-          scan.pos += utf8Length(whole);
-          if (whole) changed = true;
-          return scan.state;
-        }
-        scan = undefined;
-      }
-    }
-    if (!scan) {
-      scan = newScan();
-      scans.set(path, scan);
-    }
-    while (scan.pos < 0) {
-      const block = await exec('dd', [`if=${path}`, `bs=${SCAN_CHUNK_BYTES}`, `skip=${scan.block}`, 'count=1']);
-      const copied = /^(\d+) \S/m.exec(block.stderr ?? '');
-      if (block.code !== 0 || !copied) throw new Error(`dd failed on ${path}`);
-      let blockText = block.stdout;
-      if (scan.skip > 0) {
-        blockText = dropBytes(blockText, scan.skip);
-        if (blockText === null) {
-          // not the file that was scanned
-          scan = newScan();
-          scans.set(path, scan);
-          continue;
-        }
-        scan.skip = 0;
-      }
-      const text = scan.carry + blockText;
-      const cut = text.lastIndexOf('\n') + 1;
-      scan.state = fold(scan.state, parseEntries(text.slice(0, cut)));
-      scan.carry = text.slice(cut);
-      const length = Number(copied[1]);
-      if (length < SCAN_CHUNK_BYTES) {
-        scan.pos = scan.block * SCAN_CHUNK_BYTES + length - utf8Length(scan.carry);
-        scan.carry = '';
-        changed = true;
-      }
-      scan.block += 1;
-    }
+    scan ??= newScan();
+    scans.set(path, scan);
+    const { pos } = scan;
+    const { restarted } = await scanFile(exec, fold, scan, path, size);
+    if (restarted || scan.pos !== pos) changed = true;
     return scan.state;
   }
 

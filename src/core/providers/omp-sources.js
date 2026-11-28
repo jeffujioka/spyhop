@@ -159,7 +159,16 @@ function catalogueQuery(provider) {
 }
 
 // The folder omp keeps every working folder's session folder in.
-const sessionsRoot = (home) => `${home}/.omp/agent/sessions`;
+export const ompSessionsDir = (home) => `${home}/.omp/agent/sessions`;
+
+// The main session file of the omp file `path` under `sessionsDir`: `path` itself for a session
+// file, `<sessionsDir>/<folder>/<session>.jsonl`, and that session's file for the transcript of
+// one of its sub-agents, which omp writes below `<sessionsDir>/<folder>/<session>/` (see
+// `subAgentsIn`).
+export function ompSessionOf(path, sessionsDir) {
+  const [folder, session, ...below] = path.slice(sessionsDir.length + 1).split('/');
+  return below.length === 0 ? path : `${sessionsDir}/${folder}/${session}.jsonl`;
+}
 
 // The title of a session, from `text`, which starts with the file's first line: omp writes the
 // `title` entry there and rewrites it in place when the title changes (it always equals the
@@ -308,7 +317,7 @@ export function createOmpSessions({ execOn, readTextOn, kept }) {
     // file `<start time>_<id>.jsonl`, in the session folder of the folder the session ran in,
     // which can be another than the agent's workspace folder (a sub-folder of it, for one).
     named({ machine, home, os }, sessionIds) {
-      const where = { dir: sessionsRoot(home), os, depth: 2, pattern: (id) => `*_${id}.jsonl` };
+      const where = { dir: ompSessionsDir(home), os, depth: 2, pattern: (id) => `*_${id}.jsonl` };
       return findNamedFiles(execOn(machine), where, sessionIds, (path, id) => path.endsWith(`_${id}.jsonl`));
     },
 
@@ -322,7 +331,7 @@ export function createOmpSessions({ execOn, readTextOn, kept }) {
     // rest in later ones, which then give their sessions too. A changed file left for a later
     // call keeps the title last read.
     async list({ machine, cwd, home, os, except }) {
-      const listed = await listFilesOfFolders(execOn(machine), { dir: sessionsRoot(home), os, prefix: sessionDirStart(cwd, home) });
+      const listed = await listFilesOfFolders(execOn(machine), { dir: ompSessionsDir(home), os, prefix: sessionDirStart(cwd, home) });
       let reads = 0;
       const found = await Promise.all(
         listed

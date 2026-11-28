@@ -16,6 +16,7 @@ import { REFRESH_INTERVAL_MS } from '../../src/core/refresh.js';
 import type { GroupPost } from '../../src/protocol.ts';
 import { costTurn, ompSessionOf } from '../helpers/agent-cards.ts';
 import { tempHome } from '../helpers/files.ts';
+import { caughtUp } from '../helpers/history.ts';
 import { openLive, until } from '../helpers/live.ts';
 import { figure, parts, text } from '../helpers/markup.ts';
 import { DEVBOX, DEVBOX_LISTS } from '../helpers/orca-answers.ts';
@@ -82,6 +83,8 @@ test('a failed refresh keeps the screen and the next one redraws', async () => {
 
 test('Closed panel reads nothing', async () => {
   const { live, host, calls, requests, html } = await openOnSession();
+  // the worker's first catch-up, at its start, has ended: the next is 15 minutes away
+  await caughtUp(process.env.HOME!);
   // Lets 2 seconds pass twice, and checks that they started no request, listed no agent, read
   // no session and ran no command.
   function nothingRead() {
