@@ -228,10 +228,10 @@ export type CacheView = {
 // The Health tab of a range (src/history/views.ts): `failed`, its failed model calls, and them by
 // type (`network`, `auth`, `notFound`, `rateLimit`, `server`, `other`), by Orca host (named as the
 // Spend tab names it) and by provider (the model's part before the `/`, else `n/a`), each list the
-// rows there are, most calls first; `retries`: the model calls that failed and then succeeded on a
-// retry, `retriesLeftOut`: the harnesses that log none; per model, most first, the `typical` (median)
+// rows there are, most calls first, equal counts by type order (types) or by name (hosts, providers); `retries`: the model calls that failed and then succeeded on a
+// retry, `retriesLeftOut`: the harnesses that log none; per model, by model name, the `typical` (median)
 // and `slow` (95th percentile) reply time in ms of the calls that ended without failure, the calls
-// `cut` at the maximum length with their cost (n/a when one of them logged none), and the thinking
+// `cut` at the maximum length with their cost (n/a when one of them logged none), most calls first, equal counts by model name, and the thinking
 // `tokens` (n/a for a model that logged none); `cutLeftOut` and `thinkingLeftOut`: the harnesses
 // whose figure leaves them out. Every figure n/a, no row, when the store cannot be opened or read.
 export type HealthView = {

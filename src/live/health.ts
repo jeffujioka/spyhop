@@ -40,7 +40,7 @@ export function healthTab({ health, notRead, progress }: RangeAnswer): string {
     'Reply times',
     'How long each model took to answer: the typical call (the median) and the slow one (the 95th percentile), over the calls that ended without failure',
     `<div data-list="replies">${health.replies
-      .map(({ model, typical, slow }) => `<div class="row item"><span class="grow">${esc(model)}</span>${num(`typical-${model}`, formatSeconds(typical))} ${num(`slow-${model}`, formatSeconds(slow))}</div>`)
+      .map(({ model, typical, slow }) => `<div class="row item"><span class="grow">${esc(model)}</span><span class="muted">typical</span> ${num(`typical-${model}`, formatSeconds(typical))} · <span class="muted">slow</span> ${num(`slow-${model}`, formatSeconds(slow))}</div>`)
       .join('')}</div>`,
   );
   const cut = titled(

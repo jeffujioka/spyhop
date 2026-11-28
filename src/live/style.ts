@@ -152,6 +152,8 @@ button:hover { background: var(--orca-accent); color: var(--orca-accent-foregrou
 .box .head { margin-bottom: 4px; }
 .box .head .muted { font-size: 11px; }
 .box .item, [data-list] .item { font-size: 12px; padding: 2px 0; }
+/* a long model or host name breaks where it must, and its figures wrap under it */
+[data-list] .grow { overflow-wrap: anywhere; }
 .failed { color: var(--spy-critical); font-size: 11px; }
 /* the Sub-agents section: each bar under its label, in the colour of its kind */
 .kind-1 { --k: var(--spy-k1); }

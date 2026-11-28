@@ -5,14 +5,18 @@
 // (test/helpers/history.ts), drawn and read through the markup's conventions
 // (test/helpers/markup.ts). The Orca host starfish-bs is reached through the stand-in `ssh`.
 import assert from 'node:assert/strict';
+import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import { workspace, opencodeSession } from '../helpers/agent-cards.ts';
+import { workspace, opencodeSession, type OpencodeCall } from '../helpers/agent-cards.ts';
 import { tempHome } from '../helpers/files.ts';
+import { healthTab } from '../../src/live/health.ts';
+import type { RangeAnswer } from '../../src/protocol.ts';
+import { STORE_FILE } from '../../src/history/store.ts';
 import { caughtUp, rangeOf } from '../helpers/history.ts';
-import { claudeSession, ompSession, type ClaudeCall, type OmpCall, openLive, openOnFleet } from '../helpers/live.ts';
+import { claudeSession, ompSession, mountOn, type OmpCall, openLive, openOnFleet } from '../helpers/live.ts';
 import { attr, figure, listOf, parts, text } from '../helpers/markup.ts';
-import { STARFISH_LISTS } from '../helpers/orca-answers.ts';
+import { hostListOf, environmentListOf, LOCAL_HOST, STARFISH_LISTS } from '../helpers/orca-answers.ts';
 import type { HostWorkspace } from '../helpers/orca-host.ts';
 
 // The clock of these tests: 2026-11-28 15:00 UTC.
@@ -37,11 +41,11 @@ const healthOf = (prepare: (home: string) => void) => rangeOf([], { tab: 'health
 const omp = (calls: OmpCall[]) => (home: string) => ompSession(home, join(home, 'api'), { title: 'api', calls });
 
 // The opencode session of the folder `web` through `provider` on `model`.
-const opencode = (calls: object[], provider = 'anthropic', model = 'claude-opus-5.5') => (home: string) =>
-  opencodeSession(home, join(home, 'web'), { provider, model, cost: 0, calls: calls as never });
+const opencode = (calls: OpencodeCall[], provider = 'anthropic', model = 'claude-opus-5.5') => (home: string) =>
+  opencodeSession(home, join(home, 'web'), { provider, model, cost: 0, calls });
 
 // An opencode model call that failed with `error` and spent no tokens.
-const NONE = { uncached: 0, read: 0, write: 0, output: 0, finish: 'error' };
+const NONE = { uncached: 0, read: 0, write: 0, output: 0, finish: 'error' as string | null };
 
 // The seconds a figure of a reply time reads.
 const seconds = (html: string, name: string) => {
@@ -167,7 +171,7 @@ test('Claude Code calls cut at the maximum length have no cost', async () => {
 
 test('Thinking tokens by model', async () => {
   const html = await healthOf((home) => {
-    claudeSession(home, join(home, 'cc'), { model: 'claude-opus-5-5', calls: [{ at: at('10:00'), output: 5, thinking: 183 } as ClaudeCall] });
+    claudeSession(home, join(home, 'cc'), { model: 'claude-opus-5-5', calls: [{ at: at('10:00'), output: 5, thinking: 183 }] });
     opencode([{ uncached: 10, read: 0, write: 0, output: 5, at: at('10:00'), reasoning: 1000 }], 'openai', 'gpt-5.4')(home);
     omp([call('10:00', COPILOT)])(home);
   });
@@ -220,4 +224,72 @@ test('the range tabs keep their range when the tab changes to Health and back', 
   assert.equal(attr(parts(opened.html(), 'aria-selected', 'true')[0], 'data-press'), 'tab:health');
   await opened.openTab('cache');
   assert.deepEqual(pressed(opened.html()), ['Month']);
+});
+
+test('Names are data: none draws markup', async () => {
+  const remoteHome = tempHome();
+  const evil = 'st"<u>x';
+  const infra: HostWorkspace = { project: 'infra', name: 'main', agents: ['working'], hostId: 'ssh:starfish-bs', sessionId: 's1', title: 'π - Deploy it' };
+  let home = '';
+  const opened = await openOnFleet([infra], {
+    now: CLOCK,
+    homes: { [evil]: remoteHome },
+    orca: { 'host list --json': hostListOf(LOCAL_HOST, { kind: 'ssh', id: 'starfish-bs', name: evil, selector: '--host ssh:starfish-bs', connected: true }), 'environment list --json': environmentListOf() },
+    prepare: (made) => {
+      home = made;
+      ompSession(remoteHome, workspace(made, 'infra-main'), {
+        title: 'Deploy it',
+        calls: [failed('10:00', 'ENOTFOUND', { provider: 'pr"<i>v', model: 'mo"<b>d' }), call('10:01', { provider: 'pr"<i>v', model: 'mo"<b>d', stop: 'length', recovered: true })],
+      });
+    },
+  });
+  await caughtUp(home);
+  await opened.openTab('health', 'week');
+
+  const html = opened.html();
+  for (const injected of ['<u>', '<i>v', '<b>d']) assert.ok(!html.includes(injected), injected);
+  assert.deepEqual(listOf(html, 'failed-host'), [`${evil} 1`]);
+  assert.deepEqual(listOf(html, 'failed-provider'), ['pr"<i>v 1']);
+  for (const name of [`failed-host-${evil}`, 'failed-provider-pr"<i>v', 'typical-pr"<i>v/mo"<b>d', 'slow-pr"<i>v/mo"<b>d', 'cut-pr"<i>v/mo"<b>d', 'thinking-pr"<i>v/mo"<b>d']) {
+    assert.equal(parts(html, 'data-figure', name).length, 1, name);
+  }
+});
+
+test('Rows keep their order', async () => {
+  const html = await healthOf((home) => {
+    omp([
+      failed('10:00', 'ENOTFOUND', { provider: 'b', model: 'm' }),
+      failed('10:01', 'ENOTFOUND', { provider: 'a', model: 'm' }),
+      failed('10:02', 'ENOTFOUND', { provider: 'c', model: 'm' }),
+      failed('10:03', 'ENOTFOUND', { provider: 'c', model: 'm' }),
+      call('10:04', { provider: 'z', model: 'm', stop: 'length', duration: 1000 }),
+      call('10:05', { provider: 'a', model: 'm', stop: 'length', duration: 1000 }),
+      call('10:06', { provider: 'm1', model: 'm', stop: 'length', duration: 1000 }),
+      call('10:07', { provider: 'm1', model: 'm', stop: 'length', duration: 1000 }),
+    ])(home);
+  });
+
+  // most first, equal counts by name
+  assert.deepEqual(listOf(html, 'failed-provider'), ['c 2', 'a 1', 'b 1']);
+  assert.deepEqual(listOf(html, 'failed-host'), ['local 4']);
+  assert.deepEqual(listOf(html, 'cut').map((row) => row.split(' ')[0]), ['m1/m', 'a/m', 'z/m']);
+  // by model name
+  assert.deepEqual(listOf(html, 'replies').map((row) => row.split(' ')[0]), ['a/m', 'm1/m', 'z/m']);
+});
+
+test('Reply times name which is typical and which is slow', async () => {
+  const html = await healthOf(omp([call('10:00', { ...COPILOT, duration: 1000 })]));
+
+  assert.deepEqual(listOf(html, 'replies').map((row) => row.replace(/\d+\.\d+s/g, 'T')), [`${COPILOT_MODEL} typical T · slow T`]);
+});
+
+test('a store that cannot be opened draws n/a figures and no rows', async () => {
+  // a folder where the store's file should be
+  const { mounted } = await mountOn([], { now: CLOCK, prepare: (home) => mkdirSync(join(home, STORE_FILE), { recursive: true }) });
+  const answer = (await mounted.request('spyhop.range', { request: 1, tab: 'health', range: 'week' })) as RangeAnswer;
+
+  const html = healthTab(answer);
+  assert.equal(figure(html, 'failed'), 'n/a');
+  assert.equal(figure(html, 'retries'), 'n/a');
+  assert.deepEqual(listOf(html, 'failed-type'), []);
 });

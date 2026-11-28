@@ -34,10 +34,10 @@ export function esc(text: string): string {
   return text.replace(/[&<>"']/g, (char) => ESCAPES[char]);
 }
 
-// The figure `name` (`data-figure`), reading `value`, in the font of figures (`.num`), with the
+// The figure `name` (`data-figure`, escaped, so a name taken from data is safe), reading `value`, in the font of figures (`.num`), with the
 // classes `classes` beside it when given (a level's colour, a headline's size).
 export function num(name: string, value: string, classes = ''): string {
-  return `<span class="num${classes ? ` ${classes}` : ''}" data-figure="${name}">${esc(value)}</span>`;
+  return `<span class="num${classes ? ` ${classes}` : ''}" data-figure="${esc(name)}">${esc(value)}</span>`;
 }
 
 // A figure or chart of the range tabs (`data-part="figure"`, named by its title): its title in

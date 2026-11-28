@@ -124,3 +124,18 @@ test('Live during the first read', async () => {
     opened.calls.release('ssh starfish-bs');
   }
 });
+
+test('Progress line on the Health tab', async () => {
+  const remoteHome = tempHome();
+  ompFile(remoteHome, 'api', 34_000, NOW - HOUR_MS);
+  const older = ompFile(remoteHome, 'web', 66_000, NOW - 2 * HOUR_MS);
+  const held = `ssh starfish-bs ${older}`;
+  const opened = await openLive([], { homes: { 'starfish-bs': remoteHome }, orca: STARFISH_LISTS, held: [held] });
+  await until(() => opened.calls.ssh().some((args) => args.at(-1)!.includes(older)));
+
+  await opened.openTab('health', 'week');
+
+  assert.equal(text(parts(opened.html(), 'data-part', 'progress')[0] ?? ''), 'Reading history: starfish-bs, omp, 34%');
+  assert.equal(figure(opened.html(), 'failed'), '0');
+  opened.calls.release(held);
+});

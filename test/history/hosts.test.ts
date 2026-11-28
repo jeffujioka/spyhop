@@ -14,6 +14,7 @@ import { RANGE_REFRESH_MS } from '../../src/core/refresh.js';
 import { run, type Run, type RunBytes, runBytes, type RunOptions } from '../../src/exec.ts';
 import { createCatchUp } from '../../src/history/catch-up.ts';
 import { openStore, type Store } from '../../src/history/store.ts';
+import { healthTab } from '../../src/live/health.ts';
 import { spendTab } from '../../src/live/spend.ts';
 import { historyHosts, listHosts, machineIdIn, machineOf } from '../../src/hosts.ts';
 import type { RangeAnswer } from '../../src/protocol.ts';
@@ -521,4 +522,23 @@ test('Host that cannot be reached', async () => {
   mock.timers.tick(RANGE_REFRESH_MS);
   await mounted.request('spyhop.range', { request: 2, tab: 'spend', range: 'week' });
   assert.ok(down.ssh().slice(mark).some(([alias]) => alias === 'starfish-bs'));
+});
+
+test('Host that cannot be reached shows on the Health tab', async () => {
+  const remoteHome = tempHome();
+  const { home, mounted } = await mountOn([], {
+    homes: { 'starfish-bs': remoteHome },
+    orca: STARFISH_LISTS,
+    prepare: () => ompSession(remoteHome, join(remoteHome, 'api'), { title: 'api', calls: [{ ...spent(1), stop: 'error', error: 'ENOTFOUND' }] }),
+  });
+  await caughtUp(home);
+  standIns({ homes: {}, orca: STARFISH_LISTS });
+
+  mock.timers.tick(RANGE_REFRESH_MS);
+  const answer = (await mounted.request('spyhop.range', { request: 1, tab: 'health', range: 'week' })) as RangeAnswer;
+
+  const html = healthTab(answer);
+  assert.deepEqual(answer.notRead, ['starfish-bs']);
+  assert.match(text(parts(html, 'data-part', 'not-read')[0] ?? ''), /starfish-bs/);
+  assert.equal(figure(html, 'failed'), '1');
 });
