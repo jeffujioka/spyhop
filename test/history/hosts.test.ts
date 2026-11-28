@@ -24,7 +24,7 @@ import { mountOn, ompSession, spent } from '../helpers/live.ts';
 import { figure, listOf, parts, text } from '../helpers/markup.ts';
 import { JEFF_SERVER_ENVIRONMENTS, JEFF_TARGET, LOCAL_HOST, hostListOf, STARFISH_LISTS } from '../helpers/orca-answers.ts';
 import { withCopilotPrices } from '../helpers/prices.ts';
-import { readOnlyLine } from '../helpers/read-only.ts';
+import { readOnlyLine, ZSTD_PIPE } from '../helpers/read-only.ts';
 import { standIns } from '../helpers/stand-ins.ts';
 
 let store: Store | undefined;
@@ -77,11 +77,12 @@ async function oneOriginOnTwoHosts() {
 }
 
 // A catch-up of a new temporary home and of starfish-bs, whose home is `remoteHome`, through
-// `exec` and `bytes` (the real runners when not given), with the real store; the stand-ins' calls.
-async function catchUpOf(remoteHome: string, exec: Run = run, bytes: RunBytes = runBytes) {
+// `exec` and `bytes` (the real runners when not given), with the real store, the `ssh` stand-in
+// failing each command on starfish-bs that holds a word of `failing`; the stand-ins' calls.
+async function catchUpOf(remoteHome: string, { exec = run, bytes = runBytes, failing = [] }: { exec?: Run; bytes?: RunBytes; failing?: string[] } = {}) {
   setEnv('TZ', 'UTC');
   const home = useTempHome();
-  const calls = standIns({ homes: { 'starfish-bs': remoteHome }, orca: STARFISH_LISTS });
+  const calls = standIns({ homes: { 'starfish-bs': remoteHome }, orca: STARFISH_LISTS, failing: failing.map((word) => `ssh starfish-bs ${word}`) });
   store = await openStore(home);
   const catchUp = createCatchUp({ run: exec, runBytes: bytes, store, home, log: () => {}, hosts: async () => historyHosts(await listHosts(run)) });
   return { home, calls, catchUp };
@@ -211,7 +212,7 @@ test("a host's programs run one at a time", async () => {
         running -= 1;
       }
     };
-  const { catchUp } = await catchUpOf(remoteHome, counting(run), counting(runBytes));
+  const { catchUp } = await catchUpOf(remoteHome, { exec: counting(run), bytes: counting(runBytes) });
 
   await catchUp.run();
 
@@ -224,15 +225,13 @@ test('a host that drops while its repo is asked keeps no repo of it', async () =
   const folder = join(remoteHome, 'spyhop');
   ompSession(remoteHome, folder, { title: 'spyhop', calls: [spent(1)] });
   withOrigin(folder);
-  // ssh to starfish-bs fails from its first `git` on, while `dropped`
-  let dropped = true;
-  const dropping: Run = (command, args, options) =>
-    dropped && options?.on === 'starfish-bs' && command === 'git' ? Promise.resolve({ code: 255, stdout: '', stderr: 'Connection closed' }) : run(command, args, options);
-  const { home, catchUp } = await catchUpOf(remoteHome, dropping);
+  // ssh to starfish-bs fails on each `git`
+  const { home, catchUp } = await catchUpOf(remoteHome, { failing: ["'git'"] });
   await catchUp.run();
   assert.deepEqual(catchUp.notRead(), ['starfish-bs']);
 
-  dropped = false;
+  // starfish-bs reached again
+  standIns({ homes: { 'starfish-bs': remoteHome }, orca: STARFISH_LISTS });
   await catchUp.run();
 
   const db = storeOf(home);
@@ -248,15 +247,12 @@ test('a host that drops while a file is read compressed is not read', async () =
   const remoteHome = tempHome();
   ompSession(remoteHome, join(remoteHome, 'api'), { title: 'api', calls: [spent(1)] });
   // ssh to starfish-bs fails on each compressed read of a file's bytes
-  const dropping: RunBytes = (command, args, options) =>
-    options?.on === 'starfish-bs' && command === 'sh' && ['dd', 'tail'].includes(args[3])
-      ? Promise.resolve({ code: 255, stdout: Buffer.alloc(0), stderr: 'Connection closed' })
-      : runBytes(command, args, options);
-  const { catchUp } = await catchUpOf(remoteHome, run, dropping);
+  const { calls, catchUp } = await catchUpOf(remoteHome, { failing: ["'sh' 'dd'", "'sh' 'tail'"] });
 
   await catchUp.run();
 
   assert.deepEqual(catchUp.notRead(), ['starfish-bs']);
+  assert.ok(calls.ssh().some((args) => args.at(-1)!.startsWith(`${ZSTD_PIPE} 'dd'`)));
 });
 
 test('a listing that fails through zstd leaves the run unended', async () => {

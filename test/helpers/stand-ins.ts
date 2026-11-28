@@ -5,7 +5,8 @@
 // the remote host's own home folder (with no `zstd` for an alias the test names), or fails as an
 // unreachable host does. Both log each call.
 // `orca` holds back the answer to each command the test names until the test releases it, and
-// `ssh` every command on an alias the test names, or each of its commands holding a word it names.
+// `ssh` every command on an alias the test names, or each of its commands holding a word it names;
+// `ssh` also fails, as a dropped connection does, each command on an alias holding a word it names.
 // `standIns` sets PATH and ORCA_CLI_COMMAND for the test (test/helpers/env.ts).
 import { chmodSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -20,19 +21,23 @@ export const answer = (result: unknown) => JSON.stringify({ id: 'local', ok: tru
 // `ssh -G` answers, and the `controlmaster` it prints; `ssh -G` on any other alias fails. `held`:
 // each `orca` command line whose answer is held back, each `ssh <alias>` whose every command on
 // that alias is, and each `ssh <alias> <word>` whose commands on that alias that hold the word
-// are, each call logged, until `release` of it. `noZstd`: each alias whose PATH puts first a
-// `zstd` that exits 127, as a shell finds no program.
+// are, each call logged, until `release` of it. `failing`: each `ssh <alias> <word>` whose
+// commands on that alias that hold the word exit 255, each call logged, as a dropped connection
+// does. `noZstd`: each alias whose PATH puts first a `zstd` that exits 127, as a shell finds no
+// program.
 export function standIns({
   homes,
   orca,
   controlmaster = {},
   held = [],
+  failing = [],
   noZstd = [],
 }: {
   homes: Record<string, string>;
   orca: Record<string, string>;
   controlmaster?: Record<string, string>;
   held?: string[];
+  failing?: string[];
   noZstd?: string[];
 }) {
   const bin = tempHome();
@@ -63,12 +68,17 @@ export function standIns({
   const sshCases = Object.entries(homes).map(
     ([alias, home]) => `  '${alias}') ${hold(`ssh ${alias}`)}HOME='${home}'; export HOME;${withoutZstd(alias)} ;;`,
   );
-  // the wait of each `ssh <alias> <word>` held, for a command line ($7) on that alias holding it
-  const wordHolds = held.flatMap((key) => {
-    const [program, alias, ...word] = key.split(' ');
-    if (program !== 'ssh' || word.length === 0) return [];
-    return [`[ "$1" = '${alias}' ] && case "$7" in *'${word.join(' ')}'*) ${hold(key)}: ;; esac`];
-  });
+  // `then` for a command line ($7) on the alias of each `ssh <alias> <word>` of `keys` holding the
+  // word, a quote in it written `'\''` as in the line
+  const onWord = (keys: string[], then: (key: string) => string) =>
+    keys.flatMap((key) => {
+      const [program, alias, ...word] = key.split(' ');
+      if (program !== 'ssh' || word.length === 0) return [];
+      return [`[ "$1" = '${alias}' ] && case "$7" in *'${word.join(' ').replaceAll("'", `'\\''`)}'*) ${then(key)} ;; esac`];
+    });
+  // the wait of each `ssh <alias> <word>` held, and the drop of each failing
+  const wordHolds = onWord(held, (key) => `${hold(key)}:`);
+  const wordFails = onWord(failing, () => "echo 'Connection closed' >&2; exit 255");
   const settingsCases = Object.entries(controlmaster).map(
     ([alias, value]) => `    '${alias}') printf 'host %s\\nuser dev\\nhostname %s\\nport 22\\ncontrolmaster ${value}\\ncontrolpersist no\\n' "$2" "$2"; exit 0 ;;`,
   );
@@ -93,6 +103,7 @@ export function standIns({
       `[ $# -eq 13 ] && [ "$6 $7 $8 $9 \${10} \${11}" = '${reuse}' ] && set -- "$1" "$2" "$3" "$4" "$5" "\${12}" "\${13}"`,
       '[ "$2 $3 $4 $5 $6" = "-o BatchMode=yes -o ConnectTimeout=5 --" ] && [ $# -eq 7 ] || exit 255',
       ...wordHolds,
+      ...wordFails,
       'exec /bin/sh -c "$7"',
       '',
     ].join('\n'),
