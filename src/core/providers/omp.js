@@ -32,7 +32,7 @@
 import { add, parseEntries, tally } from './jsonl.js';
 import { burnRate, cacheRate, isNumber, tokenCount, wholeSession } from './shared.js';
 import { addCall, addCost, addMinute, detailOf, entryOf, newSeries, pushRecent, toolAnswered, toolCalled } from '../series.js';
-import { modelKey, newInsights, noteCall, noteEntry, notePrompt, noteToolEnd, noteToolStart, noteTurnEnd } from '../insights.js';
+import { modelKey, newInsights, noteCall, noteEntry, noteHorizon, notePrompt, noteToolEnd, noteToolStart, noteTurnEnd } from '../insights.js';
 import { SUBAGENT_TOOLS } from '../trace.js';
 import { callCost, COPILOT, copilotWriteCost } from '../copilot-prices.js';
 
@@ -101,6 +101,8 @@ function emptyState(opts) {
     // assistant message that stopped (`stopReason` `stop` or `aborted`), or a `custom_message`;
     // a `session_exit` ends it. Undefined before any such entry.
     turnOpen: undefined,
+    // the time of the latest user message or tool result, which the next model call starts after
+    asked: undefined,
   };
 }
 
@@ -189,6 +191,7 @@ function fold(state, entries, opts) {
       s.lastMessage = time;
       if (e.message.role === 'user') {
         s.began = time;
+        s.asked = time;
         if (s.insights && e.message.attribution !== 'agent') notePrompt(s.insights, time);
       } else if (e.message.role === 'assistant') {
         // the call ran from its message's `timestamp` to its `completedAt`, each else the entry's
@@ -243,6 +246,7 @@ function fold(state, entries, opts) {
         }
         if (s.insights && ends) noteTurnEnd(s.insights, ran.end);
       } else if (e.message.role === 'toolResult') {
+        s.asked = time;
         if (s.insights) noteToolEnd(s.insights, e.message.toolCallId, time, SUBAGENT_TOOLS.omp);
         toolAnswered(s, e.message.toolCallId, e.message.isError === true);
       }
@@ -257,6 +261,8 @@ function fold(state, entries, opts) {
       // the latest change stands
       s.thinkingLevel = e.thinkingLevel;
     }
+    // no later call starts before the latest message it answers, nor a later tool call
+    if (s.insights) noteHorizon(s.insights, s.asked);
   }
   return s;
 }

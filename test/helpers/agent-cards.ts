@@ -84,8 +84,8 @@ export type OpencodeCalls = { provider: string; model: string; contexts: number[
 // The tokens of one model call of an opencode session: sent fresh, read from the cache, written
 // to it and output; `took`: how long it ran, from its `created` to its `completed`, 1 s when not
 // given; `prompted`: the time of a user message before it, none when not given; `tools`: the
-// `tool` items of its `content`; `finish`: why it finished, `stop` when not given.
-export type OpencodeCall = { uncached: number; read: number; write: number; output: number; took?: number; prompted?: number; tools?: OpencodeTool[]; finish?: string };
+// `tool` items of its `content`; `finish`: why it finished, `stop` when not given, none when null.
+export type OpencodeCall = { uncached: number; read: number; write: number; output: number; took?: number; prompted?: number; tools?: OpencodeTool[]; finish?: string | null };
 
 // A `tool` item of an opencode call, of the tool `name`, with the times of its `time` as this
 // Mac's database holds them (`created`, `ran`, `completed`), each left out when not given.
@@ -126,7 +126,7 @@ export function opencodeSession(
       agent: 'build',
       model: { id: model, providerID: provider, variant: 'high' },
       content,
-      finish,
+      ...(finish === null ? {} : { finish }),
       cost: callCost,
       tokens: { input: uncached, output, reasoning: 0, cache: { read, write } },
     };

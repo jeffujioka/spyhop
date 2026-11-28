@@ -24,7 +24,7 @@
 import { add, parseEntries, tally } from './jsonl.js';
 import { burnRate, cacheRate, isNumber, tokenCount, wholeSession } from './shared.js';
 import { addCall, addMinute, detailOf, entryOf, newSeries, pushRecent, retractLastCall, toolAnswered, toolCalled } from '../series.js';
-import { newInsights, noteCall, noteCost, noteEntry, notePrompt, noteToolEnd, noteToolStart, noteTurnEnd } from '../insights.js';
+import { newInsights, noteCall, noteCost, noteEntry, noteHorizon, notePrompt, noteToolEnd, noteToolStart, noteTurnEnd } from '../insights.js';
 import { SUBAGENT_TOOLS } from '../trace.js';
 import { absoluteFolder } from './session-files.js';
 
@@ -256,6 +256,9 @@ function fold(state, entries, opts) {
       else if (trigger !== 'manual') s.unknownTrigger = true;
       s.marks.push({ t: time, before: isNumber(preTokens) ? preTokens : null, after: isNumber(postTokens) ? postTokens : null });
     }
+    // no later response starts before what it answers, nor the newest one's later blocks before
+    // its start, nor a later tool call
+    if (s.insights) noteHorizon(s.insights, Math.min(s.sent, s.last?.start ?? s.sent));
   }
   return s;
 }

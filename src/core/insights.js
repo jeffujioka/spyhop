@@ -3,7 +3,7 @@
 // the session it reads (src/core/trace.js).
 
 import { dayOf } from './days.js';
-import { addSpan, newLane } from './trace.js';
+import { addSpan, newLane, pruneGaps } from './trace.js';
 
 // The figures of a daily line. `cost` sums the costs, side calls' included; `costNa` counts the
 // calls that have none. `sideCost` and `sideTokens` are the side calls' share of the cost and
@@ -59,7 +59,8 @@ function lineOf(ins, t, model) {
 // -1 takes back a call noted before, for a fold whose later entry replaces it: the call that
 // replaces it is noted again, and its span merges with the one noted before. A call with a
 // `start` (epoch ms), not a side call, also runs then (noteThinking); one without (a sub-agent's
-// call in its root session's rows, or a call whose day is not its end) runs in no lane.
+// call in its root session's rows) runs in no lane, and the reader of a call whose day is not its
+// end notes that call's lane span separately through noteThinking.
 export function noteCall(ins, call, sign = 1) {
   const { figures } = lineOf(ins, call.end, call.model);
   figures.tokens += sign * call.tokens;
@@ -98,6 +99,17 @@ export function noteTool(ins, start, end, startsSubAgents) {
 // The tool call `id` of the tool `name` started at `at` (epoch ms); a start noted before stands.
 export function noteToolStart(ins, id, at, name) {
   if (typeof id === 'string' && !ins.started.has(id)) ins.started.set(id, { at, name });
+}
+
+// No span the reader notes later starts before `horizon` (epoch ms), but for the tool calls
+// started and not ended yet and the wait on the developer since the turn ended: the lanes drop
+// the joined gaps none of them can reach (pruneGaps). A horizon that is no time is none.
+export function noteHorizon(ins, horizon) {
+  if (!Number.isFinite(horizon)) return;
+  let from = horizon;
+  for (const { at } of ins.started.values()) if (Number.isFinite(at)) from = Math.min(from, at);
+  for (const lane of [ins.lanes.thinking, ins.lanes.tools, ins.lanes.busy]) pruneGaps(lane, from);
+  pruneGaps(ins.lanes.developer, Math.min(from, ins.turnEnd ?? from));
 }
 
 // The tool call `id` noted started ended at `end` (epoch ms): noted as a tool call (noteTool) that

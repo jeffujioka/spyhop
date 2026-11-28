@@ -158,15 +158,38 @@ describe('Trace lanes', () => {
   });
 
   test('a late tool across joined gaps adds their time', () => {
-    // 241 tools of 1 s, 2 s apart: the first gap is joined; then one tool from the first's start
-    // to 10 s later, logged at its result, which covers that gap and three more
+    // 241 tools of 1 s, 2 s apart: the first gap, [1 s, 3 s], is joined; then one tool from the
+    // first's start to 10 s later, its start logged when it started and its result 800 s later,
+    // which covers that joined gap and two gaps not joined, [4 s, 6 s] and [7 s, 9 s]
     const tool = (from: number, to: number, at = to): OmpCall => ({ at, tools: [{ name: 'read', started: from, answered: to }] });
     const T0 = t('10:00:00');
     const calls = Array.from({ length: 241 }, (_, i) => tool(T0 + i * 3000, T0 + i * 3000 + 1000));
     calls.push(tool(T0, T0 + 10_000, T0 + 800_000));
+    const entries: { data?: { toolCallId?: string } }[] = ompEntries(calls, [], MODEL);
+    const lateStart = entries.findIndex((entry) => entry.data?.toolCallId === 'call-241-0');
+    entries.unshift(...entries.splice(lateStart, 1));
 
     // 241 s of tools, and the 6 s of [0, 10 s] no tool covered
-    expect(ompInsights(calls).lanes.tools.totalMs).toBe(247_000);
+    expect(ompProvider.fold(undefined, entries, { insights: true }).insights.lanes.tools.totalMs).toBe(247_000);
+  });
+
+  test('the joined gaps no later span can reach are dropped', () => {
+    // 2000 tools of 1 s, 2 s apart, each logged as it ran: past 240 spans, each one joins a gap;
+    // in omp, the 1001st is still running
+    const from = (i: number) => t('10:00:00') + i * 3000;
+    const ompCalls = Array.from({ length: 2000 }, (_, i): OmpCall => ({ at: from(i), tools: [{ name: 'read', started: from(i), answered: from(i) + 1000 }] }));
+    const ompLines: { message?: { toolCallId?: string } }[] = ompEntries(ompCalls, [], MODEL);
+    const running = ompLines.filter((entry) => entry.message?.toolCallId !== 'call-1000-0');
+    const omp = ompProvider.fold(undefined, running, { insights: true }).insights;
+    const claudeCalls = Array.from({ length: 2000 }, (_, i) => ({ at: from(i), output: 10, stop: 'tool_use', tools: [{ name: 'Bash', answered: from(i) + 1000 }] }));
+    const claude = claudeProvider.fold(undefined, claudeEntries('/work/demo', claudeCalls, [], 'claude-opus-4-6'), { insights: true }).insights;
+
+    // omp keeps only the gaps the running tool can still cover; Claude Code, none
+    expect(omp.lanes.tools.gaps.length).toBeGreaterThan(0);
+    expect(omp.lanes.tools.gaps[0][1]).toBeGreaterThan(from(1000));
+    expect(omp.lanes.tools.totalMs).toBe(1_999_000);
+    expect(Object.values(claude.lanes).map((lane: { gaps: unknown[] }) => lane.gaps)).toEqual([[], [], [], []]);
+    expect(claude.lanes.tools.totalMs).toBe(2_000_000);
   });
 
   test("the Trace runs from the session's first entry to its last", () => {
@@ -181,21 +204,23 @@ describe('Trace lanes', () => {
     expect([firstMs, lastMs]).toEqual([t('09:59:00'), t('10:01:00')]);
   });
 
-  test('an opencode step that calls tools ends no turn', async () => {
+  test('an opencode step that calls tools ends no turn, one with no finish does', async () => {
     const C = t('10:00:00');
-    // a step that finished calling tools, then a prompt before the next step
+    // a step that finished calling tools, then a prompt before a step with no `finish` (an
+    // aborted or failed turn), then a prompt before the next step
     const database = opencodeSession(tempHome(), '/work/steps', {
       provider: 'p',
       model: 'm',
       cost: 0.2,
-      last: C + 60_000,
+      last: C + 120_000,
       calls: [
         { uncached: 100, read: 0, write: 0, output: 50, finish: 'tool-calls' },
-        { uncached: 100, read: 0, write: 0, output: 50, prompted: C + 30_000 },
+        { uncached: 100, read: 0, write: 0, output: 50, prompted: C + 30_000, finish: null },
+        { uncached: 100, read: 0, write: 0, output: 50, prompted: C + 90_000 },
       ],
     });
 
-    expect((await opencodeLanes(database, 'ses_window')).developer.spans).toEqual([]);
+    expect((await opencodeLanes(database, 'ses_window')).developer.spans).toEqual([[C + 61_000, C + 90_000]]);
   });
 
   test('waiting on a sub-agent is its run less the busy time', () => {

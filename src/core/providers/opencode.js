@@ -18,7 +18,7 @@
 import { burnRate, isNumber, tokenCount } from './shared.js';
 import { addCall, addCost, addMinute, detailOf, entryOf, newSeries, pushRecent } from '../series.js';
 import { callCost, COPILOT } from '../copilot-prices.js';
-import { modelKey, noteCall, noteEntry, notePrompt, noteThinking, noteTool, noteTurnEnd } from '../insights.js';
+import { modelKey, noteCall, noteEntry, noteHorizon, notePrompt, noteThinking, noteTool, noteTurnEnd } from '../insights.js';
 import { SUBAGENT_TOOLS } from '../trace.js';
 
 function parseSession({ messages, compactions, tools, loggedCost, sources }) {
@@ -98,10 +98,12 @@ function callsCost(session) {
 // from the first of their times to the last: a call from its `created` to where its first tool
 // call starts, else to its `completed`; a tool call from its `start` (else its message's
 // `created`) to its `end` (else its message's `completed`); a turn ends when a call that is no
-// compaction summary completes with a `finish` other than `tool-calls`, and a user message is a
-// prompt.
+// compaction summary completes with a `finish` other than `tool-calls`, or none (an aborted or a
+// failed one), and a user message is a prompt. No span of a later row starts before this one's
+// `created`, as the rows come by `created`.
 export function opencodeInsights(rows, ins) {
   for (const row of rows) {
+    noteHorizon(ins, row.created);
     const own = row.own === 1;
     if (own) {
       noteEntry(ins, row.created);
@@ -119,7 +121,7 @@ export function opencodeInsights(rows, ins) {
         noteCall(ins, { end: row.created, model: modelKey(row.providerId, row.modelId), tokens, uncached, read, write, output, cost: costOf(row), copilot: row.providerId === COPILOT });
         if (own) noteThinking(ins, row.created, [row.toolStart, row.completed, row.created].find(isNumber));
       }
-      const endsTurn = typeof row.finish === 'string' && row.finish !== 'tool-calls' && row.summary !== 1;
+      const endsTurn = row.finish !== 'tool-calls' && row.summary !== 1;
       if (own && endsTurn && isNumber(row.completed)) noteTurnEnd(ins, row.completed);
     }
   }

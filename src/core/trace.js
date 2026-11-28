@@ -64,6 +64,13 @@ export function addSpan(lane, start, end) {
   }
 }
 
+// Drops the gaps of `lane` that end by `horizon` (epoch ms), before which no span noted later
+// starts: no later span can add their time, so the gaps a lane keeps stay as few as the spans
+// still to come can reach.
+export function pruneGaps(lane, horizon) {
+  lane.gaps.splice(0, gapAfter(lane.gaps, horizon));
+}
+
 // The parts of `spans` that no span of `busy` covers, both oldest first.
 export function minus(spans, busy) {
   const left = [];
