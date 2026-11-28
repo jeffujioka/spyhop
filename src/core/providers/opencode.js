@@ -17,7 +17,7 @@
 
 import { burnRate, isNumber, tokenCount } from './shared.js';
 import { addCall, addCost, addMinute, detailOf, entryOf, newSeries, pushRecent } from '../series.js';
-import { copilotCost } from '../copilot-prices.js';
+import { callCost, COPILOT } from '../copilot-prices.js';
 
 function parseSession({ messages, compactions, tools, loggedCost, sources }) {
   const rows = Array.isArray(messages) ? messages : [];
@@ -72,19 +72,13 @@ function tokens(session) {
   return totalTokens === undefined ? {} : { totalTokens };
 }
 
-// The provider of the calls through GitHub Copilot, which the Copilot price table prices.
-const COPILOT = 'github-copilot';
-
 // A message that sent and wrote nothing (an aborted or failed request) is no model call.
 const isCall = (row) => [row.input, row.cacheRead, row.cacheWrite, row.output].some((count) => tokenCount(count) > 0);
 
-// The cost of the assistant message `row`: a Copilot call's from the Copilot price table (null
-// for a model it does not hold; undefined, nothing to add, for a message that spent no token),
-// any other's as the database logged it (null: none logged).
+// The cost of the assistant message `row`, by the Copilot cost rule (`callCost`).
 function costOf(row) {
-  if (row.providerId !== COPILOT) return isNumber(row.cost) ? row.cost : null;
-  if (!isCall(row)) return undefined;
-  return copilotCost(row.modelId, { uncached: tokenCount(row.input), read: tokenCount(row.cacheRead), write: tokenCount(row.cacheWrite), output: tokenCount(row.output) });
+  const tokens = { uncached: tokenCount(row.input), read: tokenCount(row.cacheRead), write: tokenCount(row.cacheWrite), output: tokenCount(row.output) };
+  return callCost(row.providerId, row.modelId, tokens, row.cost);
 }
 
 // The sum of the costs of the session's messages (see costOf); undefined when none has one, or

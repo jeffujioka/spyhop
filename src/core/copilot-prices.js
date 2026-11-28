@@ -17,7 +17,12 @@
  * @typedef {Rates & { tiers: ({ over: number } & Rates)[] }} Price
  */
 
+import { isNumber } from './providers/shared.js';
+
 export const CREDIT_USD = 0.01;
+
+// The provider of the calls through GitHub Copilot, which the Copilot price table prices.
+export const COPILOT = 'github-copilot';
 
 const opus55 = { input: 400, cachedInput: 20, cacheWrite: 500, output: 2000, tiers: [] };
 const sonnet55 = { input: 200, cachedInput: 10, cacheWrite: 250, output: 1000, tiers: [] };
@@ -78,6 +83,17 @@ export function copilotCost(model, { uncached, read, write, output }) {
   if (!rates) return null;
   const credits = uncached * rates.input + read * rates.cachedInput + write * rates.cacheWrite + output * rates.output;
   return (credits / 1_000_000) * CREDIT_USD;
+}
+
+// The cost in USD of a model call through `provider` on `model` that spent `tokens` (`{ uncached,
+// read, write, output }`, each a count) and logged the cost `logged`: a Copilot call's from the
+// Copilot price table (null for a model it does not hold; undefined, nothing to add, for a call
+// that spent no token: one aborted, or that failed before the model answered), any other's as
+// logged (null: none logged).
+export function callCost(provider, model, tokens, logged) {
+  if (provider !== COPILOT) return isNumber(logged) ? logged : null;
+  if (!Object.values(tokens).some((count) => count > 0)) return undefined;
+  return copilotCost(model, tokens);
 }
 
 // The cost in USD of the `write` tokens a Copilot call on `model` wrote to the cache, in a prompt

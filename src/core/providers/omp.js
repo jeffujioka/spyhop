@@ -30,7 +30,7 @@ import { add, parseEntries, tally } from './jsonl.js';
 import { burnRate, cacheRate, isNumber, tokenCount, wholeSession } from './shared.js';
 import { addCall, addCost, addMinute, detailOf, entryOf, newSeries, pushRecent, toolAnswered, toolCalled } from '../series.js';
 import { newInsights, noteCall } from '../insights.js';
-import { copilotCost, copilotWriteCost } from '../copilot-prices.js';
+import { callCost, COPILOT, copilotWriteCost } from '../copilot-prices.js';
 
 // A fresh accumulator. Sums are `tally`s: undefined until an entry carries the value.
 function emptyState(opts) {
@@ -102,21 +102,15 @@ function emptyState(opts) {
 // `toolUse`, leaves the turn open.
 const TURN_ENDS = new Set(['stop', 'aborted']);
 
-// The provider of the calls through GitHub Copilot, which the Copilot price table prices.
-const COPILOT = 'github-copilot';
-
 // Whether `usage` logs a token sent, read, written or output: a call omp aborted, or that failed
 // before the model answered, logs a usage of all zeros (or none), so it sent and wrote nothing.
 const spentTokens = (usage) => [usage?.input, usage?.cacheRead, usage?.cacheWrite, usage?.output].some((tokens) => tokenCount(tokens) > 0);
 
 // The cost of the model call or side call `logged` (an assistant message or a `model_usage`
-// entry): a Copilot call's from the Copilot price table (null for a model it does not hold;
-// undefined, nothing to add, for a call that spent no token), any other's as omp logged it (null:
-// none logged).
+// entry), by the Copilot cost rule (`callCost`).
 function costOf({ provider, model, usage }) {
-  if (provider !== COPILOT) return isNumber(usage?.cost?.total) ? usage.cost.total : null;
-  if (!spentTokens(usage)) return undefined;
-  return copilotCost(model, { uncached: tokenCount(usage.input), read: tokenCount(usage.cacheRead), write: tokenCount(usage.cacheWrite), output: tokenCount(usage.output) });
+  const tokens = { uncached: tokenCount(usage?.input), read: tokenCount(usage?.cacheRead), write: tokenCount(usage?.cacheWrite), output: tokenCount(usage?.output) };
+  return callCost(provider, model, tokens, usage?.cost?.total);
 }
 
 // Adds the cost `spent` of a call of `logged` (see `costOf`) to the session's cost.
