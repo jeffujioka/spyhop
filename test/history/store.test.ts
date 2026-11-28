@@ -1,10 +1,11 @@
 // The history store: the SQLite file under the home that keeps the daily lines of the session
 // files a catch-up read, for good. The store is the real one, on `node:sqlite`, in a temporary
 // home.
-import { spawn } from 'node:child_process';
+import assert from 'node:assert/strict';
+import { execFileSync, spawn } from 'node:child_process';
 import { once } from 'node:events';
-import { existsSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, mkdirSync, realpathSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { afterEach, describe, test } from 'node:test';
 import { LINE_FIGURES } from '../../src/core/insights.js';
@@ -146,5 +147,18 @@ describe('history store', () => {
     await once(other, 'exit');
     expect(s.meta('caughtUp')).toBe('2026-11-27');
     expect(s.meta('other')).toBe('1');
+  });
+
+  test('a file that is not a store is left closed', async () => {
+    const home = tempHome();
+    const path = join(home, STORE_FILE);
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, 'not a SQLite file, but long enough for SQLite to read its header as one');
+
+    await assert.rejects(openStore(home), /not a database/);
+
+    // the files this process holds open, as `lsof` lists them, one `n<path>` line each
+    const held = execFileSync('lsof', ['-w', '-Fn', '-p', String(process.pid)], { encoding: 'utf8' }).split('\n');
+    expect(held.includes(`n${realpathSync(path)}`)).toBe(false);
   });
 });

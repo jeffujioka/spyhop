@@ -60,29 +60,35 @@ export async function openStore(home: string): Promise<Store> {
   const path = join(home, STORE_FILE);
   mkdirSync(dirname(path), { recursive: true });
   const db = new DatabaseSync(path);
-  db.exec(`PRAGMA busy_timeout=${BUSY_MS}`);
-  db.exec('PRAGMA journal_mode=WAL');
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS files (
-      id INTEGER PRIMARY KEY, host TEXT NOT NULL, harness TEXT NOT NULL, path TEXT NOT NULL,
-      pos INTEGER NOT NULL, size INTEGER NOT NULL, mtime_ms REAL NOT NULL, version INTEGER NOT NULL, state TEXT NOT NULL,
-      UNIQUE (host, harness, path));
-    CREATE TABLE IF NOT EXISTS lines (
-      file INTEGER NOT NULL REFERENCES files (id), session TEXT NOT NULL, day TEXT NOT NULL, repo TEXT NOT NULL, model TEXT NOT NULL,
-      PRIMARY KEY (file, session, day, repo, model));
-    CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
-  `);
-  const has = new Set(db.prepare('SELECT name FROM pragma_table_info(?)').all('lines').map((column) => column.name));
-  for (const name of LINE_FIGURES) {
-    if (!has.has(name)) db.exec(`ALTER TABLE lines ADD COLUMN "${name}" ${name === 'cost' ? 'REAL' : 'INTEGER'} NOT NULL DEFAULT 0`);
+  // a file that is not a store, or a schema that cannot be made, rejects the open with it closed
+  try {
+    db.exec(`PRAGMA busy_timeout=${BUSY_MS}`);
+    db.exec('PRAGMA journal_mode=WAL');
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS files (
+        id INTEGER PRIMARY KEY, host TEXT NOT NULL, harness TEXT NOT NULL, path TEXT NOT NULL,
+        pos INTEGER NOT NULL, size INTEGER NOT NULL, mtime_ms REAL NOT NULL, version INTEGER NOT NULL, state TEXT NOT NULL,
+        UNIQUE (host, harness, path));
+      CREATE TABLE IF NOT EXISTS lines (
+        file INTEGER NOT NULL REFERENCES files (id), session TEXT NOT NULL, day TEXT NOT NULL, repo TEXT NOT NULL, model TEXT NOT NULL,
+        PRIMARY KEY (file, session, day, repo, model));
+      CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+    `);
+    const has = new Set(db.prepare('SELECT name FROM pragma_table_info(?)').all('lines').map((column) => column.name));
+    for (const name of LINE_FIGURES) {
+      if (!has.has(name)) db.exec(`ALTER TABLE lines ADD COLUMN "${name}" ${name === 'cost' ? 'REAL' : 'INTEGER'} NOT NULL DEFAULT 0`);
+    }
+    db.exec(`
+      DROP VIEW IF EXISTS daily_lines;
+      CREATE VIEW daily_lines AS
+        SELECT day, host, repo, harness, model, ${COLUMNS.map((column) => `SUM(${column}) AS ${column}`).join(', ')}
+        FROM lines JOIN files ON files.id = lines.file
+        GROUP BY day, host, repo, harness, model;
+    `);
+  } catch (error) {
+    db.close();
+    throw error;
   }
-  db.exec(`
-    DROP VIEW IF EXISTS daily_lines;
-    CREATE VIEW daily_lines AS
-      SELECT day, host, repo, harness, model, ${COLUMNS.map((column) => `SUM(${column}) AS ${column}`).join(', ')}
-      FROM lines JOIN files ON files.id = lines.file
-      GROUP BY day, host, repo, harness, model;
-  `);
 
   const selectFile = db.prepare('SELECT id, host, harness, path, pos, size, mtime_ms, version FROM files WHERE host = ? AND harness = ? AND path = ?');
   const selectState = db.prepare('SELECT state FROM files WHERE id = ?');
