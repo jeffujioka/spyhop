@@ -6,6 +6,7 @@
 import { appendFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, describe, test } from 'node:test';
+import { LINE_FIGURES, newInsights, noteCall, takeLines } from '../../src/core/insights.js';
 import { failureType, replyBucket, replyQuantile } from '../../src/core/reply-times.js';
 import type { Store } from '../../src/history/store.ts';
 import { opencodeSession } from '../helpers/agent-cards.ts';
@@ -102,6 +103,21 @@ describe('omp', () => {
     expect([...store!.replies(...RANGE).values()].map((counts) => [...counts.values()].reduce((sum, n) => sum + n, 0))).toEqual([1]);
   });
 
+  test('a failed call that spent tokens is no cold start and no call before the next one', async () => {
+    const sums = await sumsAfter((home) =>
+      ompSession(home, join(home, 'api'), {
+        title: 'api',
+        calls: [
+          call('10:00', { read: 100, model: 'model-a' }),
+          failed('10:01', 'Anthropic stream stalled', { read: 0, uncached: 2, output: 8, cost: 0.1, model: 'model-b' }),
+          call('10:02', { read: 0, model: 'model-a' }),
+        ],
+      }),
+    );
+
+    expect(nonZero(sums, 'coldOther', 'coldModel', 'failOther', 'calls')).toEqual({ coldOther: 1, failOther: 1, calls: 3 });
+  });
+
   test('an interrupted call is no failure', async () => {
     const sums = await sumsAfter((home) => {
       ompSession(home, join(home, 'api'), { title: 'api', calls: [call('10:00', { stop: 'aborted', error: 'Interrupted by user', uncached: 0, output: 0, cost: undefined })] });
@@ -188,7 +204,8 @@ describe('Claude Code', () => {
       }),
     );
 
-    expect(nonZero(sums, 'calls', 'thinkingCalls', 'thinkingTokens', 'cutCalls', 'cutCost', 'cutCostNa')).toEqual({ calls: 1, thinkingCalls: 1, thinkingTokens: 183, cutCalls: 1 });
+    // Claude Code logs no cost per call, so the cost of a cut call reads n/a
+    expect(nonZero(sums, 'calls', 'thinkingCalls', 'thinkingTokens', 'cutCalls', 'cutCost', 'cutCostNa')).toEqual({ calls: 1, thinkingCalls: 1, thinkingTokens: 183, cutCalls: 1, cutCostNa: 1 });
     const { median, slow, count } = repliesOf('claude-opus-5-5');
     expect(count).toBe(1);
     for (const ms of [median!, slow!]) {
@@ -227,6 +244,21 @@ describe('opencode', () => {
     expect(nonZero(sums, ...NAMES, 'retries', 'calls')).toEqual({ failNetwork: 2, failAuth: 1, failNotFound: 1, calls: 1 });
   });
 
+  test('a failed call that spent tokens is no cold start and no call before the next one', async () => {
+    const sums = await sumsAfter(
+      session([
+        { ...WRITE, read: 100, at: at('10:00') },
+        { ...WRITE, read: 0, model: 'claude-other', finish: 'error', error: { type: 'provider.transport' }, at: at('10:01') },
+        { ...WRITE, read: 0, at: at('10:02') },
+      ]),
+      () => {},
+      0,
+      'web',
+    );
+
+    expect(nonZero(sums, 'coldOther', 'coldModel', 'failNetwork', 'calls')).toEqual({ coldOther: 1, failNetwork: 1, calls: 3 });
+  });
+
   test('a retry without an error recovered', async () => {
     const sums = await sumsAfter(session([{ ...WRITE, at: at('10:00'), retry: true }, { ...WRITE, at: at('10:01'), retry: true }, { ...WRITE, at: at('10:02') }]), () => {}, 0, 'web');
 
@@ -261,5 +293,51 @@ describe('opencode', () => {
     expect(count).toBe(4);
     expect(median! / 1000).toBeGreaterThan(2.7);
     expect(median! / 1000).toBeLessThan(3.3);
+  });
+
+  test('the open days a later catch-up reads again do not count their replies twice', async () => {
+    await sumsAfter(
+      session([{ ...WRITE, at: ago(5), took: 3000 }, { ...WRITE, at: ago(2), took: 3000 }]),
+      (home) =>
+        opencodeSession(home, join(home, 'web'), {
+          provider: 'anthropic',
+          model: 'claude-opus-5.5',
+          cost: 0.2,
+          id: 'ses_two',
+          update: true,
+          calls: [{ ...WRITE, at: ago(1), took: 3000 }],
+        }),
+      1,
+      'web',
+    );
+
+    expect(repliesOf('anthropic/claude-opus-5.5').count).toBe(3);
+  });
+});
+
+describe('noteCall taken back', () => {
+  test('a call taken back with sign -1 leaves no Health figure and no reply', () => {
+    const ins = newInsights();
+    const call = { end: at('10:00'), model: 'p/m', tokens: 15, uncached: 10, read: 0, write: 0, output: 5, cost: 0.5, recovered: true, cut: true, thinkingTokens: 7, replyMs: 3000, failure: null, aborted: false };
+    const failed = { ...call, cost: null, failure: 'network', recovered: false };
+    noteCall(ins, call, 1);
+    noteCall(ins, failed, 1);
+    const [line] = [...ins.open.values()];
+    expect(nonZero(line.figures, 'retries', 'cutCalls', 'cutCost', 'cutCostNa', 'thinkingCalls', 'thinkingTokens', 'failNetwork')).toEqual({
+      retries: 1,
+      cutCalls: 2,
+      cutCost: 0.5,
+      cutCostNa: 1,
+      thinkingCalls: 2,
+      thinkingTokens: 14,
+      failNetwork: 1,
+    });
+    expect(Object.values(line.replies ?? {})).toEqual([1]);
+
+    noteCall(ins, failed, -1);
+    noteCall(ins, call, -1);
+    expect(nonZero(line.figures, ...LINE_FIGURES)).toEqual({});
+    expect(Object.values(line.replies ?? {})).toEqual([0]);
+    expect(takeLines(ins)).toHaveLength(1);
   });
 });

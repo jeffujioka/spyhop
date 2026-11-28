@@ -143,7 +143,7 @@ function cacheEffects(ins, call, before, thread) {
 // The Health figures of `call`, a model call that ended at `end` (epoch ms) under `model`, added
 // `sign` times to its line: its `failure` type (an interrupted call, `aborted`, is none) in
 // `fail<Type>`; `recovered`, a retry that recovered; `cut`, a call cut at the maximum length, with
-// its cost; `thinkingTokens`, null when its harness logs none; and its reply time `replyMs`, when
+// its cost (`cutCost` when given, null: the harness logs none per call, else `cost`); `thinkingTokens`, null when its harness logs none; and its reply time `replyMs`, when
 // it ended without failure. A pure function of the call, so taking it back out undoes it.
 function noteHealth(ins, call, sign) {
   const line = lineOf(ins, call.end, call.model);
@@ -152,8 +152,9 @@ function noteHealth(ins, call, sign) {
   if (call.recovered) figures.retries += sign;
   if (call.cut) {
     figures.cutCalls += sign;
-    if (call.cost === null) figures.cutCostNa += sign;
-    else figures.cutCost += sign * call.cost;
+    const cost = call.cutCost === undefined ? call.cost : call.cutCost;
+    if (cost === null) figures.cutCostNa += sign;
+    else figures.cutCost += sign * cost;
   }
   if (typeof call.thinkingTokens === 'number') {
     figures.thinkingCalls += sign;
@@ -202,9 +203,9 @@ export function noteCall(ins, call, sign = 1) {
     if (call.copilot) figures.copilotCost += sign * call.cost;
   }
   if (!call.side) noteHealth(ins, call, sign);
-  // a side call and a compaction's summary call (`summary`, written by the compaction agent with its
-  // own model) are no cold start and not the call before the next one
-  if (call.side || call.summary) return;
+  // a side call, a compaction's summary call (`summary`, written by the compaction agent with its
+  // own model) and a failed call that spent tokens are no cold start and not the call before the next one
+  if (call.side || call.summary || call.failure) return;
   const thread = call.thread ?? '';
   if (sign > 0) {
     const before = ins.last[thread] ?? null;

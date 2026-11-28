@@ -156,7 +156,7 @@ function count(state, last, sign) {
   if (last.model !== null) entryOf(state.models, last.model, () => ({ cost: null, tokens: 0 })).tokens += sign * last.tokens;
   if (state.insights && last.model !== null) noteCall(
       state.insights,
-      { ...last.call, start: last.start, end: last.call.t, model: lineModel(last.model), tokens: last.tokens, cost: 0, cold: last.cold, thinking: last.thinking, lifetimeMs: last.lifetimeMs, writeCost: null, failure: null, aborted: false, recovered: false, cut: last.cut, thinkingTokens: last.thinkingTokens, replyMs: last.replyMs },
+      { ...last.call, start: last.start, end: last.call.t, model: lineModel(last.model), tokens: last.tokens, cost: 0, cold: last.cold, thinking: last.thinking, lifetimeMs: last.lifetimeMs, writeCost: null, failure: null, aborted: false, recovered: false, cut: last.cut, cutCost: null, thinkingTokens: last.thinkingTokens, replyMs: last.replyMs },
       sign,
     );
 }
