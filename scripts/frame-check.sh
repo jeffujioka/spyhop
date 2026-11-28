@@ -1,16 +1,19 @@
 #!/usr/bin/env bash
 # The frame check of the Live panel: runs the plugin of this folder in the Orca app on this
 # computer, as the dev plugin `local.spyhop`, and stops at the first step that fails, with the
-# step's answer on stderr. It validates the folder, records `orca plugin check`, loads the folder
-# with `orca plugin dev watch` (stopped when the script exits), restarts its worker, opens the
-# panel, asks the worker
-# for the fleet, then for the session of each of its cards and its Trace, waits for a catch-up of
-# the dev plugin's own to end on the history store, asks the worker for the Spend tab over a day
-# and a year and for the Cache and Health tabs over a week and a year, checks every answer's
-# bounds, shoots the fleet screen 300 and 420 pixels wide in Orca's dark and light themes, keeping
-# each PNG, and reads the logs. The themes take effect only while Orca's window is hidden or
-# minimized. The shots show the Live screen only: an html panel takes no `--act`, so no shot can
-# press another tab, and the other tabs are read through the page harness (Task 6.4).
+# step's answer on stderr. In order, it validates the folder, records `orca plugin check`, loads
+# the folder with `orca plugin dev watch` (stopped when the script exits), restarts its worker,
+# opens the panel (once more after another restart when the first open fails with Orca's
+# `changed or was disabled during activation`), asks the worker for the fleet, then for the session
+# of each of its cards, waits for a catch-up of the dev plugin's own to end on the history store,
+# asks for the Trace of each card (a card whose session is not linked has none and is passed over),
+# for the Spend tab over a day and a year and for the Cache and Health tabs over a week and a year,
+# checks every answer's bounds (a host `notRead` that the fleet reaches, one with a card in the
+# fleet answer, fails; any other is printed), shoots the fleet screen 300 and 420 pixels wide in
+# Orca's dark and light themes, keeping each PNG, and reads the logs. The themes take effect only
+# while Orca's window is hidden or minimized. The shots show the Live screen only: an html panel
+# takes no `--act`, so no shot can press another tab, and the other tabs are read through the page
+# tests and by eye.
 # `plugin check` lists no HTML panel and `plugin shot --scenario` refuses one (Orca 1.4.273), so
 # the live shot of the dev plugin is the frame check and `plugin check` is only recorded.
 # Usage: bash scripts/frame-check.sh [--dry-run]; --dry-run prints each `orca` command line and
@@ -42,9 +45,10 @@ REFRESH_WAIT=3
 STORE=$HOME/.local/state/spyhop/insights.db
 # The most a catch-up takes, in seconds, whether the store is missing or filled: a store left by a
 # re-read of the history or a change of its host keys is read again from every Orca host whole,
-# which took about 16 minutes on the Mac this was built on (README, Refresh). The wait ends once
-# the meta `catch-ups` grows, so the bound only caps a catch-up that never ends.
-CATCH_UP_WAIT=1800
+# which took about 24 minutes on the Mac this was built on after a version change (1,450 s for the
+# whole check; README, Refresh). The bound of an hour stays well above that. The wait ends once the
+# meta `catch-ups` grows, so the bound only caps a catch-up that never ends.
+CATCH_UP_WAIT=3600
 
 work=$(mktemp -d)
 watch=

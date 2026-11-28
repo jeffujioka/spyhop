@@ -119,7 +119,7 @@ test('a missing store waits for the first catch-up, and another host that cannot
   const run = await wholeCheck(home, ['spyhop: catch-up cannot ask the place of maria: machine place unknown'], 1);
 
   assert.equal(run.status, 0, run.stderr);
-  assert.ok(run.stdout.includes('frame check: no history store yet; waiting up to 1800 s for the first catch-up, which reads every Orca host'), run.stdout);
+  assert.ok(run.stdout.includes('frame check: no history store yet; waiting up to 3600 s for the first catch-up, which reads every Orca host'), run.stdout);
   assert.ok(run.stdout.includes('frame check: passed'), run.stdout);
   // a warm-up shot, so that the panel has asked for its screen before the shots that are kept
   const shots = run.calls.filter((line) => line.startsWith('plugin shot'));
@@ -134,7 +134,7 @@ test('a store sqlite3 cannot open read-only is counted from its file, waiting as
 
   assert.equal(run.status, 0, run.stderr);
   // a filled store may be left by a re-read of every host, so it gets the first catch-up's bound
-  assert.ok(run.stdout.includes('frame check: the history store counts 2 catch-ups; waiting up to 1800 s for one more'), run.stdout);
+  assert.ok(run.stdout.includes('frame check: the history store counts 2 catch-ups; waiting up to 3600 s for one more'), run.stdout);
 });
 
 test('a catch-up that cannot read a file of this computer fails', async () => {

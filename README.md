@@ -271,7 +271,8 @@ The Cache tab shows how well the prompt cache served the range:
 - **Compactions** by kind, when the context was full, when the session sat idle or when the
   developer asked, marked `inferred` when a kind was told apart by inference.
 - **Hints**, one for each cause other than `other` that has cold starts: how many cold starts it
-  caused, and that avoiding them would have saved up to their cost, labelled `estimate`.
+  caused and, only when their cost can be read, that avoiding them would have saved up to that
+  cost, labelled `estimate`; otherwise the hint is the count and the cause alone.
 
 ### Health
 
@@ -560,7 +561,7 @@ the panel closed.
   folder can end with), asks the worker for the fleet and then
   for the session of each of its cards with `orca plugin dev request` (each answer under 1 MiB,
   each series at most 120 points, every card's sub-agents read within 30 refreshes), waits up
-  to 30 minutes for the restarted worker's own catch-up to end, as long whether the store is
+  to 60 minutes for the restarted worker's own catch-up to end, as long whether the store is
   missing or filled, as a missing store or one left by a re-read reads every Orca host whole (see
   Refresh; the wait ends as soon as the catch-up does), asks it for the Trace of each card (each
   answer under 1 MiB, each lane at most 240 spans; a card whose session is not linked has no
