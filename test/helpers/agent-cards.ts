@@ -84,8 +84,8 @@ export type OpencodeCalls = { provider: string; model: string; contexts: number[
 // The tokens of one model call of an opencode session: sent fresh, read from the cache, written
 // to it and output; `took`: how long it ran, from its `created` to its `completed`, 1 s when not
 // given; `prompted`: the time of a user message before it, none when not given; `tools`: the
-// `tool` items of its `content`.
-export type OpencodeCall = { uncached: number; read: number; write: number; output: number; took?: number; prompted?: number; tools?: OpencodeTool[] };
+// `tool` items of its `content`; `finish`: why it finished, `stop` when not given.
+export type OpencodeCall = { uncached: number; read: number; write: number; output: number; took?: number; prompted?: number; tools?: OpencodeTool[]; finish?: string };
 
 // A `tool` item of an opencode call, of the tool `name`, with the times of its `time` as this
 // Mac's database holds them (`created`, `ran`, `completed`), each left out when not given.
@@ -113,7 +113,7 @@ export function opencodeSession(
   }: { provider: string; model: string; calls: OpencodeCall[]; cost: number; id?: string; callCost?: number; last?: number; update?: boolean },
 ) {
   const at = (i: number) => last - 60_000 * (calls.length - 1 - i);
-  const rows = calls.flatMap(({ uncached, read, write, output, took = 1000, prompted, tools = [] }, i) => {
+  const rows = calls.flatMap(({ uncached, read, write, output, took = 1000, prompted, tools = [], finish = 'stop' }, i) => {
     const content = tools.map(({ name, created, ran, completed }, j) => ({
       type: 'tool',
       id: `toolu_${i}_${j}`,
@@ -126,7 +126,7 @@ export function opencodeSession(
       agent: 'build',
       model: { id: model, providerID: provider, variant: 'high' },
       content,
-      finish: 'stop',
+      finish,
       cost: callCost,
       tokens: { input: uncached, output, reasoning: 0, cache: { read, write } },
     };

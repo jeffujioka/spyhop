@@ -9,10 +9,10 @@ import { execFileSync } from 'node:child_process';
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, test } from 'node:test';
-import { dayOf } from '../../src/core/days.js';
+import { dayOf, midnightBefore } from '../../src/core/days.js';
 import { historyRowsQuery, SCHEMA_QUERY, select, sessionsIn } from '../../src/core/providers/opencode-sources.js';
 import { run, runBytes } from '../../src/exec.ts';
-import { createCatchUp } from '../../src/history/catch-up.ts';
+import { createCatchUp, OPENCODE_OPEN_DAYS } from '../../src/history/catch-up.ts';
 import { openStore, type Store } from '../../src/history/store.ts';
 import { opencodeDatabase, opencodeSession, sqlText } from '../helpers/agent-cards.ts';
 import { setEnv, useTempHome } from '../helpers/env.ts';
@@ -81,6 +81,21 @@ test('Change within 10 days', async () => {
 
 test('Change after 10 days', async () => {
   assert.equal(await updatedCallOf(12), 0.2);
+});
+
+// A guard of the days, no scenario of the spec: a call counts on the day it was created, the day
+// a catch-up reads it again by, so one that runs across the midnight the catch-ups read again
+// from keeps its cost.
+test('an opencode call across the midnight read again from keeps its cost', async () => {
+  setEnv('TZ', 'UTC');
+  const created = midnightBefore(Date.now(), OPENCODE_OPEN_DAYS) - 10_000;
+  const call = { uncached: 100, read: 0, write: 0, output: 50, took: 20_000 };
+  const { lines } = await twoCatchUps(
+    (home) => opencodeSession(home, join(home, 'web'), { provider: 'anthropic', model: 'claude-opus-5.5', calls: [call], cost: 0.2, callCost: 0.2, last: created }),
+    () => {},
+    dayOf(created),
+  );
+  assert.deepEqual(lines.map(({ cost, calls }) => ({ cost, calls })), [{ cost: 0.2, calls: 1 }]);
 });
 
 // A guard of the repos, no scenario of the spec: a session's folder keeps the repo git gave when

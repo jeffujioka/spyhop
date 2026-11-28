@@ -13,10 +13,10 @@ export const LINE_FIGURES = ['calls', 'tokens', 'uncached', 'read', 'write', 'ou
 // The open buckets: `day\nmodel` -> `{ day, model, figures }`. The Trace lanes: `thinking`, the
 // session's model calls; `tools`, its tool calls; `busy`, both but the tool calls that start or
 // await sub-agents; `developer`, from a reply that ends a turn to the developer's next prompt.
-// `firstMs` and `lastMs`: the first and the last time noted, null before one; `turnEnd`: the end
-// of the turn the session waits on the developer since, null when it does not; `started`: the tool
-// calls started and not ended yet, id -> `{ at, name }`, the time it started (epoch ms) and its
-// tool's name.
+// `firstMs` and `lastMs`: the first and the last time noted (see noteEntry), null before one;
+// `turnEnd`: the end of the turn the session waits on the developer since, null when it does not;
+// `started`: the tool calls started and not ended yet, id -> `{ at, name }`, the time it started
+// (epoch ms) and its tool's name.
 export const newInsights = () => ({
   open: new Map(),
   lanes: { thinking: newLane(), tools: newLane(), busy: newLane(), developer: newLane() },
@@ -31,6 +31,11 @@ function seen(ins, start, end) {
   if (!Number.isFinite(start) || !Number.isFinite(end)) return;
   ins.firstMs = ins.firstMs === null ? start : Math.min(ins.firstMs, start);
   ins.lastMs = ins.lastMs === null ? end : Math.max(ins.lastMs, end);
+}
+
+// An entry of the session at `t` (epoch ms): the Trace's axis runs from the first to the last.
+export function noteEntry(ins, t) {
+  seen(ins, t, t);
 }
 
 // The model a daily line names: `<provider>/<model>` when the harness logs the provider.
@@ -53,9 +58,8 @@ function lineOf(ins, t, model) {
 // model. A side call adds its tokens and cost, but no model call nor its prompt's tokens. `sign`
 // -1 takes back a call noted before, for a fold whose later entry replaces it: the call that
 // replaces it is noted again, and its span merges with the one noted before. A call with a
-// `start` (epoch ms), not a side call, also runs in the thinking and the busy lane, and the
-// session no longer waits on the developer; one without (a sub-agent's call in its root session's
-// rows) runs in no lane.
+// `start` (epoch ms), not a side call, also runs then (noteThinking); one without (a sub-agent's
+// call in its root session's rows, or a call whose day is not its end) runs in no lane.
 export function noteCall(ins, call, sign = 1) {
   const { figures } = lineOf(ins, call.end, call.model);
   figures.tokens += sign * call.tokens;
@@ -70,10 +74,16 @@ export function noteCall(ins, call, sign = 1) {
     if (call.side) figures.sideCost += sign * call.cost;
     if (call.copilot) figures.copilotCost += sign * call.cost;
   }
-  if (sign < 0 || call.side || !Number.isFinite(call.start)) return;
-  addSpan(ins.lanes.thinking, call.start, call.end);
-  addSpan(ins.lanes.busy, call.start, call.end);
-  seen(ins, call.start, call.end);
+  if (sign > 0 && !call.side) noteThinking(ins, call.start, call.end);
+}
+
+// A model call of the session from `start` to `end` (epoch ms): it runs in the thinking and the
+// busy lane, and the session no longer waits on the developer. One with no `start` is none.
+export function noteThinking(ins, start, end) {
+  if (!Number.isFinite(start)) return;
+  addSpan(ins.lanes.thinking, start, end);
+  addSpan(ins.lanes.busy, start, end);
+  seen(ins, start, end);
   ins.turnEnd = null;
 }
 

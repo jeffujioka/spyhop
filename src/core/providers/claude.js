@@ -24,7 +24,7 @@
 import { add, parseEntries, tally } from './jsonl.js';
 import { burnRate, cacheRate, isNumber, tokenCount, wholeSession } from './shared.js';
 import { addCall, addMinute, detailOf, entryOf, newSeries, pushRecent, retractLastCall, toolAnswered, toolCalled } from '../series.js';
-import { newInsights, noteCall, noteCost, notePrompt, noteToolEnd, noteToolStart, noteTurnEnd } from '../insights.js';
+import { newInsights, noteCall, noteCost, noteEntry, notePrompt, noteToolEnd, noteToolStart, noteTurnEnd } from '../insights.js';
 import { SUBAGENT_TOOLS } from '../trace.js';
 import { absoluteFolder } from './session-files.js';
 
@@ -179,6 +179,7 @@ function fold(state, entries, opts) {
     if (isNumber(time)) {
       s.firstEntry ??= time;
       s.lastEntry = time;
+      if (s.insights) noteEntry(s.insights, time);
     }
     if ((entry.type === 'user' || entry.type === 'assistant') && message && typeof message === 'object' && isNumber(time)) {
       s.firstMessage ??= time;

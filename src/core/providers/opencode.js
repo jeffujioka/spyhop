@@ -18,7 +18,7 @@
 import { burnRate, isNumber, tokenCount } from './shared.js';
 import { addCall, addCost, addMinute, detailOf, entryOf, newSeries, pushRecent } from '../series.js';
 import { callCost, COPILOT } from '../copilot-prices.js';
-import { modelKey, noteCall, notePrompt, noteTool, noteTurnEnd } from '../insights.js';
+import { modelKey, noteCall, noteEntry, notePrompt, noteThinking, noteTool, noteTurnEnd } from '../insights.js';
 import { SUBAGENT_TOOLS } from '../trace.js';
 
 function parseSession({ messages, compactions, tools, loggedCost, sources }) {
@@ -91,16 +91,22 @@ function callsCost(session) {
 }
 
 // Adds `rows`, `historyRowsQuery`'s rows of opencode-sources.js, to `ins` (src/core/insights.js):
-// the model calls (see isCall) to its daily lines, each on the day it ended, under its model with
-// its provider, at the cost of costOf, with the tokens `tokens` counts of it (none for a call that
-// logs no total and not all its parts); a row that logs no model is in no line. The rows of the
-// root session (`own`) also run in its Trace lanes: a call from its `created` to where its first
-// tool call starts, else to its `completed`; a tool call from its `start` (else its message's
-// `created`) to its `end` (else its message's `completed`); a turn ends when a call completes, and
-// a user message is a prompt.
+// the model calls (see isCall) to its daily lines, each on the day it was created (the day a
+// catch-up reads it again by), under its model with its provider, at the cost of costOf, with the
+// tokens `tokens` counts of it (none for a call that logs no total and not all its parts); a row
+// that logs no model is in no line. The rows of the root session (`own`) also run in its Trace,
+// from the first of their times to the last: a call from its `created` to where its first tool
+// call starts, else to its `completed`; a tool call from its `start` (else its message's
+// `created`) to its `end` (else its message's `completed`); a turn ends when a call that is no
+// compaction summary completes with a `finish` other than `tool-calls`, and a user message is a
+// prompt.
 export function opencodeInsights(rows, ins) {
   for (const row of rows) {
     const own = row.own === 1;
+    if (own) {
+      noteEntry(ins, row.created);
+      noteEntry(ins, row.completed);
+    }
     if (row.role === 'user') {
       if (own && isNumber(row.created)) notePrompt(ins, row.created);
     } else if (row.role === 'tool') {
@@ -110,10 +116,11 @@ export function opencodeInsights(rows, ins) {
       if (isCall(row) && typeof row.modelId === 'string' && isNumber(row.created)) {
         const [uncached, read, write, output] = [row.input, row.cacheRead, row.cacheWrite, row.output].map(tokenCount);
         const tokens = tokenCount(messageTotal(row));
-        const end = [row.toolStart, row.completed, row.created].find(isNumber);
-        noteCall(ins, { start: own ? row.created : undefined, end, model: modelKey(row.providerId, row.modelId), tokens, uncached, read, write, output, cost: costOf(row), copilot: row.providerId === COPILOT });
+        noteCall(ins, { end: row.created, model: modelKey(row.providerId, row.modelId), tokens, uncached, read, write, output, cost: costOf(row), copilot: row.providerId === COPILOT });
+        if (own) noteThinking(ins, row.created, [row.toolStart, row.completed, row.created].find(isNumber));
       }
-      if (own && isNumber(row.completed)) noteTurnEnd(ins, row.completed);
+      const endsTurn = typeof row.finish === 'string' && row.finish !== 'tool-calls' && row.summary !== 1;
+      if (own && endsTurn && isNumber(row.completed)) noteTurnEnd(ins, row.completed);
     }
   }
 }

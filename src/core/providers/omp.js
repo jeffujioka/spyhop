@@ -32,7 +32,7 @@
 import { add, parseEntries, tally } from './jsonl.js';
 import { burnRate, cacheRate, isNumber, tokenCount, wholeSession } from './shared.js';
 import { addCall, addCost, addMinute, detailOf, entryOf, newSeries, pushRecent, toolAnswered, toolCalled } from '../series.js';
-import { modelKey, newInsights, noteCall, notePrompt, noteToolEnd, noteToolStart, noteTurnEnd } from '../insights.js';
+import { modelKey, newInsights, noteCall, noteEntry, notePrompt, noteToolEnd, noteToolStart, noteTurnEnd } from '../insights.js';
 import { SUBAGENT_TOOLS } from '../trace.js';
 import { callCost, COPILOT, copilotWriteCost } from '../copilot-prices.js';
 
@@ -156,6 +156,7 @@ function fold(state, entries, opts) {
     if (isNumber(at)) {
       s.firstEntry ??= at;
       s.lastEntry = at;
+      if (s.insights) noteEntry(s.insights, at);
     }
     const ends = e.type === 'message' && e.message?.role === 'assistant' && TURN_ENDS.has(e.message.stopReason);
     if (e.type === 'message' && e.message) s.turnOpen = !ends;

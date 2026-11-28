@@ -160,7 +160,7 @@ function currentMessagesQuery(ids) {
 }
 
 // The columns of historyRowsQuery's rows.
-const HISTORY_COLUMNS = ['id', 'created', 'sessionId', 'directory', 'role', 'own', 'modelId', 'providerId', 'cost', 'total', 'input', 'output', 'reasoning', 'cacheRead', 'cacheWrite', 'completed', 'toolStart', 'name', 'start', 'end'];
+const HISTORY_COLUMNS = ['id', 'created', 'sessionId', 'directory', 'role', 'own', 'modelId', 'providerId', 'cost', 'total', 'input', 'output', 'reasoning', 'cacheRead', 'cacheWrite', 'completed', 'toolStart', 'finish', 'summary', 'name', 'start', 'end'];
 
 // The rows the history store keeps of `sessions` (see sessionsIn), created from `fromMs` on (epoch
 // ms), after the row `afterId` of that time when given, `limit` of them, by `created` and `id`; a
@@ -169,8 +169,9 @@ const HISTORY_COLUMNS = ['id', 'created', 'sessionId', 'directory', 'role', 'own
 //   - a model call (`role` 'assistant'): the current tables' `assistant` and `compaction` rows and
 //     the legacy tables' assistant messages, a compaction's summary (`summary` 1) included, with
 //     `modelId, providerId, cost, total, input, output, reasoning, cacheRead, cacheWrite`, the time
-//     it `completed` and `toolStart`, the time the first of its tool calls started (null without
-//     one);
+//     it `completed`, `toolStart`, the time the first of its tool calls started (null without
+//     one), why it finished (`finish`, opencode's `tool-calls` for a step that calls tools) and
+//     `summary` 1 on a compaction's summary;
 //   - a user message (`role` 'user');
 //   - a tool call (`role` 'tool') of the message `created` and `completed`, of the tool `name`, that
 //     ran from `start` to `end` as opencode logs them (the current tables: its `time.ran`, else its
@@ -195,7 +196,7 @@ export function historyRowsQuery(sessions, fromMs, afterId, limit) {
     own: '(tree.id = tree.root)',
     completed: json('time.completed'),
   });
-  const call = (model, provider, total, toolStart) => ({
+  const call = (model, provider, total, toolStart, summary) => ({
     ...message('assistant'),
     modelId: json(model),
     providerId: json(provider),
@@ -205,11 +206,13 @@ export function historyRowsQuery(sessions, fromMs, afterId, limit) {
     cacheRead: json('tokens.cache.read'),
     cacheWrite: json('tokens.cache.write'),
     toolStart,
+    finish: json('finish'),
+    summary,
   });
   const currentTool = `coalesce(${json('time.ran', 'c.value')}, ${json('time.created', 'c.value')})`;
   const currentJoin = 'FROM session_message AS m JOIN tree ON tree.id = m.session_id AND tree.current = 1';
   const current = [
-    `SELECT ${row(call('model.id', 'model.providerID', 'NULL', `(SELECT min(${currentTool}) FROM json_each(m.data, '$.content') AS c WHERE ${json('type', 'c.value')} = 'tool')`))} ` +
+    `SELECT ${row(call('model.id', 'model.providerID', 'NULL', `(SELECT min(${currentTool}) FROM json_each(m.data, '$.content') AS c WHERE ${json('type', 'c.value')} = 'tool')`, "(m.type = 'compaction')"))} ` +
       `${currentJoin} WHERE m.type IN ('assistant', 'compaction') AND ${after('m.id')}`,
     `SELECT ${row(message('user'))} ${currentJoin} WHERE m.type = 'user' AND ${after('m.id')}`,
     `SELECT ${row({ ...message('tool'), id: "m.id || '/' || c.key", name: json('name', 'c.value'), start: currentTool, end: json('time.completed', 'c.value') })} ` +
@@ -217,7 +220,7 @@ export function historyRowsQuery(sessions, fromMs, afterId, limit) {
   ];
   const legacyJoin = 'FROM message AS m JOIN tree ON tree.id = m.session_id AND tree.current = 0';
   const legacy = [
-    `SELECT ${row(call('modelID', 'providerID', json('tokens.total'), `(SELECT min(${json('state.time.start', 'p.data')}) FROM part AS p WHERE p.message_id = m.id AND ${json('type', 'p.data')} = 'tool')`))} ` +
+    `SELECT ${row(call('modelID', 'providerID', json('tokens.total'), `(SELECT min(${json('state.time.start', 'p.data')}) FROM part AS p WHERE p.message_id = m.id AND ${json('type', 'p.data')} = 'tool')`, `(${json('summary')} = 1)`))} ` +
       `${legacyJoin} WHERE ${json('role')} = 'assistant' AND ${after('m.id')}`,
     `SELECT ${row(message('user'))} ${legacyJoin} WHERE ${json('role')} = 'user' AND ${after('m.id')}`,
     `SELECT ${row({ ...message('tool'), id: 'p.id', name: json('tool', 'p.data'), start: json('state.time.start', 'p.data'), end: json('state.time.end', 'p.data') })} ` +
