@@ -14,8 +14,7 @@ theme without being loaded again. Its tab bar holds four tabs, Live, Spend, Cach
 that order, and the panel opens on Live. Spend, Cache and Health are the range tabs: under the
 tabs they show one range control, Day, Week, Month and Year, set to Day when the panel opens and
 shared by the three, so that a range pressed on one holds on the others; Live shows no range
-control. Spend is described under Spend tab; Cache and Health show only the tab bar and the range
-control for now. Live opens on the fleet screen:
+control. Spend, Cache and Health are described under Spend, Cache and Health. Live opens on the fleet screen:
 
 - **The header**: `Spyhop`, a `live` mark, and the number of agents in each Orca state
   (blocked, waiting, working, done) that any agent is in. The counts are drawn once a whole
@@ -163,11 +162,20 @@ lanes, each titled, with a line of what it means and its total time (`25s`, `5m 
   tool call but one that starts or awaits sub-agents.
 - **Waiting on you**: from a reply that ends a turn to the developer's next prompt.
 
-Under them, a row of each sub-agent, sub-agents of sub-agents included, nested under the agent
+A lane draws at most 240 spans. With more, the spans with the shortest gaps between them are
+joined first, a joined span running from the first one's start to the last one's end, until 240
+are left; the lane's total time stays the sum of its spans before they were joined, and the gaps
+that were joined are kept apart from it. Under the lanes, a row of each sub-agent, sub-agents of sub-agents included, nested under the agent
 that started it in the order they started: a bar from its start to its end, its name, its status
 as the harness logs it (`running` while it runs) and its cost, n/a when the harness logs none. A
 session on another Orca host is read over its ssh alias, as the catch-up reads it; when that
-host cannot be reached, the screen says the Trace cannot be read.
+host cannot be reached, or the session links to no file, the screen says the Trace cannot be
+read.
+
+A session with no Live card, one of the Spend tab's costliest sessions whose agent is gone from
+Orca, opens as a past session: its header, with the back control, title, repo, harness and
+models, its cost, tokens, duration and sub-agents as its summary in the history store keeps
+them, then its Trace, with no Figures and Trace switch. It is read from the store alone.
 
 ### Chart axes
 
@@ -207,14 +215,31 @@ A refresh keeps the line and the box, of a hovered or a focused chart, on the po
 time, or on the first point after it when that time is no longer a point, with the values the
 refresh gives it; a focused chart keeps the focus.
 
-## Spend tab
+## Spend, Cache and Health
 
-The Spend tab is a range tab: Day, Week, Month or Year. It reads the history store (see What
-spyhop stores) and shows:
+Spend, Cache and Health are the range tabs. Each reads the history store (see What spyhop
+stores) over the range under the tabs, Day, Week, Month or Year, the one range they share, Day
+when the panel opens. Day is today, Week the last 7 days, Month the last 30 and Year the 12
+calendar months that end with this month. Each part has a title in plain words and, under it,
+one line that says what it means; an estimate is labelled `estimate`. A figure that cannot be
+read reads `n/a`, never 0: a sum over sessions whose figure is not known is `n/a` too. Where a
+harness does not log what a figure counts, the tab says so in a note that names the harnesses
+it leaves out (`This leaves out Claude Code, which logs no retries.`). Each time chart
+(Week, Month, Year) has the axis values, time marks, crosshair, box and keys of Live's charts,
+with a day or, for Year, a month as its points, and its box gives the point's day or month and
+the value of each series there. Every range tab starts with the same two lines when they apply:
 
 - **Reading history: `<host>, <harness>, <n>%`**, while a catch-up reads an Orca host's harness
   that was never read through, such as on the first catch-up: the host, the harness and the share
   of its bytes (opencode: its model calls) read so far.
+- **Not read this time: `<hosts>`**, the Orca hosts the last catch-up could not read (a host
+  this computer cannot reach, or whose machine it cannot ask); their figures are those read
+  before.
+
+### Spend
+
+The Spend tab shows:
+
 - **What the range cost**, of every harness session in the history store, sub-agents included;
   when part of it is from Copilot calls, the part `from tokens at GitHub prices` and the rest as
   the harnesses logged it (see Costs). Beside it, the range's tokens and model calls.
@@ -225,6 +250,46 @@ spyhop stores) and shows:
   harness logs one (omp, opencode); Claude Code's models are named without the provider prefix,
   context size or date its names can carry, so `claude-opus-5-5[1m]` and
   `claude-haiku-4-5-20251001` count as `claude-opus-5-5` and `claude-haiku-4-5`.
+- **Costliest sessions**: the 10 sessions of the range that cost most, with their sub-agents, a
+  row each with its title, repo, harness, Orca host and cost. A row opens the session's screen:
+  the card's, when a Live card shows the session, else its past session screen (see Trace).
+
+### Cache
+
+The Cache tab shows how well the prompt cache served the range:
+
+- **Cache hit rate**, the share of prompt tokens read from the prompt cache instead of written
+  to it or sent not cached, and for Week, Month and Year **over time**, the rate of each day, or
+  each month for Year.
+- **Cold starts**: the model calls that wrote the prompt to the cache again instead of reading
+  it, by what caused them: the cache expired while the developer was away, the model was
+  switched, the thinking level changed, a compaction came before it, or no cause spyhop can
+  tell (`Other`). Each row gives the count, the tokens written again and their cost; a note names
+  the harnesses that log no cost for these cache writes and so are left out of the cost.
+- **Time away**: the returns to a session after under 5 minutes, 5 to 60 minutes and over 60
+  minutes, and how many of each found the cache cold.
+- **Compactions** by kind, when the context was full, when the session sat idle or when the
+  developer asked, marked `inferred` when a kind was told apart by inference.
+- **Hints**, one for each cause other than `other` that has cold starts: how many cold starts it
+  caused, and that avoiding them would have saved up to their cost, labelled `estimate`.
+
+### Health
+
+The Health tab has no chart. It shows what went wrong with the range's model calls and how long
+they took:
+
+- **Failed model calls**, those that ended in an error, not those the developer interrupted,
+  with **Failed by type** (the network, the login, a missing model, a rate limit, the server or
+  something else), **Failed by Orca host** and **Failed by provider**, most calls first.
+- **Retries that recovered**: calls that failed and then succeeded when the harness tried again,
+  with a note of the harnesses that log no retries.
+- **Reply times**, for each model the typical call (the median) and the slow one (the 95th
+  percentile) of the calls that ended without failure.
+- **Output cut at the maximum length**: for each model the calls whose reply the model had to
+  stop at its maximum length, with what they cost and a note of the harnesses that log no cost
+  for them.
+- **Thinking tokens**: the tokens each model spent thinking before it answered, with a note of
+  the harnesses that log none.
 
 ## Harnesses
 
@@ -350,6 +415,10 @@ ssh, and left 56 MB of data in
 the history store, one host for each of the three machines. A later catch-up of the same files
 took about 15 seconds.
 
+The same Mac's later first catch-up, after a move to `HISTORY_VERSION` 7 (see What spyhop
+stores), took about 24 minutes: the files that moved from version 5 to 7 were read again, from
+every Orca host that could be reached.
+
 ## What spyhop stores
 
 Session totals, in the plugin's own storage on this computer (`storage:own`), and the history
@@ -376,7 +445,7 @@ files are left out in this order until the rest fit: the transcripts of ended om
 one read longest ago first, then the other files, the one read longest ago first, by when each
 was last read in any run; a file whose totals alone would not fit in a key is left out too. A file
 left out is scanned again whole after a restart. They are stored as version
-6: the first open after an update from a spyhop that stored another version (spyhop 0.2.0 stored
+8: the first open after an update from a spyhop that stored another version (spyhop 0.2.0 stored
 version 5, whose totals hold no side calls or Copilot prices), or stored them in another form,
 scans each file once from its start, which is all that deleting the storage costs too.
 
@@ -406,6 +475,32 @@ store, such as `sqlite3`, is waited for up
 to 5 seconds.
 A store that cannot be opened, or a Node in Orca that cannot load `node:sqlite`, is written to
 the worker's log once; the range tabs then read n/a, and Live is drawn as ever.
+
+The store holds only names, counts, times and money: no prompt, reply, command, task or error
+text. Besides the daily lines it keeps, for each model call's reply time, a count in a bucket
+of a histogram by line (the `replies` table, from which the Health tab's typical and slow times
+come, as bucket bounds, not exact times), for each session that is not a sub-agent one row (its
+title, repo, first and last time, own cost, tokens, models, its Trace lanes and the statuses its
+harness logged of its sub-agents), and for each sub-agent one row (name, times, cost, tokens,
+models, whether it runs). The Trace of a past session and the Spend tab's costliest sessions
+read those rows. Each file's row also holds the version of the state it was read into
+(`HISTORY_VERSION`, 7 now): a file read under another version is read again from its start, and
+its lines and rows replace those it gave before, which is how a figure the store gained (the
+miss causes, returns and compactions of the Cache tab in 6, the Health tab's failures, retries,
+cut output, thinking tokens and reply times in 7) reaches the sessions already read. The session
+totals above have their own `KEPT_VERSION`, 8 now.
+
+Measured on the Mac it was built on (2026-11-28), after the move from `HISTORY_VERSION` 5 to 7
+had every Orca host that could be reached read again: the first catch-up took about 24 minutes
+(1,450 s for the whole frame check, which waits for it after the fleet and session requests, and
+those were answered while it ran), the store file is 123 MB, with 5,261 files, 2,055 sessions and
+8,130 rows of daily lines (read from the file alone, so a write that no worker had folded in
+yet is not counted), and later catch-ups are incremental and short, reading only what changed.
+During the catch-up Live's fleet requests were answered in 0.8 s each, as the `orca`
+command measured them with its own start, and the first one on a fresh worker in 4.7 s. A host
+Orca lists that this computer cannot reach, such as a stopped virtual machine, a git remote that
+is no shell, or a name that does not resolve, is left not read and named on each range tab as
+not read this time.
 
 ## Focus pane
 
@@ -460,13 +555,20 @@ the panel closed.
   alone while no worker holds the store), loads the
   folder with `orca plugin dev watch` and restarts its worker (`orca plugin restart`: a watch of
   a folder already loaded keeps the old worker, which starts no catch-up for up to 15 minutes),
-  opens the Live panel, asks the worker for the fleet and then
+  opens the Live panel (once more after another restart when its first open fails with Orca's
+  `changed or was disabled during activation`, which the first activation after a change of the
+  folder can end with), asks the worker for the fleet and then
   for the session of each of its cards with `orca plugin dev request` (each answer under 1 MiB,
   each series at most 120 points, every card's sub-agents read within 30 refreshes), waits up
   to 30 minutes for the restarted worker's own catch-up to end, as long whether the store is
   missing or filled, as a missing store or one left by a re-read reads every Orca host whole (see
-  Refresh; the wait ends as soon as the catch-up does), asks it for the
-  Spend tab over a day and a year (each answer under 1 MiB, its cost a number or `n/a`) and
+  Refresh; the wait ends as soon as the catch-up does), asks it for the Trace of each card (each
+  answer under 1 MiB, each lane at most 240 spans; a card whose session is not linked has no
+  Trace and is passed over, as is a card that left Orca), the
+  Spend tab over a day and a year (each answer under 1 MiB, its cost a number or `n/a`), the Cache
+  and Health tabs over a week and a year (each answer under 1 MiB; a host in `notRead` that has a
+  card in the fleet fails the check, while a host the fleet does not reach is only printed, as
+  Orca lists hosts this computer cannot reach) and
   checks that the store is not empty. It then takes one shot it does not keep, which shows the
   panel: a panel opened while Orca's window is hidden asks the worker for nothing until shown.
   Then it shoots the fleet screen 300 and 420 pixels wide in Orca's dark and light themes on this
@@ -476,7 +578,7 @@ the panel closed.
   `orca plugin logs`; it unloads the folder when it exits. `orca plugin check` lists no HTML
   panel, `orca plugin shot --scenario` refuses one and `orca plugin shot --act` presses only in
   a components panel, so the panel has no check scenarios and no shot of a tab other than Live:
-  the session screen and the Spend tab are checked by eye. Orca asks for the dev plugin's
+  the range tabs are checked through the page tests and by eye, as is the session screen. Orca asks for the dev plugin's
   approval again after every change to a file of the folder, and the check prints the command
   that gives it.
 - Page tests: `npm run test:page` runs the `test/page/**/*.page.ts` tests with Node's test runner
