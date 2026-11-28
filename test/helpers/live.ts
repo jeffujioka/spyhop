@@ -118,14 +118,16 @@ type LiveOptions = {
   prepare?: (home: string) => void;
   storage?: MockHostOptions['storage'];
   onDraw?: (html: string, drawing: Drawing) => void;
+  now?: number;
 };
 
 // The live panel opened on this computer's Orca host with `workspaces`, under a temporary home,
-// with `TZ` set to UTC and Node's mock clock, of `setTimeout` and `Date`, at NOW: it asks again
-// only when a test lets the clock pass. Returns once its first request has started, before it is
-// answered. `homes`, `orca` and `held` go to the stand-ins (test/helpers/stand-ins.ts), so the
-// stand-in `orca` lists no other Orca host unless `orca` gives its lists; `prepare` runs first
-// with the home, to put files under it; `storage`: what the plugin's storage holds at first;
+// with `TZ` set to UTC and Node's mock clock, of `setTimeout` and `Date`, at `now`, NOW when not
+// given: it asks again only when a test lets the clock pass. Returns once its first request has
+// started, before it is answered. `homes`, `orca` and `held` go to the stand-ins
+// (test/helpers/stand-ins.ts), so the stand-in `orca` lists no other Orca host unless `orca` gives
+// its lists; `prepare` runs first with the home, to put files under it; `storage`: what the
+// plugin's storage holds at first;
 // `onDraw`: called with each drawing and whether it is of the screen drawn before it, as the
 // page's own drawing is, so it may throw.
 // `html()`: what the panel drew last; `requests(name)`: how many requests `name` it has started;
@@ -133,9 +135,9 @@ type LiveOptions = {
 // answer, so that the panel has taken it by the next turn of the event loop; `calls`: the
 // stand-ins' calls; `openTab(tab, range)`: presses the range tab `tab` and then, when given, the
 // range `range`, and waits for the tab drawn from its answer.
-export async function openLive(workspaces: HostWorkspace[], { homes = {}, orca = {}, held = [], prepare, storage, onDraw }: LiveOptions = {}) {
+export async function openLive(workspaces: HostWorkspace[], { homes = {}, orca = {}, held = [], prepare, storage, onDraw, now = NOW }: LiveOptions = {}) {
   setEnv('TZ', 'UTC');
-  mock.timers.enable({ apis: ['setTimeout', 'Date'], now: NOW });
+  mock.timers.enable({ apis: ['setTimeout', 'Date'], now });
   const home = useTempHome();
   prepare?.(home);
   const calls = standIns({ homes, orca, held });
