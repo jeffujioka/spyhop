@@ -70,6 +70,19 @@ test('Year by month', async () => {
   assert.equal(figure(html, 'cost'), '$6.00');
 });
 
+test('Cost labels under a cent over a range', async () => {
+  // $0.004 on the top day: a step of $0.002, labelled as Live's cost chart labels it
+  const { html } = await rangeOf([], { tab: 'spend', range: 'week', now: CLOCK, prepare: spentOn({ '2026-11-27': 0.001, '2026-11-28': 0.004 }) });
+
+  // the tab's one plot, whose labels are laid over its chart
+  const [plot] = parts(html, 'data-part', 'plot');
+  const labels = parts(plot, 'data-label').map((label) => [Number(attr(label, 'data-label')), text(label)]);
+  assert.deepEqual(labels, [
+    [0.002, '$0.002'],
+    [0.004, '$0.004'],
+  ]);
+});
+
 test('Day without a chart over time', async () => {
   const { html } = await rangeOf([], { tab: 'spend', range: 'day', now: CLOCK, prepare: spentOn({ '2026-11-27': 2, '2026-11-28': 0.5 }) });
 

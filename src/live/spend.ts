@@ -4,7 +4,7 @@
 
 import { formatCost, formatCount, orNa } from '../core/format.js';
 import type { RangeAnswer } from '../protocol.ts';
-import { rangeChart } from './charts.ts';
+import { rangeChart, usdLabel } from './charts.ts';
 import { num, titled } from './html.ts';
 
 // The Spend tab of `answer`; '' when it holds no Spend tab.
@@ -18,7 +18,7 @@ export function spendTab({ range, spend }: RangeAnswer): string {
     titled('Model calls', 'Every call to a model, sub-agents included', num('calls', orNa(calls, formatCount))) +
     `</div>`;
   const over = chart
-    ? titled('Cost over time', range === 'year' ? 'What each month cost' : 'What each day cost', rangeChart('cost', chart, formatCost))
+    ? titled('Cost over time', range === 'year' ? 'What each month cost' : 'What each day cost', rangeChart('cost', chart, formatCost, usdLabel))
     : '';
   return `${figures}${over}`;
 }

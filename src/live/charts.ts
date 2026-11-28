@@ -119,7 +119,7 @@ function scaleOf(height: number, top: number, format: (v: number, step: number) 
 // A cost in dollars as a label of a scale of the step `step`: to the cent, as `formatCost`
 // writes it, or to as many decimals as a step under a cent needs, so that no line under a cent
 // reads $0.00 or the same as another: $0.002, $0.004.
-const usdLabel = (v: number, step: number) => `$${v.toFixed(Math.max(2, -Math.floor(Math.log10(step))))}`;
+export const usdLabel = (v: number, step: number) => `$${v.toFixed(Math.max(2, -Math.floor(Math.log10(step))))}`;
 
 // A chart's plot, named `name`, the chart's title: its SVG `svg`, with `over` laid over it: its
 // scale's labels and its boxes. It is one stop of the Tab key, whose crosshair the page
@@ -484,17 +484,18 @@ export function burnChart(layers: BurnCard['layers'], endMs: number): string {
 // The chart over time of a range tab (`range-<name>`), a point per day (`YYYY-MM-DD`) or month
 // (`YYYY-MM`) of `points`, oldest first, drawn as the burn rate chart is: a line through the
 // points on a round scale, at most five of them marked under it (`22 Nov`, `Dec`), and each
-// point's box giving its day or month and its value as `format` writes it. A point carries its key,
-// its value and the local start of its day or month (`data-t`); one whose value is n/a has no dot,
-// and the line breaks there.
-export function rangeChart(name: string, points: RangePoint[], format: (v: number) => string): string {
+// point's box giving its day or month and its value as `format` writes it; the scale's labels
+// are written by `label`, as a Live chart of the same figure writes them (`usdLabel` for a cost).
+// A point carries its key, its value and the local start of its day or month (`data-t`); one
+// whose value is n/a has no dot, and the line breaks there.
+export function rangeChart(name: string, points: RangePoint[], format: (v: number) => string, label: (v: number, step: number) => string): string {
   const days = points[0]?.key.length === 10;
   const times = points.map(({ key }) => {
     const [year, month, day = 1] = key.split('-').map(Number);
     return new Date(year, month - 1, day).getTime();
   });
   const x = timeScale(times);
-  const scale = scaleOf(RANGE_HEIGHT, Math.max(0, ...points.flatMap(({ v }) => (v === 'n/a' ? [] : [v]))), format);
+  const scale = scaleOf(RANGE_HEIGHT, Math.max(0, ...points.flatMap(({ v }) => (v === 'n/a' ? [] : [v]))), label);
   const { y } = scale;
   const xy = points.map(({ v }, i) => (v === 'n/a' ? null : `${x(times[i])} ${y(v)}`));
   const line = xy.flatMap((point, i) => (point === null ? [] : [`${xy[i - 1] ? 'L' : 'M'}${point}`])).join(' ');
