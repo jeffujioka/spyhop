@@ -12,14 +12,13 @@
 // with its cold starts, returns and compactions, through the Cache tab's Week and back from Spend.
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { mock, test } from 'node:test';
 import { RANGE_REFRESH_MS } from '../../src/core/refresh.js';
 import { opencodeSession, workspace } from '../helpers/agent-cards.ts';
 import { tempHome } from '../helpers/files.ts';
 import { caughtUp } from '../helpers/history.ts';
-import { claudeSession, FIX, folderOf, ompSession, ompSubAgent, ompWindow, type OmpCall, open, openLive, openOnFleet, until } from '../helpers/live.ts';
+import { claudeSession, FIX, folderOf, ompCompactsAt, ompSession, ompSubAgent, ompWindow, type OmpCall, open, openLive, openOnFleet, until } from '../helpers/live.ts';
 import { attr, figure, listOf, parts, text } from '../helpers/markup.ts';
 import { DEVBOX, DEVBOX_HOST, DEVBOX_LISTS, environmentListOf, hostListOf, LOCAL_HOST } from '../helpers/orca-answers.ts';
 import type { HostWorkspace } from '../helpers/orca-host.ts';
@@ -255,8 +254,7 @@ test('the Cache tab end to end', async () => {
       // this computer, omp: an expired cache, a compaction (inferred from the context's size), a model
       // switch, a thinking-level switch, a warm call and a return after 3 hours
       ompWindow(home, 1_000_000);
-      mkdirSync(join(home, '.omp/agent'), { recursive: true });
-      writeFileSync(join(home, '.omp/agent/config.yml'), 'compaction:\n  thresholdTokens: 800000\n');
+      ompCompactsAt(home, 800_000);
       ompSession(home, join(home, 'api'), {
         title: 'api',
         calls: [
@@ -308,10 +306,10 @@ test('the Cache tab end to end', async () => {
     assert.ok(chart !== undefined && parts(chart, 'data-key').some((point) => attr(point, 'data-key') === '2026-11-27' && attr(point, 'data-v') !== 'n/a'), html);
     // the five causes, with the cold starts of omp, Claude Code and opencode
     assert.equal(figure(html, 'cold-expired'), '1 · 1,000 · $0.05');
-    assert.match(figure(html, 'cold-model'), /^2 · 2,000/);
-    assert.match(figure(html, 'cold-thinking'), /^2 · 2,000/);
-    assert.match(figure(html, 'cold-compaction'), /^4 · 53,000/);
-    assert.match(figure(html, 'cold-other'), /^2 · 2,000/);
+    assert.equal(figure(html, 'cold-model'), '2 · 2,000 · $0.05');
+    assert.equal(figure(html, 'cold-thinking'), '2 · 2,000 · $0.05');
+    assert.equal(figure(html, 'cold-compaction'), '4 · 53,000 · $0.05');
+    assert.equal(figure(html, 'cold-other'), '2 · 2,000 · $0.05');
     assert.match(text(parts(html, 'data-part', 'left-out')[0]), /Claude Code/);
     // the three time-away bands: the return after 1 minute, after 20 minutes and after 3 hours
     assert.equal(figure(html, 'away-under5'), '1 return · 1 cold');
@@ -321,7 +319,11 @@ test('the Cache tab end to end', async () => {
     assert.equal(figure(html, 'compactions'), '3 context full · 1 manual');
     assert.equal(parts(html, 'data-part', 'inferred').length, 1);
     // a hint per cause but other
-    assert.deepEqual(parts(html, 'data-part', 'hint').map((hint) => attr(hint, 'data-cause')).sort(), ['compaction', 'expired', 'model', 'thinking']);
+    const hints = parts(html, 'data-part', 'hint');
+    assert.deepEqual(hints.map((hint) => attr(hint, 'data-cause')).sort(), ['compaction', 'expired', 'model', 'thinking']);
+    const expired = hints.find((hint) => attr(hint, 'data-cause') === 'expired')!;
+    assert.equal(text(expired), '1 cold start after the cache expired: avoiding them would have saved up to $0.05 estimate');
+    assert.equal(parts(expired, 'data-estimate').length, 1);
   };
   drawn();
 
@@ -337,4 +339,6 @@ test('the Cache tab end to end', async () => {
   const lines = opened.calls.ssh();
   assert.ok(lines.some(([alias]) => alias === 'devbox'), JSON.stringify(lines));
   assert.deepEqual(lines.filter((args) => !readOnlyLine(args.at(-1)!)), []);
+  // devbox's opencode rows were read through `sqlite3 -readonly`
+  assert.ok(lines.some(([alias, ...rest]) => alias === 'devbox' && /sqlite3'? '?-readonly/.test(rest.at(-1)!)), JSON.stringify(lines));
 });

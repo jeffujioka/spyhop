@@ -516,6 +516,13 @@ export function ompAutocompacts(home: string) {
   writeFileSync(join(dir, 'config.yml'), 'compaction:\n  enabled: true\n');
 }
 
+// omp's config under `home`, which makes omp compact on its own at `tokens` of context.
+export function ompCompactsAt(home: string, tokens: number) {
+  const dir = join(home, '.omp/agent');
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, 'config.yml'), `compaction:\n  thresholdTokens: ${tokens}\n`);
+}
+
 // A Claude Code session of the folder `path`, which it records, with one model call per context
 // of `contexts` (each the prompt's input tokens, with no cache).
 export function claudeCalls(home: string, path: string, contexts: number[]) {

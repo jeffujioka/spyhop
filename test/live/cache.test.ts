@@ -4,12 +4,11 @@
 // session files under a temporary home (test/helpers/history.ts), drawn and read through the
 // markup's conventions (test/helpers/markup.ts).
 import assert from 'node:assert/strict';
-import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { rangeOf } from '../helpers/history.ts';
 import { opencodeSession } from '../helpers/agent-cards.ts';
-import { claudeSession, type Compaction, type OmpCall, ompSession, ompWindow } from '../helpers/live.ts';
+import { claudeSession, type Compaction, type OmpCall, ompCompactsAt, ompSession, ompWindow } from '../helpers/live.ts';
 import { attr, figure, parts, text } from '../helpers/markup.ts';
 import { withCopilotPrices } from '../helpers/prices.ts';
 
@@ -179,8 +178,7 @@ test('omp compactions inferred', async () => {
     ],
     (home) => {
       ompWindow(home, 1_000_000);
-      mkdirSync(join(home, '.omp/agent'), { recursive: true });
-      writeFileSync(join(home, '.omp/agent/config.yml'), 'compaction:\n  thresholdTokens: 800000\n');
+      ompCompactsAt(home, 800_000);
     },
   );
 

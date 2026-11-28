@@ -2,7 +2,6 @@
 // start, the returns after a turn end by their time away, and the compactions by kind, as the
 // catch-up reads them from omp's, Claude Code's and opencode's sessions. The store, the runner and
 // the programs are the real ones, under a temporary home, in UTC.
-import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, describe, test } from 'node:test';
 import { run, runBytes } from '../../src/exec.ts';
@@ -17,7 +16,7 @@ import { STARFISH_LISTS } from '../helpers/orca-answers.ts';
 import { readOnlyLine } from '../helpers/read-only.ts';
 import { standIns } from '../helpers/stand-ins.ts';
 import { withCopilotPrices } from '../helpers/prices.ts';
-import { claudeSession, type Compaction, ompSession, ompWindow, type OmpCall } from '../helpers/live.ts';
+import { claudeSession, type Compaction, ompCompactsAt, ompSession, ompWindow, type OmpCall } from '../helpers/live.ts';
 
 let store: Store | undefined;
 afterEach(() => {
@@ -185,8 +184,7 @@ describe('returns and compactions', () => {
     const sums = await figuresOf((home) => {
       ompWindow(home, 1_000_000);
       // omp compacts on its own at 800,000 tokens
-      mkdirSync(join(home, '.omp/agent'), { recursive: true });
-      writeFileSync(join(home, '.omp/agent/config.yml'), 'compaction:\n  thresholdTokens: 800000\n');
+      ompCompactsAt(home, 800_000);
       ompSession(home, join(home, 'api'), { title: 'api', calls: [cold('10:00'), cold('10:18', { read: 100 }), cold('10:30:30', { read: 100 })], compactions });
     });
 
@@ -300,8 +298,7 @@ describe('what the catch-up cannot know', () => {
       (home) => ompSession(home, join(home, 'first'), { title: 'first', calls: [cold('10:00'), cold('10:01', { read: 1 })], compactions: [{ at: at('10:00:30'), before: 820_000, after: 20_000 }] }),
       (home) => {
         ompWindow(home, 1_000_000);
-        mkdirSync(join(home, '.omp/agent'), { recursive: true });
-        writeFileSync(join(home, '.omp/agent/config.yml'), 'compaction:\n  thresholdTokens: 800000\n');
+        ompCompactsAt(home, 800_000);
         ompSession(home, join(home, 'second'), { title: 'second', calls: [cold('10:00'), cold('10:01', { read: 1 })], compactions: [{ at: at('10:00:30'), before: 820_000, after: 20_000 }] });
       },
       1,
@@ -336,7 +333,7 @@ describe('another Orca host', () => {
     setEnv('TZ', 'UTC');
     const remoteHome = tempHome();
     ompWindow(remoteHome, 1_000_000);
-    writeFileSync(join(remoteHome, '.omp/agent/config.yml'), 'compaction:\n  thresholdTokens: 800000\n');
+    ompCompactsAt(remoteHome, 800_000);
     ompSession(remoteHome, join(remoteHome, 'api'), { title: 'api', calls: [cold('10:00'), cold('10:01', { read: 1 })], compactions: [{ at: at('10:00:30'), before: 820_000, after: 20_000 }] });
     const home = useTempHome();
     const calls = standIns({ homes: { 'starfish-bs': remoteHome }, orca: STARFISH_LISTS });
