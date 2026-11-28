@@ -2,12 +2,13 @@
 // computer: with `--dry-run` it prints each of its `orca` command lines, in order, and runs none.
 // The stand-in `orca` (test/helpers/stand-ins.ts) logs every call, so a call would show; it fails
 // each command line it has no answer for, so the script stops at the first step it has none for.
-// The steps after the panel's refresh wait (the shots, the logs) are not run here, as no test
-// waits on a clock.
+// The whole run is played too, its history store made in a home of the test's own and its catch-up
+// counted when the worker restarts; it waits on the panel's refresh period, a few seconds.
 import assert from 'node:assert/strict';
-import { execFileSync, spawnSync } from 'node:child_process';
-import { copyFileSync, mkdirSync, symlinkSync } from 'node:fs';
+import { execFileSync, spawn, spawnSync } from 'node:child_process';
+import { copyFileSync, mkdirSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import { test } from 'node:test';
 import { tempHome } from './helpers/files.ts';
 import { answer, standIns } from './helpers/stand-ins.ts';
@@ -40,6 +41,96 @@ function frameCheck() {
   return spawnSync('bash', [join(folder, 'scripts', 'frame-check.sh')], { encoding: 'utf8' });
 }
 
+const RESTART = 'plugin restart local.spyhop --json';
+
+// Every step of a whole run answered as Orca does, a fleet without cards, a shot as the PNG
+// `png` and the log lines `lines`.
+function wholeRun(png: string, lines: string[]) {
+  const shot = answer({ path: png, errors: [], settled: true, themeApplied: true });
+  const answers: Record<string, string> = {
+    ...answeredUpToFleet(fleetListing([])),
+    'plugin shot local.spyhop --panel spyhop --width 300 --json': answer({ path: png, errors: [], settled: true }),
+    'plugin logs local.spyhop --json': answer({ pluginKey: 'local.spyhop', lines: lines.map((line) => ({ ts: 1, level: 'info', line })) }),
+    'plugin dev unload . --json': answer({}),
+  };
+  for (const range of ['day', 'year']) {
+    answers[`plugin dev request . spyhop.range --data {"request":3,"tab":"spend","range":"${range}"} --json`] = answer({ result: { spend: { cost: 0 } } });
+  }
+  for (const width of [300, 420]) for (const theme of ['dark', 'light']) answers[`plugin shot local.spyhop --panel spyhop --width ${width} --theme ${theme} --json`] = shot;
+  return answers;
+}
+
+// Sets the meta `catch-ups` of the history store under `home` to `count`, the store made when
+// missing, in WAL mode as the worker keeps it, and closed, as a stopped worker leaves it.
+function countCatchUps(home: string, count: number) {
+  mkdirSync(join(home, '.local', 'state', 'spyhop'), { recursive: true });
+  const db = new DatabaseSync(join(home, '.local', 'state', 'spyhop', 'insights.db'));
+  db.exec('PRAGMA journal_mode = WAL; CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)');
+  db.prepare("INSERT INTO meta VALUES ('catch-ups', ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value").run(String(count));
+  db.close();
+}
+
+// Runs a copy of the script in the home `home`, `orca` answering a whole run (wholeRun) with the
+// log lines `lines` and holding the restart: once the script asks for it, the store counts `after`
+// catch-ups and the restart is answered. Its exit status and output, and the `orca` calls.
+async function wholeCheck(home: string, lines: string[], after: number) {
+  const orca = standIns({ homes: {}, orca: wholeRun(png(), lines), held: [RESTART] });
+  const folder = tempHome();
+  mkdirSync(join(folder, 'scripts'));
+  copyFileSync(new URL('../scripts/frame-check.sh', import.meta.url), join(folder, 'scripts', 'frame-check.sh'));
+  const child = spawn('bash', [join(folder, 'scripts', 'frame-check.sh')], { env: { ...process.env, HOME: home } });
+  let stdout = '';
+  let stderr = '';
+  child.stdout.on('data', (chunk) => (stdout += chunk));
+  child.stderr.on('data', (chunk) => (stderr += chunk));
+  const { promise: status, resolve } = Promise.withResolvers<number | null>();
+  child.on('close', resolve);
+  await orca.until(() => orca.orca().includes(RESTART));
+  countCatchUps(home, after);
+  orca.release(RESTART);
+  return { status: await status, stdout, stderr, calls: orca.orca() };
+}
+
+// A PNG for the shots to name, under a folder of its own.
+function png() {
+  const path = join(tempHome(), 'shot.png');
+  writeFileSync(path, '');
+  return path;
+}
+
+test('a missing store waits for the first catch-up, and another host that cannot be asked passes', async () => {
+  const home = tempHome();
+
+  const run = await wholeCheck(home, ['spyhop: catch-up cannot ask the place of maria: machine place unknown'], 1);
+
+  assert.equal(run.status, 0, run.stderr);
+  assert.ok(run.stdout.includes('frame check: no history store yet; waiting up to 1800 s for the first catch-up, which reads every Orca host'), run.stdout);
+  assert.ok(run.stdout.includes('frame check: passed'), run.stdout);
+  // a warm-up shot, so that the panel has asked for its screen before the shots that are kept
+  const shots = run.calls.filter((line) => line.startsWith('plugin shot'));
+  assert.equal(shots[0], 'plugin shot local.spyhop --panel spyhop --width 300 --json');
+});
+
+test('a store sqlite3 cannot open read-only is counted from its file', async () => {
+  const home = tempHome();
+  countCatchUps(home, 2);
+
+  const run = await wholeCheck(home, [], 3);
+
+  assert.equal(run.status, 0, run.stderr);
+  assert.ok(run.stdout.includes('frame check: the history store counts 2 catch-ups; waiting for one more'), run.stdout);
+});
+
+test('a catch-up that cannot read a file of this computer fails', async () => {
+  const home = tempHome();
+  countCatchUps(home, 1);
+
+  const run = await wholeCheck(home, [`spyhop: catch-up cannot read opencode's database ${home}/.local/share/opencode/opencode.db: not a database`], 2);
+
+  assert.equal(run.status, 1);
+  assert.ok(run.stderr.includes('frame check: the logs hold a catch-up that cannot read a file of this computer'), run.stderr);
+});
+
 test('the whole-panel steps are listed', () => {
   const orca = standIns({ homes: {}, orca: {} });
 
@@ -61,6 +152,7 @@ test('the whole-panel steps are listed', () => {
     'plugin dev request . spyhop.session --data {"request":2,"card":"<id>"} --json',
     'plugin dev request . spyhop.range --data {"request":3,"tab":"spend","range":"day"} --json',
     'plugin dev request . spyhop.range --data {"request":3,"tab":"spend","range":"year"} --json',
+    'plugin shot local.spyhop --panel spyhop --width 300 --json',
     'plugin shot local.spyhop --panel spyhop --width 300 --theme dark --json',
     'plugin shot local.spyhop --panel spyhop --width 300 --theme light --json',
     'plugin shot local.spyhop --panel spyhop --width 420 --theme dark --json',

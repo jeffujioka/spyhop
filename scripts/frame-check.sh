@@ -35,8 +35,12 @@ READ_REFRESHES=30
 REFRESH_WAIT=3
 # The history store the worker's catch-ups fill (src/history/store.ts).
 STORE=$HOME/.local/state/spyhop/insights.db
-# The most a first catch-up of this computer's sessions takes, in seconds.
+# The most a catch-up of a store already filled takes, in seconds: the meta `catch-ups` grows once
+# every Orca host has been read.
 CATCH_UP_WAIT=300
+# The most a first catch-up takes, which reads every Orca host whole: 16.5 minutes on the Mac this
+# was built on (README, Refresh).
+FIRST_CATCH_UP_WAIT=1800
 
 work=$(mktemp -d)
 watch=
@@ -93,11 +97,28 @@ run "$work/check.json" plugin check . --json || status=$?
 [ -n "$dry" ] || record "$work/check.json" check "$status" 'a.result.panels.length > 0'
 
 # The catch-ups the history store counts in its meta `catch-ups` before the dev plugin is loaded,
-# 0 while it is missing or counts none: the check waits for one more, the dev plugin's own.
+# 0 while it counts none: the check waits for one more, the dev plugin's own, for CATCH_UP_WAIT,
+# or FIRST_CATCH_UP_WAIT while the store is missing. `sqlite3 -readonly` cannot open a store in
+# WAL mode that no worker holds, which has no `-shm` file, so its count is then read from the file
+# alone (`immutable=1`), where a worker that closed the store left every change.
 count="SELECT value FROM meta WHERE key = 'catch-ups'"
+catch_ups() {
+  sqlite3 -readonly "$STORE" "$count" 2>/dev/null || sqlite3 -readonly "file:$STORE?immutable=1" "$count" 2>/dev/null
+}
 printf '+ %s\n' "sqlite3 -readonly $STORE \"$count\""
 before=
-[ -n "$dry" ] || before=$(sqlite3 -readonly "$STORE" "$count" 2>/dev/null || true)
+wait=$CATCH_UP_WAIT
+if [ -n "$dry" ]; then
+  :
+elif [ ! -e "$STORE" ]; then
+  wait=$FIRST_CATCH_UP_WAIT
+  echo "frame check: no history store yet; waiting up to $FIRST_CATCH_UP_WAIT s for the first catch-up, which reads every Orca host"
+elif before=$(catch_ups); then
+  echo "frame check: the history store counts ${before:-0} catch-ups; waiting for one more"
+else
+  echo "frame check: cannot read the catch-ups of the history store $STORE" >&2
+  exit 1
+fi
 before=${before:-0}
 
 watched=1
@@ -193,15 +214,15 @@ EOF
 # Orca's limit with a cost that is a number or `n/a`, and the store is not empty.
 printf '+ %s\n' "sqlite3 -readonly $STORE \"$count\""
 if [ -z "$dry" ]; then
-  deadline=$((SECONDS + CATCH_UP_WAIT))
+  deadline=$((SECONDS + wait))
   # sqlite3 fails while the store is missing or locked, and prints nothing before a catch-up ends
-  until [ "$(sqlite3 -readonly "$STORE" "$count" 2>/dev/null || true)" -gt "$before" ] 2>/dev/null; do
+  until [ "$(catch_ups || true)" -gt "$before" ] 2>/dev/null; do
     if [ "$SECONDS" -ge "$deadline" ]; then
       # a store that sqlite3 cannot open either is one the worker could not make or open
-      if ! sqlite3 -readonly "$STORE" 'SELECT 1' > /dev/null 2>&1; then
+      if ! catch_ups > /dev/null; then
         echo "frame check: cannot open the history store $STORE" >&2
       else
-        echo "frame check: no catch-up of the history store $STORE ended within $CATCH_UP_WAIT s" >&2
+        echo "frame check: no catch-up of the history store $STORE ended within $wait s" >&2
       fi
       exit 1
     fi
@@ -215,6 +236,12 @@ for range in day year; do
 done
 printf '+ test -s %s\n' "$STORE"
 [ -n "$dry" ] || test -s "$STORE" || { echo "frame check: the history store $STORE is missing or empty" >&2; exit 1; }
+
+# A panel opened while Orca's window is hidden asks the worker for nothing, as the page is hidden
+# (src/live/controller.ts), and a shot settles once the page has loaded, not drawn: so one shot,
+# not kept, shows the panel, which then asks for its screen, drawn a refresh period later.
+run "$work/shot.json" plugin shot "$KEY" --panel spyhop --width 300 --json
+[ -n "$dry" ] || expect 'a.result.errors.length === 0 && a.result.settled === true' "the shot that shows the panel has errors or did not settle" "$work/shot.json"
 [ -n "$dry" ] || sleep "$REFRESH_WAIT"
 
 # Each shot writes the same PNG, so each is kept as .orca/shots/frame-check-<width>-<theme>.png,
@@ -242,8 +269,8 @@ run "$work/logs.json" plugin logs "$KEY" --json
 # the whole answer as text, so that a `[frame]` line is found in whichever field holds it
 [ -n "$dry" ] || expect '!JSON.stringify(a).includes("[frame]")' 'the logs hold a [frame] error' "$work/logs.json"
 [ -n "$dry" ] || expect '!JSON.stringify(a).includes("node:sqlite")' 'the logs hold a node:sqlite error' "$work/logs.json"
-# a file of this computer, under its home; another host that cannot be asked or reached is logged
-# too (src/history/catch-up.ts), and is not this check's
-[ -n "$dry" ] || expect '!new RegExp(`catch-up cannot (read|list) [^"]*${process.env.HOME}/`).test(JSON.stringify(a))' 'the logs hold a catch-up that cannot read a file of this computer' "$work/logs.json"
+# a file of this computer, which each such line names (src/history/catch-up.ts), under its home;
+# another host that cannot be asked or reached is logged too, and is not this check's
+[ -n "$dry" ] || expect '!a.result.lines.some(({ line }) => /^spyhop: catch-up cannot (read|list) /.test(line) && line.includes(`${process.env.HOME}/`))' 'the logs hold a catch-up that cannot read a file of this computer' "$work/logs.json"
 
 [ -n "$dry" ] || echo 'frame check: passed'

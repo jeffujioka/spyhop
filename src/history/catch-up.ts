@@ -361,7 +361,7 @@ export function createCatchUp({
       read.opencode = await readOpencode(place, recentMs);
     } catch (error) {
       if (!place.reached()) return null;
-      log(`spyhop: catch-up cannot read opencode's database: ${(error as Error).message}`);
+      log(`spyhop: catch-up cannot read opencode's database ${databaseOf(place.home)}: ${(error as Error).message}`);
     }
     return read;
   }
@@ -376,7 +376,7 @@ export function createCatchUp({
       await readOlderOpencode(place, opencode, recentMs);
     } catch (error) {
       if (!place.reached()) return false;
-      log(`spyhop: catch-up cannot read opencode's database: ${(error as Error).message}`);
+      log(`spyhop: catch-up cannot read opencode's database ${opencode.database}: ${(error as Error).message}`);
     }
     return true;
   }

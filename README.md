@@ -428,16 +428,19 @@ the panel closed.
   Orca's test kit; `orca plugin validate . --json` checks the manifest as Orca loads it.
 - Frame check: `bash scripts/frame-check.sh` runs the folder in the Orca app on this computer
   as the dev plugin `local.spyhop`. It needs `sqlite3`, and fails at once without it. It counts
-  the history store's catch-ups (its meta `catch-ups`, with `sqlite3 -readonly`), loads the
+  the history store's catch-ups (its meta `catch-ups`, with `sqlite3 -readonly`, or from the file
+  alone while no worker holds the store), loads the
   folder with `orca plugin dev watch` and restarts its worker (`orca plugin restart`: a watch of
   a folder already loaded keeps the old worker, which starts no catch-up for up to 15 minutes),
   opens the Live panel, asks the worker for the fleet and then
   for the session of each of its cards with `orca plugin dev request` (each answer under 1 MiB,
   each series at most 120 points, every card's sub-agents read within 30 refreshes), waits up
-  to 300 seconds for the restarted worker's own catch-up to end, asks it for the Spend tab over
-  a day and a year (each answer under 1 MiB, its cost a number or `n/a`) and checks that the
-  store is not empty, then
-  shoots the fleet screen 300 and 420 pixels wide in Orca's dark and light themes on this
+  to 300 seconds for the restarted worker's own catch-up to end, or up to 30 minutes when there is
+  no store yet, as the first catch-up reads every Orca host whole (see Refresh), asks it for the
+  Spend tab over a day and a year (each answer under 1 MiB, its cost a number or `n/a`) and
+  checks that the store is not empty. It then takes one shot it does not keep, which shows the
+  panel: a panel opened while Orca's window is hidden asks the worker for nothing until shown.
+  Then it shoots the fleet screen 300 and 420 pixels wide in Orca's dark and light themes on this
   computer's own agents (the PNGs go to `.orca/shots/`; a theme takes effect only while Orca's
   window is hidden or minimized) and fails on a `[frame]` error, a `node:sqlite` error or a
   catch-up that cannot read or list a file of this computer in

@@ -95,5 +95,6 @@ test('a compressed answer is no larger than a raw one could be', async () => {
   const { n } = db.prepare("SELECT count(*) AS n FROM lines JOIN files ON files.id = lines.file WHERE host = 'machine:starfish-bs' AND harness = 'opencode'").get()!;
   db.close();
   assert.equal(Number(n), 0);
-  assert.ok(logs.some((line) => line.includes("cannot read opencode's database")), JSON.stringify(logs));
+  // the line names the database, so that one of this computer's is told from another host's
+  assert.ok(logs.some((line) => line.startsWith(`spyhop: catch-up cannot read opencode's database ${database}: `)), JSON.stringify(logs));
 });
