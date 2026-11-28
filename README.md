@@ -242,7 +242,9 @@ ConnectTimeout=5`, at most eight commands at once on a host whose SSH connection
 for itself and four on any other (one whose own SSH settings already reuse connections, or
 whose settings cannot be read), with read-only commands only: `cd`,
 `uname -s`, `printenv HOME`, `cat`, `head`, `tail`, `dd` (reading a block, never writing one),
-`find` with `stat`, `git branch --show-current`, `git remote get-url` and `sqlite3 -readonly`.
+`find` with `stat`, a bare `stat`, `git branch --show-current`, `git remote get-url`, `sqlite3
+-readonly` and `zstd -V`; the history catch-up also runs `find`, `dd`, `tail` and `sqlite3
+-readonly` within `sh -c`, which pipes their output through `zstd -q -c` and keeps their exit code.
 The hosts and the paired servers' agents are listed with the `orca` CLI on every refresh while
 the panel is open: every paired server `orca environment list` lists gets its agents from `orca
 agent list --environment <name>`, since Orca lists no paired server's workspace to a plugin, and
@@ -278,19 +280,24 @@ refresh is never drawn.
 
 Apart from the panel, the worker runs a catch-up when it starts and every 15 minutes after,
 whether the panel is open or closed, and between catch-ups reads nothing for them. A catch-up
-lists this computer's omp and Claude Code session files and sub-agent transcripts with one `find`
-for each, and reads each one into the history store (see What spyhop stores) from where its last
+reads this computer and every Orca host Orca lists, each SSH host and each paired Orca server (a
+paired server deployed over a listed SSH target shares that target's home, so it is read once,
+as the SSH host), another host over ssh (see Other hosts). On each it lists the omp and Claude
+Code session files and sub-agent transcripts with one `find` for each, and reads each one into
+the history store (see What spyhop stores) from where its last
 read ended, one program at a time: a file whose size and modified time are those of its last read
 is not read, and a file shorter than that read, or no longer the file that was read, is read again
 from its start and its counts replace those it gave before. A file that cannot be read is written
 to the worker's log and tried again at the next catch-up; a catch-up that cannot list a sessions
 folder is written to the log too, reads nothing of that harness and is tried again at the next
-one. It then reads opencode's database (`~/.local/share/opencode/opencode.db`, with `sqlite3
--readonly`): the first time every model call in it, 5,000 rows a query, and at each later
+one. It then reads that host's opencode database (`~/.local/share/opencode/opencode.db`, with
+`sqlite3 -readonly`): the first time every model call in it, 5,000 rows a query, and at each later
 catch-up again the calls created in the last 10 days, whose counts replace those read before, as
 opencode can update a call in place. A day older than that keeps the counts it was read with. A
 call counts on the day it was created, in its root session (its sub-agents' calls included), and
-in the repo of its own session's folder.
+in the repo of its own session's folder, as git gives it when the folder is first read, kept
+after. A database there that cannot be read, `sqlite3` missing included, is written to the
+worker's log and tried again at the next catch-up.
 
 A catch-up reads in two phases: first, on every Orca host at once, the files and opencode calls
 of the last 30 days, then the older ones, each phase's files newest first, so that a first
@@ -418,14 +425,19 @@ listed) and runs `orca plugin open <key> --panel spyhop`.
   (`uname -s`, `printenv HOME`), so each refresh still spends one 5-second attempt on it and the
   panel refreshes about every 5 seconds instead of every 2. The other hosts' groups are drawn
   at the start of each refresh, without waiting for it.
+- **A shown Spend tab's refresh waits for every host.** Its range is answered after a catch-up
+  once the last one started a minute ago or more, so each 60-second refresh waits for every Orca
+  host to be read, and an unreachable host adds its 5-second ssh connect timeout.
 - **An unreachable paired server disappears.** When its agents cannot be listed, its group is
   not drawn.
 - **Other hosts' history is read over ssh, compressed only where `zstd` is.** The catch-up of
-  the history store lists each other Orca host's session files and reads them with read-only
-  commands (`find`, `dd`, `tail`), and parses them on this computer; nothing is written on that
-  host. Once per catch-up it asks the host `zstd -V`: where that succeeds, the listings and the
-  file bytes come through `zstd` and are decompressed here, else they come raw, so a host
-  without `zstd` sends its files uncompressed.
+  the history store lists each other Orca host's session files and reads them and its opencode
+  database with read-only commands (`find`, `stat`, `dd`, `tail`, `sqlite3 -readonly`), and
+  parses them on this computer; nothing is written on that
+  host. Once per catch-up it asks the host `zstd -V`: where that succeeds, the listings, the
+  file bytes and the database's rows come through `zstd` and are decompressed here, never past
+  the 8 MiB a raw answer may hold, else they come raw, so a host without `zstd` sends its files
+  uncompressed.
 - **Claude Code and opencode on other hosts are untested.** Their cards there may read `n/a`.
 - **An opencode session's cost chart can end below its cost.** A session in opencode's current
   tables shows the total cost opencode keeps for it, which for some sessions is above the sum of

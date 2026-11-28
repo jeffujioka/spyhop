@@ -19,9 +19,9 @@
 // again from its start. Orca stores no value over 256 KiB, so they are split over the keys
 // `session-totals`, `session-totals.1` and on. The CLI runs on each request, so only while the
 // panel is open, and for the palette command `spyhop.show`, which shows the panel. Apart from
-// them, a catch-up reads the omp and Claude Code session files of this computer and of every
-// Orca host Orca lists into the history store (src/history/catch-up.ts) when the worker starts
-// and every CATCH_UP_MS after.
+// them, a catch-up reads the omp and Claude Code session files and opencode's database of this
+// computer and of every Orca host Orca lists, once per ssh alias, into the history store
+// (src/history/catch-up.ts) when the worker starts and every CATCH_UP_MS after.
 // `spyhop.range` answers a range tab from the history store (src/history/views.ts): at once while
 // a catch-up runs, else after a catch-up when the last one started RANGE_CATCH_UP_MS ago or more;
 // it names the Orca hosts the last catch-up could not read, and what the running one is reading
